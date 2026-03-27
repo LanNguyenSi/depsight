@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
+import { RiskTimeline } from '@/components/RiskTimeline';
 
 interface ScanSummary {
   id: string;
@@ -66,7 +67,15 @@ interface LicenseDetail {
   }[];
 }
 
-type ActiveTab = 'cve' | 'license';
+interface ScanHistoryPoint {
+  scannedAt: string;
+  riskScore: number;
+  cveCount: number;
+  criticalCount: number;
+  highCount: number;
+}
+
+type ActiveTab = 'cve' | 'license' | 'history';
 
 interface DashboardClientProps {
   repos: RepoItem[];
@@ -77,9 +86,11 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(null);
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
   const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
+  const [scanHistory, setScanHistory] = useState<ScanHistoryPoint[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanningLicense, setScanningLicense] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('cve');
 
@@ -87,7 +98,6 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setSyncing(true);
     try {
       await fetch('/api/repos/sync', { method: 'POST' });
-      // Reload page to get updated repo list
       window.location.reload();
     } finally {
       setSyncing(false);
@@ -108,6 +118,7 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
       });
       if (!res.ok) throw new Error('Scan fehlgeschlagen');
       await loadScanDetail(repo.id);
+      await loadScanHistory(repo.id);
     } catch (err) {
       console.error(err);
     } finally {
@@ -137,7 +148,7 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setLoadingDetail(true);
     try {
       const res = await fetch(`/api/scan?repoId=${repoId}`);
-      const data = await res.json() as { scan: ScanDetail | null };
+      const data = (await res.json()) as { scan: ScanDetail | null };
       setScanDetail(data.scan);
     } finally {
       setLoadingDetail(false);
@@ -146,22 +157,43 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
 
   async function loadLicenseDetail(repoId: string) {
     const res = await fetch(`/api/license?repoId=${repoId}`);
-    const data = await res.json() as LicenseDetail;
+    const data = (await res.json()) as LicenseDetail;
     setLicenseDetail(data.licenses?.length > 0 ? data : null);
+  }
+
+  async function loadScanHistory(repoId: string) {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/history?repoId=${repoId}&limit=30`);
+      const data = (await res.json()) as { history: ScanHistoryPoint[] };
+      setScanHistory(data.history ?? []);
+    } finally {
+      setLoadingHistory(false);
+    }
   }
 
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
     setScanDetail(null);
     setLicenseDetail(null);
+    setScanHistory([]);
     if (repo.latestScan) {
-      await loadScanDetail(repo.id);
-      await loadLicenseDetail(repo.id);
+      await Promise.all([
+        loadScanDetail(repo.id),
+        loadLicenseDetail(repo.id),
+        loadScanHistory(repo.id),
+      ]);
     }
   }
 
   const riskColor = (score: number) =>
-    score >= 70 ? 'text-red-600' : score >= 40 ? 'text-orange-500' : score >= 10 ? 'text-yellow-500' : 'text-green-600';
+    score >= 70
+      ? 'text-red-600'
+      : score >= 40
+        ? 'text-orange-500'
+        : score >= 10
+          ? 'text-yellow-500'
+          : 'text-green-600';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -210,7 +242,9 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                     <span className="text-xs text-gray-400">{repo.language}</span>
                   )}
                   {repo.latestScan && (
-                    <span className={`text-xs font-semibold ${riskColor(repo.latestScan.riskScore)}`}>
+                    <span
+                      className={`text-xs font-semibold ${riskColor(repo.latestScan.riskScore)}`}
+                    >
                       Risk: {repo.latestScan.riskScore}
                     </span>
                   )}
@@ -239,7 +273,8 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   <h2 className="text-lg font-bold text-gray-900">{selectedRepo.fullName}</h2>
                   {selectedRepo.lastScannedAt && (
                     <p className="text-xs text-gray-400 mt-0.5">
-                      Zuletzt gescannt: {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
+                      Zuletzt gescannt:{' '}
+                      {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
                     </p>
                   )}
                 </div>
@@ -283,6 +318,16 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                 >
                   📋 Lizenzen {licenseDetail && `(${licenseDetail.licenseCount})`}
                 </button>
+                <button
+                  onClick={() => setActiveTab('history')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    activeTab === 'history'
+                      ? 'text-green-600 border-b-2 border-green-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  📈 Verlauf {scanHistory.length > 0 && `(${scanHistory.length})`}
+                </button>
               </div>
 
               {/* CVE Tab */}
@@ -293,7 +338,10 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   )}
                   {scanDetail && !loadingDetail && (
                     <>
-                      <SeverityBreakdown counts={scanDetail.counts} riskScore={scanDetail.riskScore} />
+                      <SeverityBreakdown
+                        counts={scanDetail.counts}
+                        riskScore={scanDetail.riskScore}
+                      />
                       <div>
                         <h3 className="text-sm font-semibold text-gray-700 mb-2">
                           CVEs ({scanDetail.counts.total})
@@ -326,6 +374,23 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   {!licenseDetail && !scanningLicense && (
                     <div className="text-center py-8 text-gray-400">
                       Noch kein Lizenz-Scan – klicke auf &ldquo;📋 Lizenzen&rdquo;.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* History Tab */}
+              {activeTab === 'history' && (
+                <>
+                  {loadingHistory && (
+                    <div className="text-center py-8 text-gray-400">⏳ Lade Historie...</div>
+                  )}
+                  {!loadingHistory && (
+                    <RiskTimeline history={scanHistory} height={250} />
+                  )}
+                  {!loadingHistory && scanHistory.length === 0 && (
+                    <div className="text-center py-4 text-gray-400 text-sm">
+                      Führe mehrere CVE-Scans durch, um den Risiko-Verlauf zu sehen.
                     </div>
                   )}
                 </>
