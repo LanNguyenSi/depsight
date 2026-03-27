@@ -23,6 +23,8 @@ model User {
   repos         Repo[]
   policies      Policy[]
   apiTokens     ApiToken[]
+  webhooks      WebhookConfig[]
+  slackConfig   SlackConfig?
 }
 
 model Repo {
@@ -190,4 +192,33 @@ enum PolicyType {
   LICENSE_ALLOW_ONLY
   CVE_MIN_SEVERITY
   DEPENDENCY_MAX_AGE
+}
+
+model WebhookConfig {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name          String
+  url           String   // webhook endpoint URL
+  secret        String?  // HMAC signing secret
+  events        String[] // e.g. ['cve.critical', 'cve.high', 'scan.completed']
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model SlackConfig {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  webhookUrl    String   // Slack incoming webhook URL
+  channel       String?  // optional override channel
+  minSeverity   Severity @default(HIGH) // only notify for this severity and above
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
