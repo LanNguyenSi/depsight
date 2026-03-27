@@ -1,0 +1,165 @@
+// depsight — Prisma Schema
+// Wave 1 baseline — extends as features are added
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String?   @unique
+  githubId      String    @unique
+  githubLogin   String
+  githubToken   String    // OAuth access token (encrypted at rest)
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  repos         Repo[]
+  policies      Policy[]
+  apiTokens     ApiToken[]
+}
+
+model Repo {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  githubId      Int       // GitHub repo id
+  owner         String
+  name          String
+  fullName      String    // owner/name
+  private       Boolean   @default(false)
+  defaultBranch String    @default("main")
+  language      String?
+
+  tracked       Boolean   @default(true)
+  lastScannedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  scans         Scan[]
+
+  @@unique([userId, githubId])
+  @@index([userId])
+}
+
+model Scan {
+  id            String    @id @default(cuid())
+  repoId        String
+  repo          Repo      @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  scannedAt     DateTime  @default(now())
+  status        ScanStatus @default(PENDING)
+  error         String?
+
+  // CVE results
+  cveCount      Int       @default(0)
+  criticalCount Int       @default(0)
+  highCount     Int       @default(0)
+  mediumCount   Int       @default(0)
+  lowCount      Int       @default(0)
+  riskScore     Float     @default(0) // 0-100
+
+  // License results
+  licenseCount  Int       @default(0)
+  licenseIssues Int       @default(0)
+
+  // Raw payloads
+  cvePayload    Json?     // raw GitHub advisory data
+  licensePayload Json?    // raw license-checker output
+  sbomPayload   Json?     // CycloneDX SBOM
+
+  advisories    Advisory[]
+  licenses      LicenseResult[]
+
+  @@index([repoId, scannedAt])
+}
+
+model Advisory {
+  id              String  @id @default(cuid())
+  scanId          String
+  scan            Scan    @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  ghsaId          String  // GHSA-xxxx-xxxx-xxxx
+  cveId           String? // CVE-YYYY-NNNNN
+  severity        Severity
+  summary         String
+  packageName     String
+  ecosystem       String  // npm, pip, maven, etc.
+  vulnerableRange String?
+  fixedVersion    String?
+  publishedAt     DateTime?
+  url             String?
+
+  @@index([scanId])
+  @@index([ghsaId])
+}
+
+model LicenseResult {
+  id          String  @id @default(cuid())
+  scanId      String
+  scan        Scan    @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  packageName String
+  version     String?
+  license     String
+  isCompatible Boolean @default(true)
+  policyViolation Boolean @default(false)
+
+  @@index([scanId])
+}
+
+model Policy {
+  id          String  @id @default(cuid())
+  userId      String
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String
+  type        PolicyType
+  rule        Json    // flexible rule definition
+  severity    Severity
+  enabled     Boolean @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+model ApiToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  token       String    @unique
+  name        String
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  UNKNOWN
+}
+
+enum PolicyType {
+  LICENSE_DENY
+  LICENSE_ALLOW_ONLY
+  CVE_MIN_SEVERITY
+  DEPENDENCY_MAX_AGE
+}
