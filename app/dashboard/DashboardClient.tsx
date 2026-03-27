@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
+import { LicenseList } from '@/components/LicenseList';
 
 interface ScanSummary {
   id: string;
@@ -50,20 +51,54 @@ interface ScanDetail {
   }[];
 }
 
+interface LicenseDetail {
+  scanId: string;
+  licenseCount: number;
+  conflictCount: number;
+  summary: Record<string, number>;
+  licenses: {
+    id: string;
+    packageName: string;
+    version: string;
+    license: string;
+    isCompatible: boolean;
+    policyViolation: boolean;
+  }[];
+}
+
+type ActiveTab = 'cve' | 'license';
+
 interface DashboardClientProps {
   repos: RepoItem[];
 }
 
-export function DashboardClient({ repos }: DashboardClientProps) {
+export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
+  const repos = initialRepos;
   const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(null);
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
+  const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanningLicense, setScanningLicense] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('cve');
 
-  async function handleScan(repo: RepoItem) {
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      await fetch('/api/repos/sync', { method: 'POST' });
+      // Reload page to get updated repo list
+      window.location.reload();
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleCveScan(repo: RepoItem) {
     setScanning(true);
     setSelectedRepo(repo);
     setScanDetail(null);
+    setActiveTab('cve');
 
     try {
       const res = await fetch('/api/scan', {
@@ -72,13 +107,29 @@ export function DashboardClient({ repos }: DashboardClientProps) {
         body: JSON.stringify({ repoId: repo.id }),
       });
       if (!res.ok) throw new Error('Scan fehlgeschlagen');
-
-      // Load scan detail
       await loadScanDetail(repo.id);
     } catch (err) {
       console.error(err);
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function handleLicenseScan(repo: RepoItem) {
+    setScanningLicense(true);
+    setActiveTab('license');
+
+    try {
+      await fetch('/api/license', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id }),
+      });
+      await loadLicenseDetail(repo.id);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setScanningLicense(false);
     }
   }
 
@@ -93,12 +144,19 @@ export function DashboardClient({ repos }: DashboardClientProps) {
     }
   }
 
+  async function loadLicenseDetail(repoId: string) {
+    const res = await fetch(`/api/license?repoId=${repoId}`);
+    const data = await res.json() as LicenseDetail;
+    setLicenseDetail(data.licenses?.length > 0 ? data : null);
+  }
+
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
+    setScanDetail(null);
+    setLicenseDetail(null);
     if (repo.latestScan) {
       await loadScanDetail(repo.id);
-    } else {
-      setScanDetail(null);
+      await loadLicenseDetail(repo.id);
     }
   }
 
@@ -111,7 +169,16 @@ export function DashboardClient({ repos }: DashboardClientProps) {
       <header className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900">🔍 depsight</h1>
-          <span className="text-sm text-gray-500">{repos.length} Repositories</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">{repos.length} Repositories</span>
+            <button
+              onClick={() => void handleSync()}
+              disabled={syncing}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              {syncing ? '⏳ Sync...' : '🔄 Repos synchronisieren'}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -124,7 +191,7 @@ export function DashboardClient({ repos }: DashboardClientProps) {
           <div className="space-y-1">
             {repos.length === 0 && (
               <p className="text-sm text-gray-400 py-4 text-center">
-                Keine Repos – bitte erst synchronisieren.
+                Keine Repos – bitte synchronisieren.
               </p>
             )}
             {repos.map((repo) => (
@@ -166,6 +233,7 @@ export function DashboardClient({ repos }: DashboardClientProps) {
 
           {selectedRepo && (
             <div className="space-y-4">
+              {/* Repo header + actions */}
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-gray-900">{selectedRepo.fullName}</h2>
@@ -175,40 +243,92 @@ export function DashboardClient({ repos }: DashboardClientProps) {
                     </p>
                   )}
                 </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void handleCveScan(selectedRepo)}
+                    disabled={scanning}
+                    className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  >
+                    {scanning ? '⏳' : '🔍'} CVE Scan
+                  </button>
+                  <button
+                    onClick={() => void handleLicenseScan(selectedRepo)}
+                    disabled={scanningLicense}
+                    className="px-3 py-1.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                  >
+                    {scanningLicense ? '⏳' : '📋'} Lizenzen
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex border-b border-gray-200">
                 <button
-                  onClick={() => void handleScan(selectedRepo)}
-                  disabled={scanning}
-                  className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  onClick={() => setActiveTab('cve')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    activeTab === 'cve'
+                      ? 'text-blue-600 border-b-2 border-blue-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
                 >
-                  {scanning ? '⏳ Scanne...' : '🔍 CVE Scan starten'}
+                  🔍 CVEs {scanDetail && `(${scanDetail.counts.total})`}
+                </button>
+                <button
+                  onClick={() => setActiveTab('license')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    activeTab === 'license'
+                      ? 'text-purple-600 border-b-2 border-purple-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  📋 Lizenzen {licenseDetail && `(${licenseDetail.licenseCount})`}
                 </button>
               </div>
 
-              {(loadingDetail || scanning) && (
-                <div className="text-center py-8 text-gray-400">
-                  <p>⏳ Lade Scan-Ergebnisse...</p>
-                </div>
-              )}
-
-              {scanDetail && !loadingDetail && (
+              {/* CVE Tab */}
+              {activeTab === 'cve' && (
                 <>
-                  <SeverityBreakdown
-                    counts={scanDetail.counts}
-                    riskScore={scanDetail.riskScore}
-                  />
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                      CVEs ({scanDetail.counts.total})
-                    </h3>
-                    <AdvisoryList advisories={scanDetail.advisories} />
-                  </div>
+                  {(loadingDetail || scanning) && (
+                    <div className="text-center py-8 text-gray-400">⏳ Lade CVE-Daten...</div>
+                  )}
+                  {scanDetail && !loadingDetail && (
+                    <>
+                      <SeverityBreakdown counts={scanDetail.counts} riskScore={scanDetail.riskScore} />
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                          CVEs ({scanDetail.counts.total})
+                        </h3>
+                        <AdvisoryList advisories={scanDetail.advisories} />
+                      </div>
+                    </>
+                  )}
+                  {!scanDetail && !loadingDetail && !scanning && (
+                    <div className="text-center py-8 text-gray-400">
+                      Noch kein CVE-Scan – klicke auf &ldquo;🔍 CVE Scan&rdquo;.
+                    </div>
+                  )}
                 </>
               )}
 
-              {!scanDetail && !loadingDetail && !scanning && (
-                <div className="text-center py-8 text-gray-400">
-                  <p>Noch kein Scan – klicke auf &ldquo;CVE Scan starten&rdquo;.</p>
-                </div>
+              {/* License Tab */}
+              {activeTab === 'license' && (
+                <>
+                  {scanningLicense && (
+                    <div className="text-center py-8 text-gray-400">⏳ Erkenne Lizenzen...</div>
+                  )}
+                  {licenseDetail && !scanningLicense && (
+                    <LicenseList
+                      licenses={licenseDetail.licenses}
+                      summary={licenseDetail.summary}
+                      conflictCount={licenseDetail.conflictCount}
+                    />
+                  )}
+                  {!licenseDetail && !scanningLicense && (
+                    <div className="text-center py-8 text-gray-400">
+                      Noch kein Lizenz-Scan – klicke auf &ldquo;📋 Lizenzen&rdquo;.
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
