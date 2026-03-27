@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
@@ -364,6 +365,10 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   >
                     {scanningDeps ? '⏳' : '📦'} Deps
                   </button>
+
+
+                  <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
+
                   <a
                     href={`/api/sbom?repoId=${selectedRepo.id}`}
                     download
