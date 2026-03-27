@@ -2,9 +2,7 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   /* config options here */
-  experimental: {
-    typedRoutes: true,
-  },
+  // typedRoutes removed: causes issues with dynamic route discovery
 };
 
 export default nextConfig;
