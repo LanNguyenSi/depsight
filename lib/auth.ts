@@ -1,12 +1,6 @@
 import NextAuth from 'next-auth';
 import GitHub from 'next-auth/providers/github';
-import type { Profile } from 'next-auth';
 import { prisma } from './prisma';
-
-interface GitHubProfile extends Profile {
-  id: number;
-  login: string;
-}
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -24,22 +18,26 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async signIn({ user, account, profile }) {
       if (!account || !profile) return false;
 
-      const githubProfile = profile as GitHubProfile;
+      // GitHub profile has `login` and numeric `id` (returned as string by next-auth)
+      const githubId = String(profile.id ?? profile.sub ?? '');
+      const githubLogin = (profile as Record<string, unknown>).login as string | undefined;
+
+      if (!githubId || !githubLogin) return false;
 
       try {
         await prisma.user.upsert({
-          where: { githubId: String(githubProfile.id) },
+          where: { githubId },
           update: {
             email: user.email ?? null,
-            githubLogin: githubProfile.login,
+            githubLogin,
             githubToken: account.access_token ?? '',
             avatarUrl: user.image ?? null,
             updatedAt: new Date(),
           },
           create: {
-            githubId: String(githubProfile.id),
+            githubId,
             email: user.email ?? null,
-            githubLogin: githubProfile.login,
+            githubLogin,
             githubToken: account.access_token ?? '',
             avatarUrl: user.image ?? null,
           },
@@ -67,7 +65,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
     async jwt({ token, account, profile }) {
       if (account && profile) {
-        token.sub = String((profile as GitHubProfile).id);
+        token.sub = String(profile.id ?? profile.sub ?? token.sub);
       }
       return token;
     },
