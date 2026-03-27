@@ -6,6 +6,7 @@ export interface LicenseEntry {
   license: string;
   isCompatible: boolean;
   policyViolation: boolean;
+  needsReview: boolean; // true when license is unknown/undetected (not necessarily a violation)
 }
 
 export interface LicenseScanResult {
@@ -26,27 +27,27 @@ const COPYLEFT_LICENSES = new Set([
   'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
 ]);
 
-function classifyLicense(license: string): { isCompatible: boolean; policyViolation: boolean } {
+function classifyLicense(license: string): { isCompatible: boolean; policyViolation: boolean; needsReview: boolean } {
   const normalized = license.trim().toUpperCase();
 
   // Check exact copyleft match
   for (const l of COPYLEFT_LICENSES) {
     if (normalized === l.toUpperCase()) {
-      return { isCompatible: false, policyViolation: true };
+      return { isCompatible: false, policyViolation: true, needsReview: false };
     }
   }
 
-  // Unknown / custom licenses
+  // Unknown / custom licenses — not a violation, but needs manual review
   if (
     normalized === 'UNKNOWN' ||
     normalized === '' ||
     normalized === 'SEE LICENSE IN LICENSE' ||
     normalized === 'UNLICENSED'
   ) {
-    return { isCompatible: false, policyViolation: false };
+    return { isCompatible: true, policyViolation: false, needsReview: true };
   }
 
-  return { isCompatible: true, policyViolation: false };
+  return { isCompatible: true, policyViolation: false, needsReview: false };
 }
 
 function parseLicenseFromPackageJson(content: string): LicenseEntry[] {
@@ -71,8 +72,9 @@ function parseLicenseFromPackageJson(content: string): LicenseEntry[] {
       packageName: name,
       version: String(version),
       license: 'UNKNOWN',
-      isCompatible: false,
+      isCompatible: true,
       policyViolation: false,
+      needsReview: true,
     });
   }
 
@@ -132,10 +134,10 @@ export async function detectLicenses(
                   ...classification,
                 });
               } else {
-                licenses.push(entry);
+                licenses.push({ ...entry, needsReview: true });
               }
             } catch {
-              licenses.push(entry);
+              licenses.push({ ...entry, needsReview: true });
             }
           }),
         );
@@ -169,7 +171,8 @@ function buildLicenseScanResult(licenses: LicenseEntry[]): LicenseScanResult {
     summary[entry.license] = (summary[entry.license] ?? 0) + 1;
   }
 
-  const conflicts = licenses.filter((l) => l.policyViolation || !l.isCompatible);
+  // Only count real policy violations as conflicts (not unknown/needs-review)
+  const conflicts = licenses.filter((l) => l.policyViolation);
 
   return {
     licenses,

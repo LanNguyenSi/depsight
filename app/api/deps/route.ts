@@ -28,27 +28,17 @@ export async function POST(req: NextRequest) {
   try {
     const result = await analyzeDepAge(session.user.githubToken, repo.owner, repo.name);
 
-    // Persist into Dependency model — upsert per package
-    // Use the latest completed scan, or create a new one
-    let scan = await prisma.scan.findFirst({
-      where: { repoId, status: 'COMPLETED' },
-      orderBy: { scannedAt: 'desc' },
+    // Always create a fresh scan record (avoid race conditions with CVE/license scans)
+    const scan = await prisma.scan.create({
+      data: { repoId, status: 'RUNNING' },
     });
 
-    if (!scan) {
-      scan = await prisma.scan.create({
-        data: { repoId, status: 'COMPLETED' },
-      });
-    }
-
     await prisma.$transaction(async (tx) => {
-      // Remove old dep entries for this scan
-      await tx.dependency.deleteMany({ where: { scanId: scan!.id } });
 
       if (result.dependencies.length > 0) {
         await tx.dependency.createMany({
           data: result.dependencies.map((d) => ({
-            scanId: scan!.id,
+            scanId: scan.id,
             name: d.name,
             installedVersion: d.installedVersion,
             latestVersion: d.latestVersion,
@@ -61,6 +51,11 @@ export async function POST(req: NextRequest) {
           })),
         });
       }
+
+      await tx.scan.update({
+        where: { id: scan.id },
+        data: { status: 'COMPLETED' },
+      });
     });
 
     return NextResponse.json({

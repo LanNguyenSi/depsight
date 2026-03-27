@@ -7,6 +7,7 @@ interface LicenseEntry {
   license: string;
   isCompatible: boolean;
   policyViolation: boolean;
+  needsReview?: boolean;
 }
 
 interface LicenseListProps {
@@ -49,49 +50,61 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
         </div>
       </div>
 
-      {/* Issues first */}
-      {licenses.filter((l) => l.policyViolation || !l.isCompatible).length > 0 && (
+      {/* Policy violations first */}
+      {licenses.filter((l) => l.policyViolation).length > 0 && (
         <div>
-          <h4 className="text-sm font-semibold text-red-700 mb-2">⚠️ Problematische Lizenzen</h4>
+          <h4 className="text-sm font-semibold text-red-700 mb-2">🔴 Copyleft-Konflikte</h4>
           <div className="space-y-1">
+            {licenses.filter((l) => l.policyViolation).map((l) => (
+              <LicenseRow key={l.id} entry={l} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Needs review */}
+      {licenses.filter((l) => !l.policyViolation && l.needsReview).length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-yellow-700 mb-2">🟡 Lizenz unbekannt (Review empfohlen)</h4>
+          <div className="space-y-1">
+            {licenses.filter((l) => !l.policyViolation && l.needsReview).map((l) => (
+              <LicenseRow key={l.id} entry={l} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Compatible licenses */}
+      {licenses.filter((l) => !l.policyViolation && !l.needsReview && l.isCompatible).length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-gray-700 mb-2">
+            🟢 Kompatibel ({licenses.filter((l) => !l.policyViolation && !l.needsReview && l.isCompatible).length})
+          </h4>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
             {licenses
-              .filter((l) => l.policyViolation || !l.isCompatible)
+              .filter((l) => !l.policyViolation && !l.needsReview && l.isCompatible)
               .map((l) => (
                 <LicenseRow key={l.id} entry={l} />
               ))}
           </div>
         </div>
       )}
-
-      {/* All licenses */}
-      <div>
-        <h4 className="text-sm font-semibold text-gray-700 mb-2">
-          Alle Lizenzen ({licenses.length})
-        </h4>
-        <div className="space-y-1 max-h-96 overflow-y-auto">
-          {licenses
-            .filter((l) => !l.policyViolation && l.isCompatible)
-            .map((l) => (
-              <LicenseRow key={l.id} entry={l} />
-            ))}
-        </div>
-      </div>
     </div>
   );
 }
 
-function LicenseRow({ entry }: { entry: { packageName: string; version: string; license: string; isCompatible: boolean; policyViolation: boolean } }) {
+function LicenseRow({ entry }: { entry: { packageName: string; version: string; license: string; isCompatible: boolean; policyViolation: boolean; needsReview?: boolean } }) {
   const statusIcon = entry.policyViolation
     ? '🔴'
-    : entry.isCompatible
-      ? '🟢'
-      : '🟡';
+    : entry.needsReview
+      ? '🟡'
+      : '🟢';
 
   const licenseColor = entry.policyViolation
     ? 'text-red-700 bg-red-50 border-red-200'
-    : entry.isCompatible
-      ? 'text-green-700 bg-green-50 border-green-200'
-      : 'text-yellow-700 bg-yellow-50 border-yellow-200';
+    : entry.needsReview
+      ? 'text-yellow-700 bg-yellow-50 border-yellow-200'
+      : 'text-green-700 bg-green-50 border-green-200';
 
   return (
     <div className="flex items-center justify-between px-3 py-1.5 bg-white rounded border border-gray-100 hover:border-gray-200 text-sm">
