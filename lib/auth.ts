@@ -1,6 +1,12 @@
 import NextAuth from 'next-auth';
 import GitHub from 'next-auth/providers/github';
+import type { Profile } from 'next-auth';
 import { prisma } from './prisma';
+
+interface GitHubProfile extends Profile {
+  id: number;
+  login: string;
+}
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -18,29 +24,26 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     async signIn({ user, account, profile }) {
       if (!account || !profile) return false;
 
-      // GitHub OAuth profile
-      const githubProfile = profile as any;
+      const githubProfile = profile as GitHubProfile;
 
       try {
-        // Upsert user in database
         await prisma.user.upsert({
           where: { githubId: String(githubProfile.id) },
           update: {
-            email: user.email || null,
+            email: user.email ?? null,
             githubLogin: githubProfile.login,
-            githubToken: account.access_token || '',
-            avatarUrl: user.image || null,
+            githubToken: account.access_token ?? '',
+            avatarUrl: user.image ?? null,
             updatedAt: new Date(),
           },
           create: {
             githubId: String(githubProfile.id),
-            email: user.email || null,
+            email: user.email ?? null,
             githubLogin: githubProfile.login,
-            githubToken: account.access_token || '',
-            avatarUrl: user.image || null,
+            githubToken: account.access_token ?? '',
+            avatarUrl: user.image ?? null,
           },
         });
-
         return true;
       } catch (error) {
         console.error('Error saving user:', error);
@@ -48,24 +51,23 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
     },
     async session({ session, token }) {
-      if (session.user) {
-        // Fetch user from database to get internal ID
+      if (session.user && token.sub) {
         const dbUser = await prisma.user.findUnique({
-          where: { githubId: String(token.sub) },
+          where: { githubId: token.sub },
           select: { id: true, githubLogin: true, githubToken: true },
         });
 
         if (dbUser) {
-          (session.user as any).id = dbUser.id;
-          (session.user as any).githubLogin = dbUser.githubLogin;
-          (session.user as any).githubToken = dbUser.githubToken;
+          session.user.id = dbUser.id;
+          session.user.githubLogin = dbUser.githubLogin;
+          session.user.githubToken = dbUser.githubToken;
         }
       }
       return session;
     },
     async jwt({ token, account, profile }) {
       if (account && profile) {
-        token.sub = String((profile as any).id);
+        token.sub = String((profile as GitHubProfile).id);
       }
       return token;
     },
