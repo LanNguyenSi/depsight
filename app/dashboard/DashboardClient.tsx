@@ -364,6 +364,13 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   >
                     {scanningDeps ? '⏳' : '📦'} Deps
                   </button>
+                  <a
+                    href={`/api/sbom?repoId=${selectedRepo.id}`}
+                    download
+                    className="px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                  >
+                    ⬇️ SBOM
+                  </a>
                 </div>
               </div>
 
