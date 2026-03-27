@@ -9,7 +9,7 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const githubToken = (session.user as any).githubToken;
+  const githubToken = session.user.githubToken;
   if (!githubToken) {
     return NextResponse.json({ error: 'No GitHub token found' }, { status: 400 });
   }
