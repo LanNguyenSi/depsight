@@ -12,3 +12,4 @@ prisma/migrations/
 docker-compose.override.yml
 __pycache__/
 *.pyc
+tsconfig.tsbuildinfo
