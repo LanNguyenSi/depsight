@@ -77,6 +77,7 @@ model Scan {
 
   advisories    Advisory[]
   licenses      LicenseResult[]
+  dependencies  Dependency[]
 
   @@index([repoId, scannedAt])
 }
@@ -99,6 +100,25 @@ model Advisory {
 
   @@index([scanId])
   @@index([ghsaId])
+}
+
+model Dependency {
+  id                  String    @id @default(cuid())
+  scanId              String
+  scan                Scan      @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  name                String
+  installedVersion    String
+  latestVersion       String    @default("")
+  publishedAt         DateTime?
+  latestPublishedAt   DateTime?
+  ageInDays           Int?      // -1 = unknown
+  status              DepStatus @default(UNKNOWN)
+  isDeprecated        Boolean   @default(false)
+  updateAvailable     Boolean   @default(false)
+
+  @@index([scanId])
+  @@index([status])
 }
 
 model LicenseResult {
@@ -154,6 +174,14 @@ enum Severity {
   HIGH
   MEDIUM
   LOW
+  UNKNOWN
+}
+
+enum DepStatus {
+  UP_TO_DATE
+  OUTDATED
+  MAJOR_BEHIND
+  DEPRECATED
   UNKNOWN
 }
 
