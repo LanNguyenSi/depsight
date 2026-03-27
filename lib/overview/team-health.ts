@@ -86,15 +86,8 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
   // Build scanId → outdated count lookup
   const outdatedByScanId = new Map(outdatedCounts.map((r) => [r.scanId, r._count]));
 
-  // Get the latest scan ID per repo to join outdated counts
+  // Build repoId → latest scan ID lookup for joining outdated dep counts
   const latestScanIds = new Map<string, string>();
-  for (const repo of repos) {
-    if (repo.scans[0]) {
-      // We need to get the actual scan ID — re-query
-    }
-  }
-
-  // Simpler: fetch latest scan IDs for outdated deps
   const latestScans = await prisma.scan.findMany({
     where: { repo: { userId }, status: 'COMPLETED' },
     orderBy: { scannedAt: 'desc' },
