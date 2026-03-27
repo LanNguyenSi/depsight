@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
@@ -257,7 +258,13 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-900">🔍 depsight</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-xl font-bold text-gray-900">🔍 depsight</h1>
+            <nav className="flex items-center gap-1 text-sm">
+              <Link href="/dashboard" className="px-3 py-1.5 text-blue-600 bg-blue-50 rounded-lg font-medium">Dashboard</Link>
+              <Link href="/overview" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors">Übersicht</Link>
+            </nav>
+          </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-gray-500">{repos.length} Repositories</span>
             <button
