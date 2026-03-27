@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { fetchRepoAdvisories } from './github-advisories';
+import { notifyForScan } from '@/lib/alerts/notifier';
 import type { Severity as PrismaSeverity } from '@prisma/client';
 
 export async function scanRepository(
@@ -70,6 +71,16 @@ export async function scanRepository(
         data: { lastScannedAt: new Date() },
       });
     });
+
+    // Fire notifications for critical/high CVEs (non-blocking)
+    const savedAdvisories = await prisma.advisory.findMany({
+      where: { scanId: scan.id, severity: { in: ['CRITICAL', 'HIGH'] } },
+    });
+    if (savedAdvisories.length > 0) {
+      notifyForScan(userId, repoId, repo.fullName, scan.id, result.riskScore, savedAdvisories).catch(
+        (err) => console.error('Notification error:', err),
+      );
+    }
 
     return scan.id;
   } catch (error) {
