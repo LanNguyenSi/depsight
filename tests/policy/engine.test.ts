@@ -3,14 +3,15 @@
  * Mocks Prisma to test all 4 PolicyTypes in isolation.
  */
 
+import { vi } from 'vitest';
 import { PolicyType, Severity } from '@prisma/client';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockPolicyFindMany = jest.fn();
-const mockScanFindFirst = jest.fn();
+const mockPolicyFindMany = vi.fn();
+const mockScanFindFirst = vi.fn();
 
-jest.mock('@/lib/prisma', () => ({
+vi.mock('@/lib/prisma', () => ({
   prisma: {
     policy: {
       findMany: mockPolicyFindMany,
@@ -63,8 +64,8 @@ function makeScan(overrides: Partial<{
 
 describe('evaluatePolicies()', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    jest.resetModules();
+    vi.clearAllMocks();
+    vi.resetModules();
   });
 
   it('LICENSE_DENY — catches denied license', async () => {
