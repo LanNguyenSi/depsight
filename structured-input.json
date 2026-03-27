@@ -1,0 +1,28 @@
+{
+  "projectName": "depsight",
+  "summary": "GitHub-connected developer security dashboard for tracking CVEs, license risks, and dependency health across repositories — with timelines, risk scores, and compliance export.",
+  "targetUsers": [
+    "developers",
+    "engineering leads",
+    "compliance teams"
+  ],
+  "coreFeatures": [
+    "GitHub OAuth login and repository discovery",
+    "CVE scanning per repository with severity breakdown",
+    "License detection and compatibility conflict flagging",
+    "Dependency age tracking and outdated package alerts",
+    "Vulnerability timeline and risk score history per repo",
+    "Cross-repo comparison and team health overview",
+    "SBOM export in CycloneDX format",
+    "Policy engine for custom license and CVE rules",
+    "PR integration with automatic CVE comment on new vulnerabilities",
+    "Webhook and Slack notifications for critical CVEs"
+  ],
+  "constraints": [
+    "TypeScript",
+    "Next.js fullstack",
+    "PostgreSQL",
+    "GitHub OAuth via next-auth",
+    "must run in Docker"
+  ]
+}
