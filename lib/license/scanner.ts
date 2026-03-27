@@ -9,32 +9,21 @@ export async function scanLicenses(
   const repo = await prisma.repo.findFirst({
     where: { id: repoId, userId },
   });
-
   if (!repo) throw new Error('Repository not found or access denied');
 
-  // Get or create the latest scan for this repo
-  let scan = await prisma.scan.findFirst({
-    where: { repoId, status: 'COMPLETED' },
-    orderBy: { scannedAt: 'desc' },
+  // Always create a fresh scan record (avoid race conditions with CVE scans)
+  const scan = await prisma.scan.create({
+    data: { repoId, status: 'RUNNING' },
   });
-
-  if (!scan) {
-    scan = await prisma.scan.create({
-      data: { repoId, status: 'RUNNING' },
-    });
-  }
 
   try {
     const result = await detectLicenses(accessToken, repo.owner, repo.name);
 
     await prisma.$transaction(async (tx) => {
-      // Delete old license results for this scan
-      await tx.licenseResult.deleteMany({ where: { scanId: scan!.id } });
-
       if (result.licenses.length > 0) {
         await tx.licenseResult.createMany({
           data: result.licenses.map((l) => ({
-            scanId: scan!.id,
+            scanId: scan.id,
             packageName: l.packageName,
             version: l.version,
             license: l.license,
@@ -45,13 +34,18 @@ export async function scanLicenses(
       }
 
       await tx.scan.update({
-        where: { id: scan!.id },
+        where: { id: scan.id },
         data: {
           status: 'COMPLETED',
           licenseCount: result.licenses.length,
           licenseIssues: result.conflictCount,
           licensePayload: JSON.parse(JSON.stringify(result.licenses)),
         },
+      });
+
+      await tx.repo.update({
+        where: { id: repoId },
+        data: { lastScannedAt: new Date() },
       });
     });
 

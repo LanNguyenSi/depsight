@@ -5,6 +5,7 @@ import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
+import { DependencyTable } from '@/components/DependencyTable';
 
 interface ScanSummary {
   id: string;
@@ -75,7 +76,35 @@ interface ScanHistoryPoint {
   highCount: number;
 }
 
-type ActiveTab = 'cve' | 'license' | 'history';
+type DepStatus = 'UP_TO_DATE' | 'OUTDATED' | 'MAJOR_BEHIND' | 'DEPRECATED' | 'UNKNOWN';
+
+interface DepSummary {
+  total: number;
+  upToDate: number;
+  outdated: number;
+  majorBehind: number;
+  deprecated: number;
+  unknown: number;
+}
+
+interface DepEntry {
+  id: string;
+  name: string;
+  installedVersion: string;
+  latestVersion: string;
+  ageInDays: number | null;
+  status: DepStatus;
+  isDeprecated: boolean;
+  updateAvailable: boolean;
+}
+
+interface DepsDetail {
+  scanId: string;
+  summary: DepSummary;
+  dependencies: DepEntry[];
+}
+
+type ActiveTab = 'cve' | 'license' | 'deps' | 'history';
 
 interface DashboardClientProps {
   repos: RepoItem[];
@@ -86,9 +115,11 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(null);
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
   const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
+  const [depsDetail, setDepsDetail] = useState<DepsDetail | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanHistoryPoint[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanningLicense, setScanningLicense] = useState(false);
+  const [scanningDeps, setScanningDeps] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -144,6 +175,24 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     }
   }
 
+  async function handleDepsScan(repo: RepoItem) {
+    setScanningDeps(true);
+    setActiveTab('deps');
+
+    try {
+      await fetch('/api/deps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id }),
+      });
+      await loadDepsDetail(repo.id);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setScanningDeps(false);
+    }
+  }
+
   async function loadScanDetail(repoId: string) {
     setLoadingDetail(true);
     try {
@@ -161,6 +210,12 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setLicenseDetail(data.licenses?.length > 0 ? data : null);
   }
 
+  async function loadDepsDetail(repoId: string) {
+    const res = await fetch(`/api/deps?repoId=${repoId}`);
+    const data = (await res.json()) as DepsDetail;
+    setDepsDetail(data.dependencies?.length > 0 ? data : null);
+  }
+
   async function loadScanHistory(repoId: string) {
     setLoadingHistory(true);
     try {
@@ -176,11 +231,13 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setSelectedRepo(repo);
     setScanDetail(null);
     setLicenseDetail(null);
+    setDepsDetail(null);
     setScanHistory([]);
     if (repo.latestScan) {
       await Promise.all([
         loadScanDetail(repo.id),
         loadLicenseDetail(repo.id),
+        loadDepsDetail(repo.id),
         loadScanHistory(repo.id),
       ]);
     }
@@ -284,7 +341,7 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                     disabled={scanning}
                     className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
                   >
-                    {scanning ? '⏳' : '🔍'} CVE Scan
+                    {scanning ? '⏳' : '🔍'} CVE
                   </button>
                   <button
                     onClick={() => void handleLicenseScan(selectedRepo)}
@@ -292,6 +349,13 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                     className="px-3 py-1.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
                   >
                     {scanningLicense ? '⏳' : '📋'} Lizenzen
+                  </button>
+                  <button
+                    onClick={() => void handleDepsScan(selectedRepo)}
+                    disabled={scanningDeps}
+                    className="px-3 py-1.5 bg-teal-600 text-white text-sm font-medium rounded-lg hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                  >
+                    {scanningDeps ? '⏳' : '📦'} Deps
                   </button>
                 </div>
               </div>
@@ -317,6 +381,16 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   }`}
                 >
                   📋 Lizenzen {licenseDetail && `(${licenseDetail.licenseCount})`}
+                </button>
+                <button
+                  onClick={() => setActiveTab('deps')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    activeTab === 'deps'
+                      ? 'text-teal-600 border-b-2 border-teal-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  📦 Abhängigkeiten {depsDetail && `(${depsDetail.summary.total})`}
                 </button>
                 <button
                   onClick={() => setActiveTab('history')}
@@ -352,7 +426,7 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   )}
                   {!scanDetail && !loadingDetail && !scanning && (
                     <div className="text-center py-8 text-gray-400">
-                      Noch kein CVE-Scan – klicke auf &ldquo;🔍 CVE Scan&rdquo;.
+                      Noch kein CVE-Scan – klicke auf &ldquo;🔍 CVE&rdquo;.
                     </div>
                   )}
                 </>
@@ -374,6 +448,26 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                   {!licenseDetail && !scanningLicense && (
                     <div className="text-center py-8 text-gray-400">
                       Noch kein Lizenz-Scan – klicke auf &ldquo;📋 Lizenzen&rdquo;.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Deps Tab */}
+              {activeTab === 'deps' && (
+                <>
+                  {scanningDeps && (
+                    <div className="text-center py-8 text-gray-400">⏳ Analysiere Abhängigkeiten...</div>
+                  )}
+                  {depsDetail && !scanningDeps && (
+                    <DependencyTable
+                      dependencies={depsDetail.dependencies}
+                      summary={depsDetail.summary}
+                    />
+                  )}
+                  {!depsDetail && !scanningDeps && (
+                    <div className="text-center py-8 text-gray-400">
+                      Noch keine Dependency-Analyse – klicke auf &ldquo;📦 Deps&rdquo;.
                     </div>
                   )}
                 </>
