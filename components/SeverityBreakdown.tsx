@@ -1,5 +1,7 @@
 'use client';
 
+import { useLocale, interpolate } from '@/lib/i18n';
+
 interface Counts {
   total: number;
   critical: number;
@@ -14,6 +16,8 @@ interface SeverityBreakdownProps {
 }
 
 export function SeverityBreakdown({ counts, riskScore }: SeverityBreakdownProps) {
+  const { t } = useLocale();
+
   const riskColor =
     riskScore >= 70
       ? 'text-red-400'
@@ -26,21 +30,21 @@ export function SeverityBreakdown({ counts, riskScore }: SeverityBreakdownProps)
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-gray-400">CVE Zusammenfassung</h3>
+        <h3 className="text-sm font-medium text-gray-400">{t['severity.title']}</h3>
         <div className="text-right">
           <span className={`text-2xl font-bold tabular-nums ${riskColor}`}>{riskScore}</span>
-          <p className="text-[10px] text-gray-600">Risk Score</p>
+          <p className="text-[10px] text-gray-600">{t['severity.riskScore']}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-4 gap-2">
-        <SeverityCount label="Kritisch" count={counts.critical} color="red" />
-        <SeverityCount label="Hoch" count={counts.high} color="orange" />
-        <SeverityCount label="Mittel" count={counts.medium} color="yellow" />
-        <SeverityCount label="Niedrig" count={counts.low} color="blue" />
+        <SeverityCount label={t['severity.critical']} count={counts.critical} color="red" />
+        <SeverityCount label={t['severity.high']} count={counts.high} color="orange" />
+        <SeverityCount label={t['severity.medium']} count={counts.medium} color="yellow" />
+        <SeverityCount label={t['severity.low']} count={counts.low} color="blue" />
       </div>
 
-      <p className="text-[10px] text-gray-600 mt-2 text-right tabular-nums">{counts.total} CVEs gesamt</p>
+      <p className="text-[10px] text-gray-600 mt-2 text-right tabular-nums">{interpolate(t['severity.total'], { count: counts.total })}</p>
     </div>
   );
 }

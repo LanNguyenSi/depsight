@@ -1,5 +1,6 @@
 'use client';
 
+import { useLocale } from '@/lib/i18n';
 import {
   LineChart,
   Line,
@@ -25,10 +26,12 @@ interface RiskTimelineProps {
 }
 
 export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
+  const { t } = useLocale();
+
   if (history.length === 0) {
     return (
       <div className="flex items-center justify-center h-32 text-gray-600 text-sm">
-        Keine Scan-Historie vorhanden
+        {t['timeline.empty']}
       </div>
     );
   }
@@ -53,7 +56,7 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
 
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
-      <h3 className="text-sm font-medium text-gray-400 mb-4">Risiko-Verlauf</h3>
+      <h3 className="text-sm font-medium text-gray-400 mb-4">{t['timeline.title']}</h3>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -79,7 +82,7 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
                   <div className="font-medium text-gray-300 mb-1.5">{d.fullDate}</div>
                   <div className="space-y-1">
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">Risk Score</span>
+                      <span className="text-gray-500">{t['timeline.riskScore']}</span>
                       <span className={`font-bold tabular-nums ${
                         d.riskScore >= 70 ? 'text-red-400' :
                         d.riskScore >= 40 ? 'text-orange-400' :
@@ -87,15 +90,15 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
                       }`}>{d.riskScore}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">CVEs</span>
+                      <span className="text-gray-500">{t['timeline.cves']}</span>
                       <span className="text-gray-300 tabular-nums">{d.cveCount}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">Critical</span>
+                      <span className="text-gray-500">{t['timeline.critical']}</span>
                       <span className="text-red-400 tabular-nums">{d.critical}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">High</span>
+                      <span className="text-gray-500">{t['timeline.high']}</span>
                       <span className="text-orange-400 tabular-nums">{d.high}</span>
                     </div>
                   </div>
@@ -119,13 +122,13 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
       </ResponsiveContainer>
       <div className="flex justify-center gap-6 mt-3 text-[10px] text-gray-600">
         <span className="flex items-center gap-1.5">
-          <span className="w-4 h-px bg-red-400/50 inline-block" /> &gt;70 Kritisch
+          <span className="w-4 h-px bg-red-400/50 inline-block" /> {t['timeline.legendCritical']}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-4 h-px bg-orange-400/50 inline-block" /> &gt;40 Hoch
+          <span className="w-4 h-px bg-orange-400/50 inline-block" /> {t['timeline.legendHigh']}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-4 h-px bg-yellow-400/50 inline-block" /> &gt;10 Mittel
+          <span className="w-4 h-px bg-yellow-400/50 inline-block" /> {t['timeline.legendMedium']}
         </span>
       </div>
     </div>

@@ -4,21 +4,23 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/app/actions';
+import { useLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 
 interface AppShellProps {
   children: React.ReactNode;
   repoCount?: number;
 }
 
-const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/overview', label: 'Übersicht' },
-  { href: '/policies', label: 'Policies' },
-];
-
 export function AppShell({ children, repoCount }: AppShellProps) {
   const pathname = usePathname();
+  const { t, locale, setLocale } = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
+
+  const NAV_ITEMS = [
+    { href: '/dashboard', label: t['nav.dashboard'] },
+    { href: '/overview', label: t['nav.overview'] },
+    { href: '/policies', label: t['nav.policies'] },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -56,22 +58,30 @@ export function AppShell({ children, repoCount }: AppShellProps) {
           <div className="flex items-center gap-3 sm:gap-4">
             {typeof repoCount === 'number' && (
               <span className="hidden sm:inline text-xs text-gray-500 tabular-nums">
-                {repoCount} Repositories
+                {repoCount} {t['app.repositories']}
               </span>
             )}
+            {/* Language switcher */}
+            <button
+              onClick={() => setLocale(locale === 'de' ? 'en' : 'de')}
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors font-medium"
+              title={LOCALE_LABELS[locale === 'de' ? 'en' : 'de']}
+            >
+              {locale === 'de' ? 'EN' : 'DE'}
+            </button>
             <form action={logout}>
               <button
                 type="submit"
                 className="hidden sm:block text-xs text-gray-500 hover:text-gray-300 transition-colors"
               >
-                Abmelden
+                {t['nav.logout']}
               </button>
             </form>
             {/* Mobile menu button */}
             <button
               onClick={() => setMenuOpen((v) => !v)}
               className="sm:hidden p-1.5 text-gray-400 hover:text-gray-200 transition-colors"
-              aria-label="Menü"
+              aria-label={t['nav.menu']}
             >
               <svg viewBox="0 0 20 20" className="w-5 h-5 fill-current">
                 {menuOpen ? (
@@ -104,14 +114,14 @@ export function AppShell({ children, repoCount }: AppShellProps) {
               );
             })}
             {typeof repoCount === 'number' && (
-              <div className="px-3 py-2 text-xs text-gray-600">{repoCount} Repositories</div>
+              <div className="px-3 py-2 text-xs text-gray-600">{repoCount} {t['app.repositories']}</div>
             )}
             <form action={logout}>
               <button
                 type="submit"
                 className="block w-full text-left px-3 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800/50 rounded-md transition-colors"
               >
-                Abmelden
+                {t['nav.logout']}
               </button>
             </form>
           </div>

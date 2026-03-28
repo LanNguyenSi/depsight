@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { useLocale } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { TeamHealthCard } from '@/components/overview/TeamHealthCard';
 import { RepoComparisonTable } from '@/components/overview/RepoComparisonTable';
@@ -48,6 +49,7 @@ interface OverviewClientProps {
 export function OverviewClient({ data }: OverviewClientProps) {
   const { aggregate, topRiskyRepos, mostOutdated, repos } = data;
   const router = useRouter();
+  const { t } = useLocale();
 
   function navigateToRepo(repoId: string) {
     router.push(`/dashboard?repo=${repoId}`);
@@ -62,7 +64,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Top risky repos */}
             <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Risikoreichste Repos</h3>
+              <h3 className="text-sm font-medium text-gray-400 mb-3">{t['overview.riskyRepos']}</h3>
               <div className="space-y-2">
                 {topRiskyRepos.map((repo, i) => (
                   <button
@@ -91,7 +93,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
 
             {/* Most outdated deps */}
             <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h3 className="text-sm font-medium text-gray-400 mb-3">Meiste veraltete Deps</h3>
+              <h3 className="text-sm font-medium text-gray-400 mb-3">{t['overview.outdatedDeps']}</h3>
               <div className="space-y-2">
                 {mostOutdated.map((repo, i) => {
                   const pct = repo.totalDeps > 0 ? Math.round((repo.outdatedDeps / repo.totalDeps) * 100) : 0;
@@ -118,7 +120,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
                   );
                 })}
                 {mostOutdated.length === 0 && (
-                  <p className="text-sm text-gray-600">Keine Dependency-Scans vorhanden.</p>
+                  <p className="text-sm text-gray-600">{t['overview.noDepsScans']}</p>
                 )}
               </div>
             </div>

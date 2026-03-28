@@ -1,5 +1,7 @@
 'use client';
 
+import { useLocale, interpolate } from '@/lib/i18n';
+
 interface LicenseEntry {
   id: string;
   packageName: string;
@@ -17,6 +19,8 @@ interface LicenseListProps {
 }
 
 export function LicenseList({ licenses, summary, conflictCount }: LicenseListProps) {
+  const { t } = useLocale();
+
   const topLicenses = Object.entries(summary)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 8);
@@ -30,14 +34,14 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       {/* Summary */}
       <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400">Lizenz-Übersicht</h3>
+          <h3 className="text-sm font-medium text-gray-400">{t['license.title']}</h3>
           {conflictCount > 0 ? (
             <span className="text-xs font-medium text-red-400 bg-red-950/50 px-2 py-0.5 rounded border border-red-900/50">
-              {conflictCount} Konflikte
+              {interpolate(t['license.conflicts'], { count: conflictCount })}
             </span>
           ) : (
             <span className="text-xs font-medium text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-900/50">
-              Keine Konflikte
+              {t['license.noConflicts']}
             </span>
           )}
         </div>
@@ -57,7 +61,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       {/* Policy violations */}
       {violations.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">Copyleft-Konflikte</h4>
+          <h4 className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">{t['license.violations']}</h4>
           <div className="space-y-1">
             {violations.map((l) => (
               <LicenseRow key={l.id} entry={l} />
@@ -69,7 +73,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       {/* Needs review */}
       {needsReview.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-yellow-400 mb-2 uppercase tracking-wider">Review empfohlen</h4>
+          <h4 className="text-xs font-semibold text-yellow-400 mb-2 uppercase tracking-wider">{t['license.review']}</h4>
           <div className="space-y-1">
             {needsReview.map((l) => (
               <LicenseRow key={l.id} entry={l} />
@@ -82,7 +86,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       {compatible.length > 0 && (
         <div>
           <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">
-            Kompatibel ({compatible.length})
+            {interpolate(t['license.compatible'], { count: compatible.length })}
           </h4>
           <div className="space-y-1 max-h-64 overflow-y-auto">
             {compatible.map((l) => (
