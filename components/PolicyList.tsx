@@ -27,18 +27,18 @@ const POLICY_TYPE_LABELS: Record<PolicyType, string> = {
 };
 
 const POLICY_TYPE_STYLES: Record<PolicyType, string> = {
-  LICENSE_DENY: 'bg-red-50 text-red-700 border-red-200',
-  LICENSE_ALLOW_ONLY: 'bg-green-50 text-green-700 border-green-200',
-  CVE_MIN_SEVERITY: 'bg-orange-50 text-orange-700 border-orange-200',
-  DEPENDENCY_MAX_AGE: 'bg-blue-50 text-blue-700 border-blue-200',
+  LICENSE_DENY: 'bg-red-950/50 text-red-400 border-red-900/50',
+  LICENSE_ALLOW_ONLY: 'bg-emerald-950/50 text-emerald-400 border-emerald-900/50',
+  CVE_MIN_SEVERITY: 'bg-orange-950/50 text-orange-400 border-orange-900/50',
+  DEPENDENCY_MAX_AGE: 'bg-blue-950/50 text-blue-400 border-blue-900/50',
 };
 
 const SEVERITY_STYLES: Record<Severity, string> = {
-  CRITICAL: 'bg-red-100 text-red-800 border-red-200',
-  HIGH: 'bg-orange-100 text-orange-800 border-orange-200',
-  MEDIUM: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-  LOW: 'bg-blue-100 text-blue-800 border-blue-200',
-  UNKNOWN: 'bg-gray-100 text-gray-600 border-gray-200',
+  CRITICAL: 'bg-red-950/60 text-red-400 border-red-900/50',
+  HIGH: 'bg-orange-950/60 text-orange-400 border-orange-900/50',
+  MEDIUM: 'bg-yellow-950/60 text-yellow-400 border-yellow-900/50',
+  LOW: 'bg-blue-950/60 text-blue-400 border-blue-900/50',
+  UNKNOWN: 'bg-gray-800 text-gray-500 border-gray-700',
 };
 
 const SEVERITY_OPTIONS: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
@@ -47,13 +47,9 @@ interface FormState {
   name: string;
   type: PolicyType;
   severity: Severity;
-  // LICENSE_DENY
   deniedLicenses: string;
-  // LICENSE_ALLOW_ONLY
   allowedLicenses: string;
-  // CVE_MIN_SEVERITY
   minSeverity: Severity;
-  // DEPENDENCY_MAX_AGE
   maxAgeDays: string;
 }
 
@@ -70,13 +66,9 @@ const DEFAULT_FORM: FormState = {
 function buildRule(form: FormState): Record<string, unknown> {
   switch (form.type) {
     case 'LICENSE_DENY':
-      return {
-        deniedLicenses: form.deniedLicenses.split(',').map((s) => s.trim()).filter(Boolean),
-      };
+      return { deniedLicenses: form.deniedLicenses.split(',').map((s) => s.trim()).filter(Boolean) };
     case 'LICENSE_ALLOW_ONLY':
-      return {
-        allowedLicenses: form.allowedLicenses.split(',').map((s) => s.trim()).filter(Boolean),
-      };
+      return { allowedLicenses: form.allowedLicenses.split(',').map((s) => s.trim()).filter(Boolean) };
     case 'CVE_MIN_SEVERITY':
       return { minSeverity: form.minSeverity };
     case 'DEPENDENCY_MAX_AGE':
@@ -99,10 +91,8 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
         body: JSON.stringify({ enabled: !policy.enabled }),
       });
       if (!res.ok) throw new Error('Fehler beim Aktualisieren');
-      const data = await res.json() as { policy: Policy };
-      setPolicies((prev) =>
-        prev.map((p) => (p.id === policy.id ? data.policy : p)),
-      );
+      const data = (await res.json()) as { policy: Policy };
+      setPolicies((prev) => prev.map((p) => (p.id === policy.id ? data.policy : p)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unbekannter Fehler');
     }
@@ -142,11 +132,11 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
       });
 
       if (!res.ok) {
-        const data = await res.json() as { error?: string };
+        const data = (await res.json()) as { error?: string };
         throw new Error(data.error ?? 'Fehler beim Speichern');
       }
 
-      const data = await res.json() as { policy: Policy };
+      const data = (await res.json()) as { policy: Policy };
       setPolicies((prev) => [data.policy, ...prev]);
       setForm(DEFAULT_FORM);
       setShowForm(false);
@@ -157,85 +147,73 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
     }
   };
 
+  const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors';
+  const labelCls = 'block text-xs font-medium text-gray-400 mb-1.5';
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Policies</h1>
+          <h1 className="text-lg font-semibold text-white">Policies</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             Regeln für Lizenzen, CVEs und Abhängigkeiten
           </p>
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 transition-colors"
         >
-          {showForm ? '✕ Abbrechen' : '+ Neue Policy'}
+          {showForm ? 'Abbrechen' : 'Neue Policy'}
         </button>
       </div>
 
-      {/* Error banner */}
+      {/* Error */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+        <div className="bg-red-950/50 border border-red-900/50 text-red-400 text-sm rounded-lg px-4 py-3 flex items-center justify-between">
           {error}
-          <button
-            onClick={() => setError(null)}
-            className="ml-3 text-red-500 hover:text-red-700"
-          >
-            ✕
+          <button onClick={() => setError(null)} className="text-red-500 hover:text-red-300 ml-3">
+            &times;
           </button>
         </div>
       )}
 
       {/* Create form */}
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-4">Neue Policy erstellen</h2>
+        <div className="bg-gray-900 rounded-lg border border-gray-800 p-5">
+          <h2 className="text-sm font-medium text-gray-400 mb-4">Neue Policy erstellen</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Name */}
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Name
-              </label>
+              <label className={labelCls}>Name</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="z.B. Keine GPL-Lizenzen"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={inputCls}
                 required
               />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              {/* Type */}
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Typ
-                </label>
+                <label className={labelCls}>Typ</label>
                 <select
                   value={form.type}
                   onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as PolicyType }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputCls}
                 >
                   {(Object.keys(POLICY_TYPE_LABELS) as PolicyType[]).map((t) => (
-                    <option key={t} value={t}>
-                      {POLICY_TYPE_LABELS[t]}
-                    </option>
+                    <option key={t} value={t}>{POLICY_TYPE_LABELS[t]}</option>
                   ))}
                 </select>
               </div>
-
-              {/* Severity */}
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Schweregrad
-                </label>
+                <label className={labelCls}>Schweregrad</label>
                 <select
                   value={form.severity}
                   onChange={(e) => setForm((f) => ({ ...f, severity: e.target.value as Severity }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputCls}
                 >
                   {SEVERITY_OPTIONS.map((s) => (
                     <option key={s} value={s}>{s}</option>
@@ -244,46 +222,39 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
               </div>
             </div>
 
-            {/* Dynamic rule fields */}
             {form.type === 'LICENSE_DENY' && (
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Verbotene Lizenzen (kommagetrennt)
-                </label>
+                <label className={labelCls}>Verbotene Lizenzen (kommagetrennt)</label>
                 <textarea
                   value={form.deniedLicenses}
                   onChange={(e) => setForm((f) => ({ ...f, deniedLicenses: e.target.value }))}
                   placeholder="GPL-2.0, GPL-3.0, LGPL-2.1"
                   rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`${inputCls} font-mono`}
                 />
               </div>
             )}
 
             {form.type === 'LICENSE_ALLOW_ONLY' && (
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Erlaubte Lizenzen (kommagetrennt)
-                </label>
+                <label className={labelCls}>Erlaubte Lizenzen (kommagetrennt)</label>
                 <textarea
                   value={form.allowedLicenses}
                   onChange={(e) => setForm((f) => ({ ...f, allowedLicenses: e.target.value }))}
                   placeholder="MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause"
                   rows={2}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`${inputCls} font-mono`}
                 />
               </div>
             )}
 
             {form.type === 'CVE_MIN_SEVERITY' && (
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Minimale CVE-Schwere (Verstöße ab dieser Stufe)
-                </label>
+                <label className={labelCls}>Minimale CVE-Schwere (Verstöße ab dieser Stufe)</label>
                 <select
                   value={form.minSeverity}
                   onChange={(e) => setForm((f) => ({ ...f, minSeverity: e.target.value as Severity }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputCls}
                 >
                   {SEVERITY_OPTIONS.map((s) => (
                     <option key={s} value={s}>{s}</option>
@@ -294,16 +265,14 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             {form.type === 'DEPENDENCY_MAX_AGE' && (
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Maximales Alter in Tagen
-                </label>
+                <label className={labelCls}>Maximales Alter in Tagen</label>
                 <input
                   type="number"
                   min={1}
                   value={form.maxAgeDays}
                   onChange={(e) => setForm((f) => ({ ...f, maxAgeDays: e.target.value }))}
                   placeholder="365"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={inputCls}
                 />
               </div>
             )}
@@ -312,16 +281,16 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
               <button
                 type="button"
                 onClick={() => { setShowForm(false); setForm(DEFAULT_FORM); }}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
               >
                 Abbrechen
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
               >
-                {saving ? 'Speichern…' : 'Policy speichern'}
+                {saving ? 'Speichern...' : 'Policy speichern'}
               </button>
             </div>
           </form>
@@ -330,10 +299,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
       {/* Policy list */}
       {policies.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-          <div className="text-4xl mb-3">🛡️</div>
+        <div className="text-center py-16 bg-gray-900 rounded-lg border border-gray-800">
           <p className="text-gray-500 text-sm">Noch keine Policies definiert.</p>
-          <p className="text-gray-400 text-xs mt-1">
+          <p className="text-gray-600 text-xs mt-1">
             Erstelle eine Policy, um Lizenzen, CVEs und Abhängigkeiten zu überwachen.
           </p>
         </div>
@@ -362,39 +330,33 @@ interface PolicyRowProps {
 function PolicyRow({ policy, onToggle, onDelete }: PolicyRowProps) {
   return (
     <div
-      className={`flex items-center justify-between px-4 py-3 bg-white rounded-lg border ${
-        policy.enabled ? 'border-gray-200' : 'border-gray-100 opacity-60'
-      } hover:border-gray-300 transition-colors`}
+      className={`flex items-center justify-between px-4 py-3 bg-gray-900 rounded-lg border ${
+        policy.enabled ? 'border-gray-800' : 'border-gray-800/50 opacity-50'
+      } hover:border-gray-700 transition-colors`}
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <span className="text-lg">{policy.enabled ? '🛡️' : '⏸️'}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm text-gray-800 truncate">{policy.name}</span>
-            <span
-              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${POLICY_TYPE_STYLES[policy.type]}`}
-            >
+            <span className="font-medium text-sm text-gray-200 truncate">{policy.name}</span>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${POLICY_TYPE_STYLES[policy.type]}`}>
               {POLICY_TYPE_LABELS[policy.type]}
             </span>
-            <span
-              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${SEVERITY_STYLES[policy.severity]}`}
-            >
+            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${SEVERITY_STYLES[policy.severity]}`}>
               {policy.severity}
             </span>
           </div>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <p className="text-xs text-gray-600 mt-0.5">
             {new Date(policy.createdAt).toLocaleDateString('de-DE')}
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-2 ml-4 shrink-0">
-        {/* Toggle */}
+      <div className="flex items-center gap-3 ml-4 shrink-0">
         <button
           onClick={() => onToggle(policy)}
           title={policy.enabled ? 'Deaktivieren' : 'Aktivieren'}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-            policy.enabled ? 'bg-blue-600' : 'bg-gray-300'
+            policy.enabled ? 'bg-blue-600' : 'bg-gray-700'
           }`}
         >
           <span
@@ -403,14 +365,12 @@ function PolicyRow({ policy, onToggle, onDelete }: PolicyRowProps) {
             }`}
           />
         </button>
-
-        {/* Delete */}
         <button
           onClick={() => onDelete(policy.id)}
           title="Löschen"
-          className="text-gray-400 hover:text-red-500 transition-colors p-1"
+          className="text-gray-600 hover:text-red-400 transition-colors text-xs"
         >
-          🗑️
+          Löschen
         </button>
       </div>
     </div>

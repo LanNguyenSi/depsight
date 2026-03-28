@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
@@ -112,6 +112,22 @@ interface DashboardClientProps {
   repos: RepoItem[];
 }
 
+const riskColor = (score: number) =>
+  score >= 70
+    ? 'text-red-400'
+    : score >= 40
+      ? 'text-orange-400'
+      : score >= 10
+        ? 'text-yellow-400'
+        : 'text-emerald-400';
+
+const TABS: { key: ActiveTab; label: string }[] = [
+  { key: 'cve', label: 'CVEs' },
+  { key: 'license', label: 'Lizenzen' },
+  { key: 'deps', label: 'Dependencies' },
+  { key: 'history', label: 'Verlauf' },
+];
+
 export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   const repos = initialRepos;
   const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(null);
@@ -142,7 +158,6 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setSelectedRepo(repo);
     setScanDetail(null);
     setActiveTab('cve');
-
     try {
       const res = await fetch('/api/scan', {
         method: 'POST',
@@ -162,7 +177,6 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   async function handleLicenseScan(repo: RepoItem) {
     setScanningLicense(true);
     setActiveTab('license');
-
     try {
       await fetch('/api/license', {
         method: 'POST',
@@ -180,7 +194,6 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   async function handleDepsScan(repo: RepoItem) {
     setScanningDeps(true);
     setActiveTab('deps');
-
     try {
       await fetch('/api/deps', {
         method: 'POST',
@@ -245,76 +258,51 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     }
   }
 
-  const riskColor = (score: number) =>
-    score >= 70
-      ? 'text-red-600'
-      : score >= 40
-        ? 'text-orange-500'
-        : score >= 10
-          ? 'text-yellow-500'
-          : 'text-green-600';
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold text-gray-900">🔍 depsight</h1>
-            <nav className="flex items-center gap-1 text-sm">
-              <Link href="/dashboard" className="px-3 py-1.5 text-blue-600 bg-blue-50 rounded-lg font-medium">Dashboard</Link>
-              <Link href="/overview" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors">Übersicht</Link>
-            </nav>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-500">{repos.length} Repositories</span>
+    <AppShell repoCount={repos.length}>
+      <div className="flex gap-6">
+        {/* Sidebar — repo list */}
+        <aside className="w-72 shrink-0">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              Repositories
+            </h2>
             <button
               onClick={() => void handleSync()}
               disabled={syncing}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
             >
-              {syncing ? '⏳ Sync...' : '🔄 Repos synchronisieren'}
+              {syncing ? 'Sync...' : 'Sync'}
             </button>
           </div>
-        </div>
-      </header>
-
-      <div className="max-w-7xl mx-auto px-6 py-6 flex gap-6">
-        {/* Repo list */}
-        <aside className="w-72 shrink-0">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            Repositories
-          </h2>
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {repos.length === 0 && (
-              <p className="text-sm text-gray-400 py-4 text-center">
-                Keine Repos – bitte synchronisieren.
+              <p className="text-sm text-gray-600 py-8 text-center">
+                Keine Repos &mdash; bitte synchronisieren.
               </p>
             )}
             {repos.map((repo) => (
               <button
                 key={repo.id}
                 onClick={() => void handleSelectRepo(repo)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
                   selectedRepo?.id === repo.id
-                    ? 'bg-blue-50 border border-blue-200 text-blue-800'
-                    : 'hover:bg-gray-100 text-gray-700'
+                    ? 'bg-gray-800 text-white'
+                    : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200'
                 }`}
               >
                 <div className="font-medium truncate">{repo.fullName}</div>
                 <div className="flex items-center gap-2 mt-0.5">
                   {repo.language && (
-                    <span className="text-xs text-gray-400">{repo.language}</span>
+                    <span className="text-xs text-gray-600">{repo.language}</span>
                   )}
                   {repo.latestScan && (
-                    <span
-                      className={`text-xs font-semibold ${riskColor(repo.latestScan.riskScore)}`}
-                    >
-                      Risk: {repo.latestScan.riskScore}
+                    <span className={`text-xs font-medium tabular-nums ${riskColor(repo.latestScan.riskScore)}`}>
+                      {repo.latestScan.riskScore}
                     </span>
                   )}
                   {!repo.latestScan && (
-                    <span className="text-xs text-gray-400">Nicht gescannt</span>
+                    <span className="text-xs text-gray-700">Nicht gescannt</span>
                   )}
                 </div>
               </button>
@@ -323,195 +311,171 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
         </aside>
 
         {/* Detail panel */}
-        <main className="flex-1 min-w-0">
+        <section className="flex-1 min-w-0">
           {!selectedRepo && (
-            <div className="flex items-center justify-center h-64 text-gray-400">
-              <p>← Repository auswählen</p>
+            <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
+              Repository auswählen
             </div>
           )}
 
           {selectedRepo && (
             <div className="space-y-4">
               {/* Repo header + actions */}
-              <div className="flex items-center justify-between">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">{selectedRepo.fullName}</h2>
+                  <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
                   {selectedRepo.lastScannedAt && (
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-gray-500 mt-0.5">
                       Zuletzt gescannt:{' '}
                       {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
                     </p>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 shrink-0">
                   <button
                     onClick={() => void handleCveScan(selectedRepo)}
                     disabled={scanning}
-                    className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 disabled:opacity-50 transition-colors"
                   >
-                    {scanning ? '⏳' : '🔍'} CVE
+                    {scanning ? 'Scanning...' : 'CVE Scan'}
                   </button>
                   <button
                     onClick={() => void handleLicenseScan(selectedRepo)}
                     disabled={scanningLicense}
-                    className="px-3 py-1.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
                   >
-                    {scanningLicense ? '⏳' : '📋'} Lizenzen
+                    {scanningLicense ? 'Scanning...' : 'Lizenzen'}
                   </button>
                   <button
                     onClick={() => void handleDepsScan(selectedRepo)}
                     disabled={scanningDeps}
-                    className="px-3 py-1.5 bg-teal-600 text-white text-sm font-medium rounded-lg hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                    className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
                   >
-                    {scanningDeps ? '⏳' : '📦'} Deps
+                    {scanningDeps ? 'Scanning...' : 'Deps'}
                   </button>
-
-
                   <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
-
                   <a
                     href={`/api/sbom?repoId=${selectedRepo.id}`}
                     download
-                    className="px-3 py-1.5 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                    className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
                   >
-                    ⬇️ SBOM
+                    SBOM
                   </a>
                 </div>
               </div>
 
               {/* Tabs */}
-              <div className="flex border-b border-gray-200">
-                <button
-                  onClick={() => setActiveTab('cve')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    activeTab === 'cve'
-                      ? 'text-blue-600 border-b-2 border-blue-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  🔍 CVEs {scanDetail && `(${scanDetail.counts.total})`}
-                </button>
-                <button
-                  onClick={() => setActiveTab('license')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    activeTab === 'license'
-                      ? 'text-purple-600 border-b-2 border-purple-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  📋 Lizenzen {licenseDetail && `(${licenseDetail.licenseCount})`}
-                </button>
-                <button
-                  onClick={() => setActiveTab('deps')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    activeTab === 'deps'
-                      ? 'text-teal-600 border-b-2 border-teal-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  📦 Abhängigkeiten {depsDetail && `(${depsDetail.summary.total})`}
-                </button>
-                <button
-                  onClick={() => setActiveTab('history')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    activeTab === 'history'
-                      ? 'text-green-600 border-b-2 border-green-600'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  📈 Verlauf {scanHistory.length > 0 && `(${scanHistory.length})`}
-                </button>
+              <div className="flex gap-1 border-b border-gray-800">
+                {TABS.map(({ key, label }) => {
+                  const count =
+                    key === 'cve' ? scanDetail?.counts.total :
+                    key === 'license' ? licenseDetail?.licenseCount :
+                    key === 'deps' ? depsDetail?.summary.total :
+                    scanHistory.length || undefined;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setActiveTab(key)}
+                      className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+                        activeTab === key
+                          ? 'text-blue-400 border-blue-400'
+                          : 'text-gray-500 border-transparent hover:text-gray-300'
+                      }`}
+                    >
+                      {label}
+                      {count !== undefined && count > 0 && (
+                        <span className="ml-1.5 text-gray-600 tabular-nums">
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* CVE Tab */}
-              {activeTab === 'cve' && (
-                <>
-                  {(loadingDetail || scanning) && (
-                    <div className="text-center py-8 text-gray-400">⏳ Lade CVE-Daten...</div>
-                  )}
-                  {scanDetail && !loadingDetail && (
-                    <>
-                      <SeverityBreakdown
-                        counts={scanDetail.counts}
-                        riskScore={scanDetail.riskScore}
+              {/* Tab content */}
+              <div>
+                {activeTab === 'cve' && (
+                  <>
+                    {(loadingDetail || scanning) && (
+                      <Loading text="Lade CVE-Daten..." />
+                    )}
+                    {scanDetail && !loadingDetail && (
+                      <>
+                        <SeverityBreakdown counts={scanDetail.counts} riskScore={scanDetail.riskScore} />
+                        <div className="mt-4">
+                          <AdvisoryList advisories={scanDetail.advisories} />
+                        </div>
+                      </>
+                    )}
+                    {!scanDetail && !loadingDetail && !scanning && (
+                      <EmptyState text='Noch kein CVE-Scan durchgeführt.' />
+                    )}
+                  </>
+                )}
+
+                {activeTab === 'license' && (
+                  <>
+                    {scanningLicense && <Loading text="Erkenne Lizenzen..." />}
+                    {licenseDetail && !scanningLicense && (
+                      <LicenseList
+                        licenses={licenseDetail.licenses}
+                        summary={licenseDetail.summary}
+                        conflictCount={licenseDetail.conflictCount}
                       />
-                      <div>
-                        <h3 className="text-sm font-semibold text-gray-700 mb-2">
-                          CVEs ({scanDetail.counts.total})
-                        </h3>
-                        <AdvisoryList advisories={scanDetail.advisories} />
-                      </div>
-                    </>
-                  )}
-                  {!scanDetail && !loadingDetail && !scanning && (
-                    <div className="text-center py-8 text-gray-400">
-                      Noch kein CVE-Scan – klicke auf &ldquo;🔍 CVE&rdquo;.
-                    </div>
-                  )}
-                </>
-              )}
+                    )}
+                    {!licenseDetail && !scanningLicense && (
+                      <EmptyState text="Noch kein Lizenz-Scan durchgeführt." />
+                    )}
+                  </>
+                )}
 
-              {/* License Tab */}
-              {activeTab === 'license' && (
-                <>
-                  {scanningLicense && (
-                    <div className="text-center py-8 text-gray-400">⏳ Erkenne Lizenzen...</div>
-                  )}
-                  {licenseDetail && !scanningLicense && (
-                    <LicenseList
-                      licenses={licenseDetail.licenses}
-                      summary={licenseDetail.summary}
-                      conflictCount={licenseDetail.conflictCount}
-                    />
-                  )}
-                  {!licenseDetail && !scanningLicense && (
-                    <div className="text-center py-8 text-gray-400">
-                      Noch kein Lizenz-Scan – klicke auf &ldquo;📋 Lizenzen&rdquo;.
-                    </div>
-                  )}
-                </>
-              )}
+                {activeTab === 'deps' && (
+                  <>
+                    {scanningDeps && <Loading text="Analysiere Abhängigkeiten..." />}
+                    {depsDetail && !scanningDeps && (
+                      <DependencyTable dependencies={depsDetail.dependencies} summary={depsDetail.summary} />
+                    )}
+                    {!depsDetail && !scanningDeps && (
+                      <EmptyState text="Noch keine Dependency-Analyse durchgeführt." />
+                    )}
+                  </>
+                )}
 
-              {/* Deps Tab */}
-              {activeTab === 'deps' && (
-                <>
-                  {scanningDeps && (
-                    <div className="text-center py-8 text-gray-400">⏳ Analysiere Abhängigkeiten...</div>
-                  )}
-                  {depsDetail && !scanningDeps && (
-                    <DependencyTable
-                      dependencies={depsDetail.dependencies}
-                      summary={depsDetail.summary}
-                    />
-                  )}
-                  {!depsDetail && !scanningDeps && (
-                    <div className="text-center py-8 text-gray-400">
-                      Noch keine Dependency-Analyse – klicke auf &ldquo;📦 Deps&rdquo;.
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* History Tab */}
-              {activeTab === 'history' && (
-                <>
-                  {loadingHistory && (
-                    <div className="text-center py-8 text-gray-400">⏳ Lade Historie...</div>
-                  )}
-                  {!loadingHistory && (
-                    <RiskTimeline history={scanHistory} height={250} />
-                  )}
-                  {!loadingHistory && scanHistory.length === 0 && (
-                    <div className="text-center py-4 text-gray-400 text-sm">
-                      Führe mehrere CVE-Scans durch, um den Risiko-Verlauf zu sehen.
-                    </div>
-                  )}
-                </>
-              )}
+                {activeTab === 'history' && (
+                  <>
+                    {loadingHistory && <Loading text="Lade Historie..." />}
+                    {!loadingHistory && <RiskTimeline history={scanHistory} height={250} />}
+                    {!loadingHistory && scanHistory.length === 0 && (
+                      <p className="text-center py-4 text-gray-600 text-xs">
+                        Mehrere CVE-Scans durchführen, um den Verlauf zu sehen.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
-        </main>
+        </section>
       </div>
+    </AppShell>
+  );
+}
+
+function Loading({ text }: { text: string }) {
+  return (
+    <div className="flex items-center justify-center py-12 gap-2 text-gray-500 text-sm">
+      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+      {text}
     </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="text-center py-12 text-gray-600 text-sm">{text}</div>
   );
 }

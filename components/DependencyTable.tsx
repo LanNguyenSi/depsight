@@ -27,16 +27,16 @@ interface DependencyTableProps {
   summary: DepSummary;
 }
 
-const STATUS_STYLES: Record<DepStatus, { label: string; badge: string; icon: string }> = {
-  UP_TO_DATE: { label: 'Aktuell', badge: 'bg-green-100 text-green-700 border-green-200', icon: '✅' },
-  OUTDATED:   { label: 'Veraltet', badge: 'bg-yellow-100 text-yellow-700 border-yellow-200', icon: '⚠️' },
-  MAJOR_BEHIND: { label: 'Major hinter', badge: 'bg-orange-100 text-orange-700 border-orange-200', icon: '🔶' },
-  DEPRECATED: { label: 'Deprecated', badge: 'bg-red-100 text-red-700 border-red-200', icon: '🔴' },
-  UNKNOWN:    { label: 'Unbekannt', badge: 'bg-gray-100 text-gray-600 border-gray-200', icon: '❓' },
+const STATUS_STYLES: Record<DepStatus, { label: string; cls: string }> = {
+  UP_TO_DATE:   { label: 'Aktuell',       cls: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/50' },
+  OUTDATED:     { label: 'Veraltet',      cls: 'text-yellow-400 bg-yellow-950/50 border-yellow-900/50' },
+  MAJOR_BEHIND: { label: 'Major hinter',  cls: 'text-orange-400 bg-orange-950/50 border-orange-900/50' },
+  DEPRECATED:   { label: 'Deprecated',    cls: 'text-red-400 bg-red-950/50 border-red-900/50' },
+  UNKNOWN:      { label: 'Unbekannt',     cls: 'text-gray-500 bg-gray-800 border-gray-700' },
 };
 
 function formatAge(days: number | null): string {
-  if (days === null || days < 0) return '–';
+  if (days === null || days < 0) return '\u2013';
   if (days < 30) return `${days}d`;
   if (days < 365) return `${Math.floor(days / 30)}mo`;
   return `${(days / 365).toFixed(1)}j`;
@@ -48,71 +48,72 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
 
   return (
     <div className="space-y-4">
-      {/* Summary bar */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
+      {/* Summary */}
+      <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">Dependency Health</h3>
-          <span className={`text-lg font-bold ${healthPercent >= 80 ? 'text-green-600' : healthPercent >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>
-            {healthPercent}% aktuell
+          <h3 className="text-sm font-medium text-gray-400">Dependency Health</h3>
+          <span className={`text-lg font-bold tabular-nums ${healthPercent >= 80 ? 'text-emerald-400' : healthPercent >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+            {healthPercent}%
+            <span className="text-xs font-normal text-gray-600 ml-1">aktuell</span>
           </span>
         </div>
         <div className="grid grid-cols-5 gap-2 text-center">
           {([
-            ['Aktuell', summary.upToDate, 'text-green-600'],
-            ['Veraltet', summary.outdated, 'text-yellow-600'],
-            ['Major ↑', summary.majorBehind, 'text-orange-600'],
-            ['Deprecated', summary.deprecated, 'text-red-600'],
-            ['Unbekannt', summary.unknown, 'text-gray-400'],
+            ['Aktuell', summary.upToDate, 'text-emerald-400'],
+            ['Veraltet', summary.outdated, 'text-yellow-400'],
+            ['Major', summary.majorBehind, 'text-orange-400'],
+            ['Deprecated', summary.deprecated, 'text-red-400'],
+            ['Unbekannt', summary.unknown, 'text-gray-600'],
           ] as const).map(([label, count, color]) => (
-            <div key={label} className="bg-gray-50 rounded p-2">
-              <div className={`text-lg font-bold ${color}`}>{count}</div>
-              <div className="text-xs text-gray-500">{label}</div>
+            <div key={label} className="bg-gray-800/50 rounded-md p-2">
+              <div className={`text-lg font-bold tabular-nums ${color}`}>{count}</div>
+              <div className="text-[10px] text-gray-600">{label}</div>
             </div>
           ))}
         </div>
         {outdatedTotal > 0 && (
-          <p className="text-xs text-orange-600 mt-2">
-            ⚠️ {outdatedTotal} Pakete benötigen Updates
+          <p className="text-xs text-orange-400 mt-2">
+            {outdatedTotal} Pakete benötigen Updates
           </p>
         )}
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className="border-b border-gray-800">
             <tr>
-              <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600">Paket</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600">Installiert</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600">Aktuell</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600">Alter</th>
-              <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600">Status</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Paket</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Installiert</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Aktuell</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Alter</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Status</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-gray-800/50">
             {dependencies.map((dep) => {
               const style = STATUS_STYLES[dep.status];
               return (
-                <tr key={dep.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-3 py-2 font-mono text-gray-800 max-w-[200px] truncate">
+                <tr key={dep.id} className="hover:bg-gray-800/30 transition-colors">
+                  <td className="px-3 py-2 font-mono text-gray-300 max-w-[200px] truncate text-xs">
                     {dep.name}
                   </td>
-                  <td className="px-3 py-2 font-mono text-gray-500 text-xs">
-                    {dep.installedVersion || '–'}
+                  <td className="px-3 py-2 font-mono text-gray-600 text-xs">
+                    {dep.installedVersion || '\u2013'}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">
                     {dep.updateAvailable ? (
-                      <span className="text-blue-600 font-semibold">{dep.latestVersion}</span>
+                      <span className="text-blue-400 font-medium">{dep.latestVersion}</span>
                     ) : (
-                      <span className="text-gray-400">{dep.latestVersion || '–'}</span>
+                      <span className="text-gray-600">{dep.latestVersion || '\u2013'}</span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-xs text-gray-500">
+                  <td className="px-3 py-2 text-xs text-gray-600 tabular-nums">
                     {formatAge(dep.ageInDays)}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-xs ${style.badge}`}>
-                      {style.icon} {style.label}
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.cls}`}>
+                      {style.label}
                     </span>
                   </td>
                 </tr>
@@ -121,7 +122,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
           </tbody>
         </table>
         {dependencies.length === 0 && (
-          <div className="text-center py-8 text-gray-400 text-sm">
+          <div className="text-center py-8 text-gray-600 text-sm">
             Keine Abhängigkeiten gefunden.
           </div>
         )}

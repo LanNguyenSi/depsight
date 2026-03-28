@@ -1,6 +1,5 @@
-.PHONY: install hooks dev dev-docker docker-up docker-down build test lint format ci clean help
+.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down build test lint format ci clean help
 
-# Default target
 .DEFAULT_GOAL := help
 
 help: ## Show this help message
@@ -9,7 +8,37 @@ help: ## Show this help message
 	@echo 'Available targets:'
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## Install dependencies
+# ── Development (Docker) ────────────────────────────────────────────
+
+dev: ## Start dev environment (installs deps, migrates DB, starts server)
+	docker compose -f docker-compose.dev.yml up --build
+
+dev-up: ## Start dev environment in background
+	docker compose -f docker-compose.dev.yml up --build -d
+
+dev-down: ## Stop dev environment
+	docker compose -f docker-compose.dev.yml down
+
+dev-logs: ## Tail dev logs
+	docker compose -f docker-compose.dev.yml logs -f
+
+dev-ps: ## Show running dev containers
+	docker compose -f docker-compose.dev.yml ps
+
+dev-clean: ## Stop dev environment and remove volumes
+	docker compose -f docker-compose.dev.yml down -v
+
+# ── Production (Docker) ─────────────────────────────────────────────
+
+prod: ## Build and start production containers
+	docker compose up --build -d
+
+prod-down: ## Stop production containers
+	docker compose down
+
+# ── Local (without Docker) ──────────────────────────────────────────
+
+install: ## Install dependencies (local, no Docker)
 	npm ci
 	npx prisma generate
 
@@ -17,16 +46,6 @@ hooks: ## Set up Git pre-commit hooks (Husky + lint-staged)
 	npx husky init
 	cp .husky-pre-commit .husky/pre-commit
 	chmod +x .husky/pre-commit
-dev: ## Start development server (local)
-	npm run dev
-
-dev-docker: docker-up ## Start development server (Docker)
-
-docker-up: ## Start Docker development environment
-	docker compose -f docker-compose.dev.yml up --build
-
-docker-down: ## Stop Docker development environment
-	docker compose -f docker-compose.dev.yml down
 
 build: ## Build for production
 	npm run build
