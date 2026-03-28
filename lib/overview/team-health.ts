@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 export interface RepoHealthSummary {
@@ -54,55 +55,73 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
   const repos = await prisma.repo.findMany({
     where: { userId, tracked: true },
     orderBy: { updatedAt: 'desc' },
-    include: {
-      scans: {
-        where: { status: 'COMPLETED' },
-        orderBy: { scannedAt: 'desc' },
-        take: 1,
-        select: {
-          riskScore: true,
-          cveCount: true,
-          criticalCount: true,
-          highCount: true,
-          mediumCount: true,
-          lowCount: true,
-          licenseIssues: true,
-          _count: { select: { dependencies: true } },
-        },
-      },
-    },
   });
 
-  // Get outdated dep counts per repo (separate query for performance)
-  const outdatedCounts = await prisma.dependency.groupBy({
-    by: ['scanId'],
-    where: {
-      status: { in: ['OUTDATED', 'MAJOR_BEHIND', 'DEPRECATED'] },
-      scan: { repo: { userId }, status: 'COMPLETED' },
-    },
-    _count: true,
-  });
-
-  // Build scanId → outdated count lookup
-  const outdatedByScanId = new Map(outdatedCounts.map((r) => [r.scanId, r._count]));
-
-  // Build repoId → latest scan ID lookup for joining outdated dep counts
-  const latestScanIds = new Map<string, string>();
-  const latestScans = await prisma.scan.findMany({
-    where: { repo: { userId }, status: 'COMPLETED' },
+  // Get latest CVE scan per repo (for risk scores)
+  const cveScansByRepo = new Map<string, {
+    riskScore: number; cveCount: number; criticalCount: number;
+    highCount: number; mediumCount: number; lowCount: number;
+  }>();
+  const cveScans = await prisma.scan.findMany({
+    where: { repo: { userId }, status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
     orderBy: { scannedAt: 'desc' },
     distinct: ['repoId'],
-    select: { id: true, repoId: true },
+    select: {
+      repoId: true, riskScore: true, cveCount: true,
+      criticalCount: true, highCount: true, mediumCount: true, lowCount: true,
+    },
   });
-  for (const s of latestScans) {
-    latestScanIds.set(s.repoId, s.id);
+  for (const s of cveScans) {
+    cveScansByRepo.set(s.repoId, s);
+  }
+
+  // Get latest license scan per repo
+  const licenseScansByRepo = new Map<string, { licenseIssues: number }>();
+  const licenseScans = await prisma.scan.findMany({
+    where: { repo: { userId }, status: 'COMPLETED', licenseCount: { gt: 0 } },
+    orderBy: { scannedAt: 'desc' },
+    distinct: ['repoId'],
+    select: { repoId: true, licenseIssues: true },
+  });
+  for (const s of licenseScans) {
+    licenseScansByRepo.set(s.repoId, s);
+  }
+
+  // Get latest deps scan per repo
+  const depsScansByRepo = new Map<string, { scanId: string; depCount: number }>();
+  const depsScans = await prisma.scan.findMany({
+    where: { repo: { userId }, status: 'COMPLETED', dependencies: { some: {} } },
+    orderBy: { scannedAt: 'desc' },
+    distinct: ['repoId'],
+    select: { id: true, repoId: true, _count: { select: { dependencies: true } } },
+  });
+  for (const s of depsScans) {
+    depsScansByRepo.set(s.repoId, { scanId: s.id, depCount: s._count.dependencies });
+  }
+
+  // Get outdated dep counts per repo's deps scan
+  const outdatedByScanId = new Map<string, number>();
+  const depsScanIds = [...depsScansByRepo.values()].map((d) => d.scanId);
+  if (depsScanIds.length > 0) {
+    const outdatedCounts = await prisma.dependency.groupBy({
+      by: ['scanId'],
+      where: {
+        scanId: { in: depsScanIds },
+        status: { in: ['OUTDATED', 'MAJOR_BEHIND', 'DEPRECATED'] },
+      },
+      _count: true,
+    });
+    for (const r of outdatedCounts) {
+      outdatedByScanId.set(r.scanId, r._count);
+    }
   }
 
   const summaries: RepoHealthSummary[] = repos.map((repo) => {
-    const scan = repo.scans[0];
-    const scanId = latestScanIds.get(repo.id);
-    const outdated = scanId ? (outdatedByScanId.get(scanId) ?? 0) : 0;
-    const totalDeps = scan?._count.dependencies ?? 0;
+    const cveScan = cveScansByRepo.get(repo.id);
+    const licenseScan = licenseScansByRepo.get(repo.id);
+    const depsScan = depsScansByRepo.get(repo.id);
+    const outdated = depsScan ? (outdatedByScanId.get(depsScan.scanId) ?? 0) : 0;
+    const totalDeps = depsScan?.depCount ?? 0;
 
     const summary: RepoHealthSummary = {
       repoId: repo.id,
@@ -111,13 +130,13 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
       name: repo.name,
       language: repo.language,
       lastScannedAt: repo.lastScannedAt,
-      riskScore: scan?.riskScore ?? 0,
-      cveCount: scan?.cveCount ?? 0,
-      criticalCount: scan?.criticalCount ?? 0,
-      highCount: scan?.highCount ?? 0,
-      mediumCount: scan?.mediumCount ?? 0,
-      lowCount: scan?.lowCount ?? 0,
-      licenseIssues: scan?.licenseIssues ?? 0,
+      riskScore: cveScan?.riskScore ?? 0,
+      cveCount: cveScan?.cveCount ?? 0,
+      criticalCount: cveScan?.criticalCount ?? 0,
+      highCount: cveScan?.highCount ?? 0,
+      mediumCount: cveScan?.mediumCount ?? 0,
+      lowCount: cveScan?.lowCount ?? 0,
+      licenseIssues: licenseScan?.licenseIssues ?? 0,
       outdatedDeps: outdated,
       totalDeps,
       healthScore: 0,
