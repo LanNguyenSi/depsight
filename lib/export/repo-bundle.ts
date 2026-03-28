@@ -103,8 +103,8 @@ async function loadDepsScan(repoId: string, scanId?: string) {
       OR: [
         { dependencies: { some: {} } },
         {
-          cvePayload: Prisma.DbNull,
-          licensePayload: Prisma.DbNull,
+          cvePayload: { equals: Prisma.DbNull },
+          licensePayload: { equals: Prisma.DbNull },
           advisories: { none: {} },
           licenses: { none: {} },
         },

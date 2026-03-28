@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef, useEffect, useEffectEvent } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
@@ -223,7 +223,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     selectedRepoIdRef.current = selectedRepoId;
   }, [selectedRepoId]);
 
-  const loadRepoDetails = useEffectEvent(async (repo: RepoItem) => {
+  // Uses stable state setters and refs; keeping this callback stable avoids duplicate initial loads.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadRepoDetails = useCallback(async (repo: RepoItem) => {
     const requestId = ++detailRequestRef.current;
     setSelectedRepoId(repo.id);
     setScanDetail(null);
@@ -259,7 +261,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         setLoadingHistory(false);
       }
     }
-  });
+  }, []);
 
   useEffect(() => {
     if (!initialRepoId || selectedRepoId !== initialRepoId) return;
@@ -268,7 +270,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
     hydratedRepoIdRef.current = repo.id;
     void loadRepoDetails(repo);
-  }, [initialRepoId, repos, selectedRepoId]);
+  }, [initialRepoId, loadRepoDetails, repos, selectedRepoId]);
 
   function updateRepo(repoId: string, updater: (repo: RepoItem) => RepoItem) {
     setRepos((current) => current.map((repo) => (repo.id === repoId ? updater(repo) : repo)));
