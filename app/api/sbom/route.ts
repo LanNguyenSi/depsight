@@ -19,9 +19,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
-  // Check that a completed scan exists before generating
+  // Check that a completed CVE scan exists before generating
   const scan = await prisma.scan.findFirst({
-    where: { repoId, status: 'COMPLETED', repo: { userId: session.user.id } },
+    where: { repoId, status: 'COMPLETED', repo: { userId: session.user.id }, advisories: { some: {} } },
     orderBy: { scannedAt: 'desc' },
     select: { id: true },
   });

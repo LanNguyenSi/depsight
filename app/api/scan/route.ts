@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanRepository } from '@/lib/cve/scanner';
 
@@ -46,10 +47,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
+  // Find latest CVE scan (identified by cvePayload being set by the CVE scanner)
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
       repo: { userId: session.user.id },
+      status: 'COMPLETED',
+      cvePayload: { not: Prisma.DbNull },
     },
     orderBy: { scannedAt: 'desc' },
     include: {

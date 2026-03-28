@@ -163,8 +163,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   // Scan all repos
   const [scanAllRunning, setScanAllRunning] = useState(false);
+  const [scanAllChecking, setScanAllChecking] = useState(false);
   const [scanAllProgress, setScanAllProgress] = useState({ current: 0, total: 0 });
   const scanAllCancelRef = useRef(false);
+
+  // Dependabot pre-check modal
+  const [dependabotModal, setDependabotModal] = useState<{
+    disabled: Array<{ repoId: string; fullName: string }>;
+    total: number;
+  } | null>(null);
+  const [enablingAll, setEnablingAll] = useState(false);
 
   // Filter, sort & pagination
   const [search, setSearch] = useState('');
@@ -347,7 +355,47 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
-  async function handleScanAll() {
+  async function handleScanAllPreCheck() {
+    setScanAllChecking(true);
+    try {
+      const res = await fetch('/api/dependabot/check');
+      if (!res.ok) { runScanAll(); return; }
+      const data = (await res.json()) as {
+        total: number;
+        disabledCount: number;
+        disabled: Array<{ repoId: string; fullName: string }>;
+      };
+      if (data.disabledCount > 0) {
+        setDependabotModal({ disabled: data.disabled, total: data.total });
+      } else {
+        runScanAll();
+      }
+    } catch {
+      runScanAll(); // fallback: scan anyway
+    } finally {
+      setScanAllChecking(false);
+    }
+  }
+
+  async function handleEnableAllAndScan() {
+    if (!dependabotModal) return;
+    setEnablingAll(true);
+    try {
+      await fetch('/api/dependabot/enable-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoIds: dependabotModal.disabled.map((r) => r.repoId) }),
+      });
+    } catch {
+      // continue scanning even if enable fails
+    }
+    setEnablingAll(false);
+    setDependabotModal(null);
+    runScanAll();
+  }
+
+  async function runScanAll() {
+    setDependabotModal(null);
     scanAllCancelRef.current = false;
     setScanAllRunning(true);
     setScanAllProgress({ current: 0, total: repos.length });
@@ -358,19 +406,22 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       const repo = repos[i];
 
       try {
-        // CVE scan
         await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
-        // License scan
+
+        if (scanAllCancelRef.current) break;
+
         await fetch('/api/license', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
-        // Deps scan
+
+        if (scanAllCancelRef.current) break;
+
         await fetch('/api/deps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -430,11 +481,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 </button>
               ) : (
                 <button
-                  onClick={() => void handleScanAll()}
-                  disabled={syncing || repos.length === 0}
+                  onClick={() => void handleScanAllPreCheck()}
+                  disabled={syncing || repos.length === 0 || scanAllChecking}
                   className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
                 >
-                  {t['dashboard.scanAll']}
+                  {scanAllChecking ? t['dashboard.scanAllChecking'] : t['dashboard.scanAll']}
                 </button>
               )}
               <span className="text-gray-700">|</span>
@@ -724,6 +775,40 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           )}
         </section>
       </div>
+      {/* Dependabot pre-check modal */}
+      {dependabotModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" style={{ animation: 'fadeIn 150ms ease-out' }}>
+          <div className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4" style={{ animation: 'scaleIn 150ms ease-out' }}>
+            <h3 className="text-base font-semibold text-white mb-2">{t['dashboard.dependabot.modalTitle']}</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              {interpolate(t['dashboard.dependabot.modalDesc'], {
+                count: dependabotModal.disabled.length,
+                total: dependabotModal.total,
+              })}
+            </p>
+            <div className="max-h-32 overflow-y-auto mb-4 space-y-1">
+              {dependabotModal.disabled.map((r) => (
+                <div key={r.repoId} className="text-xs text-gray-500 font-mono truncate">{r.fullName}</div>
+              ))}
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setDependabotModal(null); runScanAll(); }}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                {t['dashboard.dependabot.skipScan']}
+              </button>
+              <button
+                onClick={() => void handleEnableAllAndScan()}
+                disabled={enablingAll}
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              >
+                {enablingAll ? t['dashboard.dependabot.enabling.progress'] : t['dashboard.dependabot.enableAll']}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

@@ -42,11 +42,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
+  // Find latest scan that actually has license data
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
       repo: { userId: session.user.id },
       status: 'COMPLETED',
+      licenseCount: { gt: 0 },
     },
     orderBy: { scannedAt: 'desc' },
     include: {
