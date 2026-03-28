@@ -17,6 +17,10 @@ export interface EcosystemInfo {
   supported: boolean;
 }
 
+const SUPPORTED_ECOSYSTEMS = new Set<Ecosystem>([
+  'npm', 'python', 'go', 'java', 'rust', 'php',
+]);
+
 const MANIFEST_MAP: Array<{ file: string; ecosystem: Ecosystem }> = [
   { file: 'package.json', ecosystem: 'npm' },
   { file: 'requirements.txt', ecosystem: 'python' },
@@ -78,10 +82,10 @@ export async function detectEcosystem(
       if (file.startsWith('*')) {
         const ext = file.slice(1); // e.g. '.csproj'
         if (fileNames.some((f) => f.endsWith(ext))) {
-          return { ecosystem, manifestFile: file, supported: ecosystem === 'npm' };
+          return { ecosystem, manifestFile: file, supported: SUPPORTED_ECOSYSTEMS.has(ecosystem) };
         }
       } else if (fileNames.includes(file.toLowerCase())) {
-        return { ecosystem, manifestFile: file, supported: ecosystem === 'npm' };
+        return { ecosystem, manifestFile: file, supported: SUPPORTED_ECOSYSTEMS.has(ecosystem) };
       }
     }
   } catch {

@@ -5,9 +5,15 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { DashboardClient } from './DashboardClient';
 
-export default async function DashboardPage() {
+interface DashboardPageProps {
+  searchParams: Promise<{ repo?: string }>;
+}
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const session = await auth();
   if (!session?.user) redirect('/login');
+
+  const params = await searchParams;
 
   const repos = await prisma.repo.findMany({
     where: { userId: session.user.id, tracked: true },
@@ -33,6 +39,7 @@ export default async function DashboardPage() {
 
   return (
     <DashboardClient
+      initialRepoId={params.repo ?? null}
       repos={repos.map((r) => ({
         id: r.id,
         fullName: r.fullName,
