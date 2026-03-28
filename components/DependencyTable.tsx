@@ -1,5 +1,8 @@
 'use client';
 
+import { useLocale, interpolate } from '@/lib/i18n';
+import type { Translations } from '@/lib/i18n';
+
 type DepStatus = 'UP_TO_DATE' | 'OUTDATED' | 'MAJOR_BEHIND' | 'DEPRECATED' | 'UNKNOWN';
 
 interface DepSummary {
@@ -27,13 +30,23 @@ interface DependencyTableProps {
   summary: DepSummary;
 }
 
-const STATUS_STYLES: Record<DepStatus, { label: string; cls: string }> = {
-  UP_TO_DATE:   { label: 'Aktuell',       cls: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/50' },
-  OUTDATED:     { label: 'Veraltet',      cls: 'text-yellow-400 bg-yellow-950/50 border-yellow-900/50' },
-  MAJOR_BEHIND: { label: 'Major hinter',  cls: 'text-orange-400 bg-orange-950/50 border-orange-900/50' },
-  DEPRECATED:   { label: 'Deprecated',    cls: 'text-red-400 bg-red-950/50 border-red-900/50' },
-  UNKNOWN:      { label: 'Unbekannt',     cls: 'text-gray-500 bg-gray-800 border-gray-700' },
+const STATUS_STYLES: Record<DepStatus, { cls: string }> = {
+  UP_TO_DATE:   { cls: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/50' },
+  OUTDATED:     { cls: 'text-yellow-400 bg-yellow-950/50 border-yellow-900/50' },
+  MAJOR_BEHIND: { cls: 'text-orange-400 bg-orange-950/50 border-orange-900/50' },
+  DEPRECATED:   { cls: 'text-red-400 bg-red-950/50 border-red-900/50' },
+  UNKNOWN:      { cls: 'text-gray-500 bg-gray-800 border-gray-700' },
 };
+
+function statusLabel(status: DepStatus, t: Translations): string {
+  switch (status) {
+    case 'UP_TO_DATE': return t['deps.upToDate'];
+    case 'OUTDATED': return t['deps.outdated'];
+    case 'MAJOR_BEHIND': return t['deps.majorBehind'];
+    case 'DEPRECATED': return t['deps.deprecated'];
+    case 'UNKNOWN': return t['deps.unknown'];
+  }
+}
 
 function formatAge(days: number | null): string {
   if (days === null || days < 0) return '\u2013';
@@ -43,6 +56,8 @@ function formatAge(days: number | null): string {
 }
 
 export function DependencyTable({ dependencies, summary }: DependencyTableProps) {
+  const { t } = useLocale();
+
   const outdatedTotal = summary.outdated + summary.majorBehind + summary.deprecated;
   const healthPercent = summary.total > 0 ? Math.round((summary.upToDate / summary.total) * 100) : 100;
 
@@ -51,19 +66,19 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
       {/* Summary */}
       <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium text-gray-400">Dependency Health</h3>
+          <h3 className="text-sm font-medium text-gray-400">{t['deps.title']}</h3>
           <span className={`text-lg font-bold tabular-nums ${healthPercent >= 80 ? 'text-emerald-400' : healthPercent >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
             {healthPercent}%
-            <span className="text-xs font-normal text-gray-600 ml-1">aktuell</span>
+            <span className="text-xs font-normal text-gray-600 ml-1">{t['deps.current']}</span>
           </span>
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
           {([
-            ['Aktuell', summary.upToDate, 'text-emerald-400'],
-            ['Veraltet', summary.outdated, 'text-yellow-400'],
-            ['Major', summary.majorBehind, 'text-orange-400'],
-            ['Deprecated', summary.deprecated, 'text-red-400'],
-            ['Unbekannt', summary.unknown, 'text-gray-600'],
+            [t['deps.upToDate'], summary.upToDate, 'text-emerald-400'],
+            [t['deps.outdated'], summary.outdated, 'text-yellow-400'],
+            [t['deps.majorBehind'], summary.majorBehind, 'text-orange-400'],
+            [t['deps.deprecated'], summary.deprecated, 'text-red-400'],
+            [t['deps.unknown'], summary.unknown, 'text-gray-600'],
           ] as const).map(([label, count, color]) => (
             <div key={label} className="bg-gray-800/50 rounded-lg p-3">
               <div className={`text-lg font-bold tabular-nums ${color}`}>{count}</div>
@@ -73,7 +88,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
         </div>
         {outdatedTotal > 0 && (
           <p className="text-xs text-orange-400 mt-2">
-            {outdatedTotal} Pakete benötigen Updates
+            {interpolate(t['deps.needUpdates'], { count: outdatedTotal })}
           </p>
         )}
       </div>
@@ -83,11 +98,11 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Paket</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Installiert</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Aktuell</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Alter</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.package']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.installed']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.latest']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.age']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.status']}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
@@ -113,7 +128,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
                   </td>
                   <td className="px-3 py-2">
                     <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.cls}`}>
-                      {style.label}
+                      {statusLabel(dep.status, t)}
                     </span>
                   </td>
                 </tr>
@@ -123,7 +138,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
         </table>
         {dependencies.length === 0 && (
           <div className="text-center py-8 text-gray-600 text-sm">
-            Keine Abhängigkeiten gefunden.
+            {t['deps.empty']}
           </div>
         )}
       </div>

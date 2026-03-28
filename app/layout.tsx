@@ -1,4 +1,7 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
+import { LocaleProvider } from '@/lib/i18n';
+import type { Locale } from '@/lib/i18n';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -6,13 +9,16 @@ export const metadata: Metadata = {
   description: 'GitHub-connected developer security dashboard for CVEs, licenses, and dependency health',
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const locale = (cookieStore.get('locale')?.value as Locale) || 'de';
+
   return (
-    <html lang="de">
+    <html lang={locale}>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
@@ -22,7 +28,9 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-gray-950 text-gray-100 font-sans">
-        {children}
+        <LocaleProvider initialLocale={locale}>
+          {children}
+        </LocaleProvider>
       </body>
     </html>
   );

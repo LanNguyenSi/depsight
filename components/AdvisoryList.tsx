@@ -1,5 +1,6 @@
 'use client';
 
+import { useLocale } from '@/lib/i18n';
 import { SeverityBadge } from './SeverityBadge';
 
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
@@ -23,11 +24,13 @@ interface AdvisoryListProps {
 }
 
 export function AdvisoryList({ advisories }: AdvisoryListProps) {
+  const { t } = useLocale();
+
   if (advisories.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500">
-        <p className="text-sm font-medium text-emerald-400">Keine CVEs gefunden</p>
-        <p className="text-xs mt-1 text-gray-600">Dieses Repository hat keine bekannten Schwachstellen.</p>
+        <p className="text-sm font-medium text-emerald-400">{t['advisory.empty']}</p>
+        <p className="text-xs mt-1 text-gray-600">{t['advisory.emptyDesc']}</p>
       </div>
     );
   }
@@ -51,10 +54,10 @@ export function AdvisoryList({ advisories }: AdvisoryListProps) {
                 {advisory.cveId && <span>{advisory.cveId}</span>}
                 <span className="text-gray-700">{advisory.ghsaId}</span>
                 {advisory.vulnerableRange && (
-                  <span>Betroffen: <span className="text-gray-500">{advisory.vulnerableRange}</span></span>
+                  <span>{t['advisory.affected']} <span className="text-gray-500">{advisory.vulnerableRange}</span></span>
                 )}
                 {advisory.fixedVersion && (
-                  <span className="text-emerald-500">Fix: {advisory.fixedVersion}</span>
+                  <span className="text-emerald-500">{t['advisory.fix']} {advisory.fixedVersion}</span>
                 )}
               </div>
             </div>
@@ -65,7 +68,7 @@ export function AdvisoryList({ advisories }: AdvisoryListProps) {
                 rel="noopener noreferrer"
                 className="shrink-0 text-xs text-blue-400 hover:text-blue-300 transition-colors"
               >
-                Details &rarr;
+                {t['advisory.details']}
               </a>
             )}
           </div>

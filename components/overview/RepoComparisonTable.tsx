@@ -1,5 +1,7 @@
 'use client';
 
+import { useLocale } from '@/lib/i18n';
+
 interface RepoHealthSummary {
   repoId: string;
   fullName: string;
@@ -21,6 +23,7 @@ interface RepoComparisonTableProps {
 }
 
 export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTableProps) {
+  const { t } = useLocale();
   const healthColor = (score: number) =>
     score >= 70 ? 'text-emerald-400' : score >= 40 ? 'text-yellow-400' : 'text-red-400';
 
@@ -35,21 +38,21 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-800">
-        <h3 className="text-sm font-medium text-gray-400">Repository Vergleich</h3>
-        <p className="text-[10px] text-gray-600 mt-0.5">Sortiert nach Health Score (schlechteste zuerst)</p>
+        <h3 className="text-sm font-medium text-gray-300">{t['overview.repoComparison']}</h3>
+        <p className="text-[10px] text-gray-600 mt-0.5">{t['overview.sortedByHealth']}</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>
-              <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Repository</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Health</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Risk</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">CVEs</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Krit.</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Lizenzen</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Veraltet</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Gescannt</th>
+              <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.repository']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.health']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.risk']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.cves']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.critical']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.licenses']}</th>
+              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.outdated']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.scanned']}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
@@ -83,7 +86,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   {repo.licenseIssues > 0 ? (
-                    <span className="text-sm font-semibold text-red-400 tabular-nums">{repo.licenseIssues}</span>
+                    <span className="text-sm font-semibold text-orange-400 tabular-nums">{repo.licenseIssues}</span>
                   ) : (
                     <span className="text-sm text-gray-700">&ndash;</span>
                   )}
@@ -108,7 +111,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
         </table>
         {repos.length === 0 && (
           <div className="text-center py-8 text-gray-600 text-sm">
-            Keine Repos gefunden &mdash; bitte erst synchronisieren.
+            {t['overview.noRepos']}
           </div>
         )}
       </div>

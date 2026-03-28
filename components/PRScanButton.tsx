@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useLocale, interpolate } from '@/lib/i18n';
 
 interface PRScanButtonProps {
   owner: string;
@@ -14,6 +15,7 @@ interface ScanResult {
 }
 
 export function PRScanButton({ owner, repo }: PRScanButtonProps) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [prNumber, setPrNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -23,7 +25,7 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
   async function handleScan() {
     const num = parseInt(prNumber, 10);
     if (!num || num < 1) {
-      setError('Bitte eine gültige PR-Nummer eingeben.');
+      setError(t['prScan.invalidNumber']);
       return;
     }
 
@@ -40,12 +42,12 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
       const data = (await res.json()) as ScanResult & { error?: string };
 
       if (!res.ok) {
-        setError(data.error ?? 'Scan fehlgeschlagen');
+        setError(data.error ?? t['prScan.failed']);
         return;
       }
       setResult(data);
     } catch {
-      setError('Netzwerkfehler');
+      setError(t['prScan.networkError']);
     } finally {
       setLoading(false);
     }
@@ -61,44 +63,33 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
         }}
         className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
       >
-        PR Scan
+        {t['prScan.button']}
       </button>
 
       {open && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
-          style={{ animation: 'fadeIn 150ms ease-out' }}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="pr-scan-title"
           onClick={() => setOpen(false)}
-          onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
-          tabIndex={-1}
         >
           <div
             className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4"
-            style={{ animation: 'scaleIn 150ms ease-out' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 id="pr-scan-title" className="text-base font-semibold text-white mb-1">PR CVE Scan</h3>
+            <h3 className="text-base font-semibold text-white mb-1">{t['prScan.title']}</h3>
             <p className="text-sm text-gray-500 mb-4">
-              Scannt{' '}
-              <span className="font-mono text-gray-400">
-                {owner}/{repo}
-              </span>{' '}
-              und postet das Ergebnis als PR-Kommentar.
+              {interpolate(t['prScan.desc'], { owner, repo })}
             </p>
 
             <div className="mb-4">
               <label className="block text-xs font-medium text-gray-400 mb-1.5">
-                Pull Request Nummer
+                {t['prScan.label']}
               </label>
               <input
                 type="number"
                 min={1}
                 value={prNumber}
                 onChange={(e) => setPrNumber(e.target.value)}
-                placeholder="z.B. 42"
+                placeholder={t['prScan.placeholder']}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
                 onKeyDown={(e) => e.key === 'Enter' && void handleScan()}
               />
@@ -111,15 +102,11 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
             )}
 
             {result && (
-              <div className={`mb-3 text-sm rounded-lg px-3 py-2 border ${
-                result.newCVECount > 0
-                  ? 'bg-red-950/50 border-red-900/50'
-                  : 'bg-emerald-950/50 border-emerald-900/50'
-              }`}>
-                <div className={`font-medium ${result.newCVECount > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+              <div className="mb-3 text-sm bg-emerald-950/50 border border-emerald-900/50 rounded-lg px-3 py-2">
+                <div className="font-medium text-emerald-400">
                   {result.newCVECount > 0
-                    ? `${result.newCVECount} neue CVE(s) gefunden`
-                    : 'Keine neuen CVEs'}
+                    ? interpolate(t['prScan.foundCVEs'], { count: result.newCVECount })
+                    : t['prScan.noCVEs']}
                 </div>
                 {result.commented && result.commentUrl && (
                   <a
@@ -128,12 +115,12 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
                     rel="noopener noreferrer"
                     className="text-blue-400 hover:text-blue-300 text-xs mt-1 block transition-colors"
                   >
-                    Kommentar auf GitHub ansehen &rarr;
+                    {t['prScan.viewComment']}
                   </a>
                 )}
                 {!result.commented && (
                   <p className="text-xs text-gray-500 mt-1">
-                    Kein Kommentar gepostet.
+                    {t['prScan.noComment']}
                   </p>
                 )}
               </div>
@@ -144,14 +131,14 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
                 onClick={() => setOpen(false)}
                 className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
               >
-                Abbrechen
+                {t['prScan.cancel']}
               </button>
               <button
                 onClick={() => void handleScan()}
                 disabled={loading || !prNumber}
                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
               >
-                {loading ? 'Scanne...' : 'Scan starten'}
+                {loading ? t['prScan.scanning'] : t['prScan.start']}
               </button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
+import { useLocale } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
@@ -130,15 +131,16 @@ const riskColor = (score: number) =>
         ? 'text-yellow-400'
         : 'text-emerald-400';
 
-const TABS: { key: ActiveTab; label: string }[] = [
-  { key: 'cve', label: 'CVEs' },
-  { key: 'license', label: 'Lizenzen' },
-  { key: 'deps', label: 'Dependencies' },
-  { key: 'history', label: 'Verlauf' },
-];
-
 export function DashboardClient({ repos: initialRepos, initialRepoId }: DashboardClientProps) {
   const repos = initialRepos;
+  const { t } = useLocale();
+
+  const TABS: { key: ActiveTab; label: string }[] = [
+    { key: 'cve', label: t['dashboard.tab.cve'] },
+    { key: 'license', label: t['dashboard.tab.license'] },
+    { key: 'deps', label: t['dashboard.tab.deps'] },
+    { key: 'history', label: t['dashboard.tab.history'] },
+  ];
   const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(
     initialRepoId ? repos.find((r) => r.id === initialRepoId) ?? null : null,
   );
@@ -326,12 +328,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     } else {
       const data = (await res.json()) as { error?: string; message?: string };
       if (data.error === 'no_scan') {
-        setSbomError(data.message ?? 'Kein Scan vorhanden.');
+        setSbomError(data.message ?? t['dashboard.sbom.noScan']);
       } else {
         setSbomError(data.message ?? 'SBOM-Export fehlgeschlagen.');
       }
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
 
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
@@ -353,21 +356,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   return (
     <AppShell repoCount={repos.length}>
-      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 items-start">
-        {/* Sidebar — repo list (full-width on mobile, hidden when repo selected) */}
-        <aside className={`w-full lg:w-72 shrink-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] flex flex-col ${
-          selectedRepo ? 'hidden lg:flex' : 'flex'
-        }`}>
+      <div className="flex gap-6 items-start">
+        {/* Sidebar — repo list */}
+        <aside className="w-72 shrink-0 sticky top-20 max-h-[calc(100vh-6rem)] flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Repositories
+              {t['dashboard.repos']}
             </h2>
             <button
               onClick={() => void handleSync()}
               disabled={syncing}
               className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
             >
-              {syncing ? 'Sync...' : 'Sync'}
+              {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
             </button>
           </div>
 
@@ -376,17 +377,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Suchen..."
-            aria-label="Repositories durchsuchen"
-            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors mb-2"
+            placeholder={t['dashboard.search']}
+            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 transition-colors mb-2"
           />
 
           {/* Sort */}
           <div className="flex gap-1 mb-2">
             {([
-              ['name', 'Name'],
-              ['risk', 'Risiko'],
-              ['language', 'Sprache'],
+              ['name', t['dashboard.sort.name']],
+              ['risk', t['dashboard.sort.risk']],
+              ['language', t['dashboard.sort.language']],
             ] as const).map(([key, label]) => (
               <button
                 key={key}
@@ -403,13 +403,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           </div>
 
           {/* Repo list (scrollable) */}
-          <div className="overflow-y-auto flex-1 space-y-0.5 lg:-mr-2 lg:pr-2">
+          <div className="overflow-y-auto flex-1 space-y-0.5 -mr-2 pr-2">
             {filteredRepos.length === 0 && repos.length > 0 && (
-              <p className="text-xs text-gray-600 py-4 text-center">Keine Treffer</p>
+              <p className="text-xs text-gray-600 py-4 text-center">{t['dashboard.noMatches']}</p>
             )}
             {repos.length === 0 && (
               <p className="text-sm text-gray-600 py-8 text-center">
-                Keine Repos &mdash; bitte synchronisieren.
+                {t['dashboard.noRepos']}
               </p>
             )}
             {filteredRepos.map((repo) => (
@@ -433,7 +433,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                     </span>
                   )}
                   {!repo.latestScan && (
-                    <span className="text-xs text-gray-700">Nicht gescannt</span>
+                    <span className="text-xs text-gray-700">{t['dashboard.notScanned']}</span>
                   )}
                 </div>
               </button>
@@ -442,56 +442,48 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         </aside>
 
         {/* Detail panel */}
-        <section className={`flex-1 min-w-0 w-full ${selectedRepo ? 'block' : 'hidden lg:block'}`}>
+        <section className="flex-1 min-w-0">
           {!selectedRepo && (
-            <div className="flex flex-col items-center justify-center h-64 text-gray-600 text-sm bg-gray-900 rounded-lg border border-gray-800">
-              Repository auswählen
+            <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
+              {t['dashboard.selectRepo']}
             </div>
           )}
 
           {selectedRepo && (
             <div className="space-y-4">
               {/* Repo header + actions — sticky */}
-              <div className="sticky top-14 lg:top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
-                {/* Mobile back button */}
-                <button
-                  onClick={() => setSelectedRepo(null)}
-                  className="lg:hidden text-xs text-gray-500 hover:text-gray-300 mb-2 flex items-center gap-1 transition-colors"
-                >
-                  <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 fill-current"><path d="M10.354 3.354a.5.5 0 00-.708-.708l-5 5a.5.5 0 000 .708l5 5a.5.5 0 00.708-.708L5.707 8l4.647-4.646z" /></svg>
-                  Zurück
-                </button>
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="sticky top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+                <div className="flex items-start justify-between gap-4">
                   <div>
                     <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
                     {selectedRepo.lastScannedAt && (
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Zuletzt gescannt:{' '}
+                        {t['dashboard.lastScanned']}{' '}
                         {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-2 flex-wrap sm:shrink-0 sm:justify-end">
+                  <div className="flex gap-2 shrink-0 flex-wrap justify-end">
                     <button
                       onClick={() => void handleCveScan(selectedRepo)}
                       disabled={scanning}
                       className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 disabled:opacity-50 transition-colors"
                     >
-                      {scanning ? 'Scanning...' : 'CVE Scan'}
+                      {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
                     </button>
                     <button
                       onClick={() => void handleLicenseScan(selectedRepo)}
                       disabled={scanningLicense}
                       className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
                     >
-                      {scanningLicense ? 'Scanning...' : 'Lizenzen'}
+                      {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
                     </button>
                     <button
                       onClick={() => void handleDepsScan(selectedRepo)}
                       disabled={scanningDeps}
                       className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
                     >
-                      {scanningDeps ? 'Scanning...' : 'Deps'}
+                      {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
                     </button>
                     <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
                     <button
@@ -504,7 +496,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-1 border-b border-gray-800 mt-3 overflow-x-auto">
+                <div className="flex gap-1 border-b border-gray-800 mt-3">
                   {TABS.map(({ key, label }) => {
                     const count =
                       key === 'cve' ? scanDetail?.counts.total :
@@ -556,7 +548,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
               <div>
                 {activeTab === 'cve' && (
                   <>
-                    {(loadingDetail || scanning) && <Loading text="Lade CVE-Daten..." />}
+                    {(loadingDetail || scanning) && <Loading text={t['dashboard.loading.cve']} />}
                     {scanDetail && !loadingDetail && (
                       <>
                         <SeverityBreakdown counts={scanDetail.counts} riskScore={scanDetail.riskScore} />
@@ -568,9 +560,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                     {dependabotDisabled && selectedRepo && (
                       <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 space-y-3">
                         <div>
-                          <p className="text-sm font-medium text-yellow-300">Dependabot ist nicht aktiviert</p>
+                          <p className="text-sm font-medium text-yellow-300">{t['dashboard.dependabot.disabled']}</p>
                           <p className="text-xs text-gray-400 mt-1">
-                            CVE-Scans benötigen Dependabot Vulnerability Alerts. Jetzt automatisch aktivieren?
+                            {t['dashboard.dependabot.prompt']}
                           </p>
                         </div>
                         <button
@@ -578,19 +570,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                           disabled={enablingDependabot}
                           className="text-xs font-medium px-3 py-1.5 rounded bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
                         >
-                          {enablingDependabot ? 'Aktiviere...' : 'Dependabot aktivieren & erneut scannen'}
+                          {enablingDependabot ? t['dashboard.dependabot.enabling'] : t['dashboard.dependabot.enable']}
                         </button>
                       </div>
                     )}
                     {!scanDetail && !loadingDetail && !scanning && !dependabotDisabled && (
-                      <EmptyState text="Noch kein CVE-Scan durchgeführt." />
+                      <EmptyState text={t['dashboard.empty.cve']} />
                     )}
                   </>
                 )}
 
                 {activeTab === 'license' && (
                   <>
-                    {scanningLicense && <Loading text="Erkenne Lizenzen..." />}
+                    {scanningLicense && <Loading text={t['dashboard.loading.license']} />}
                     {licenseDetail?.unsupportedEcosystem && !scanningLicense && (
                       <EcosystemNotice label={licenseDetail.unsupportedEcosystem.label} />
                     )}
@@ -602,14 +594,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       />
                     )}
                     {!licenseDetail && !scanningLicense && (
-                      <EmptyState text="Noch kein Lizenz-Scan durchgeführt." />
+                      <EmptyState text={t['dashboard.empty.license']} />
                     )}
                   </>
                 )}
 
                 {activeTab === 'deps' && (
                   <>
-                    {scanningDeps && <Loading text="Analysiere Abhängigkeiten..." />}
+                    {scanningDeps && <Loading text={t['dashboard.loading.deps']} />}
                     {depsDetail?.unsupportedEcosystem && !scanningDeps && (
                       <EcosystemNotice label={depsDetail.unsupportedEcosystem.label} />
                     )}
@@ -617,19 +609,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       <DependencyTable dependencies={depsDetail.dependencies} summary={depsDetail.summary} />
                     )}
                     {!depsDetail && !scanningDeps && (
-                      <EmptyState text="Noch keine Dependency-Analyse durchgeführt." />
+                      <EmptyState text={t['dashboard.empty.deps']} />
                     )}
                   </>
                 )}
 
                 {activeTab === 'history' && (
                   <>
-                    {loadingHistory && <Loading text="Lade Historie..." />}
-                    {!loadingHistory && scanHistory.length > 0 && (
-                      <RiskTimeline history={scanHistory} height={250} />
-                    )}
+                    {loadingHistory && <Loading text={t['dashboard.loading.history']} />}
+                    {!loadingHistory && <RiskTimeline history={scanHistory} height={250} />}
                     {!loadingHistory && scanHistory.length === 0 && (
-                      <EmptyState text="Mehrere CVE-Scans durchführen, um den Verlauf zu sehen." />
+                      <p className="text-center py-4 text-gray-600 text-xs">
+                        {t['dashboard.empty.history']}
+                      </p>
                     )}
                   </>
                 )}
