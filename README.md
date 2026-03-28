@@ -93,3 +93,7 @@ docker/             Docker entrypoints
 ## License
 
 MIT
+
+---
+
+Generated with [ScaffoldKit](https://github.com/LanNguyenSi/scaffoldkit)
