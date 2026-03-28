@@ -55,7 +55,3 @@ option {
   to { opacity: 1; transform: scale(1); }
 }
 
-/* Prevent horizontal overflow on mobile */
-body {
-  overflow-x: hidden;
-}
