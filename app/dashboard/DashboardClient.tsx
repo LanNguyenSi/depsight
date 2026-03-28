@@ -353,9 +353,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   return (
     <AppShell repoCount={repos.length}>
-      <div className="flex gap-6 items-start">
-        {/* Sidebar — repo list */}
-        <aside className="w-72 shrink-0 sticky top-20 max-h-[calc(100vh-6rem)] flex flex-col">
+      <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 items-start">
+        {/* Sidebar — repo list (full-width on mobile, hidden when repo selected) */}
+        <aside className={`w-full lg:w-72 shrink-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] flex flex-col ${
+          selectedRepo ? 'hidden lg:flex' : 'flex'
+        }`}>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
               Repositories
@@ -400,7 +402,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           </div>
 
           {/* Repo list (scrollable) */}
-          <div className="overflow-y-auto flex-1 space-y-0.5 -mr-2 pr-2">
+          <div className="overflow-y-auto flex-1 space-y-0.5 lg:-mr-2 lg:pr-2">
             {filteredRepos.length === 0 && repos.length > 0 && (
               <p className="text-xs text-gray-600 py-4 text-center">Keine Treffer</p>
             )}
@@ -439,7 +441,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         </aside>
 
         {/* Detail panel */}
-        <section className="flex-1 min-w-0">
+        <section className={`flex-1 min-w-0 w-full ${selectedRepo ? 'block' : 'hidden lg:block'}`}>
           {!selectedRepo && (
             <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
               Repository auswählen
@@ -449,8 +451,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           {selectedRepo && (
             <div className="space-y-4">
               {/* Repo header + actions — sticky */}
-              <div className="sticky top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
-                <div className="flex items-start justify-between gap-4">
+              <div className="sticky top-14 lg:top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+                {/* Mobile back button */}
+                <button
+                  onClick={() => setSelectedRepo(null)}
+                  className="lg:hidden text-xs text-gray-500 hover:text-gray-300 mb-2 flex items-center gap-1 transition-colors"
+                >
+                  <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 fill-current"><path d="M10.354 3.354a.5.5 0 00-.708-.708l-5 5a.5.5 0 000 .708l5 5a.5.5 0 00.708-.708L5.707 8l4.647-4.646z" /></svg>
+                  Zurück
+                </button>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
                     {selectedRepo.lastScannedAt && (
@@ -460,7 +470,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-2 shrink-0 flex-wrap justify-end">
+                  <div className="flex gap-2 flex-wrap sm:shrink-0 sm:justify-end">
                     <button
                       onClick={() => void handleCveScan(selectedRepo)}
                       disabled={scanning}
@@ -493,7 +503,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-1 border-b border-gray-800 mt-3">
+                <div className="flex gap-1 border-b border-gray-800 mt-3 overflow-x-auto">
                   {TABS.map(({ key, label }) => {
                     const count =
                       key === 'cve' ? scanDetail?.counts.total :
