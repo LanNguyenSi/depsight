@@ -51,6 +51,9 @@ const de = {
   'dashboard.sort.language': 'Sprache',
   'dashboard.sync': 'Sync',
   'dashboard.syncing': 'Sync...',
+  'dashboard.scanAll': 'Alle scannen',
+  'dashboard.scanAllProgress': '{current}/{total} Scanning...',
+  'dashboard.scanAllCancel': 'Abbrechen',
   'dashboard.noMatches': 'Keine Treffer',
   'dashboard.noRepos': 'Keine Repos — bitte synchronisieren.',
   'dashboard.notScanned': 'Nicht gescannt',
@@ -210,6 +213,13 @@ const de = {
   'overview.col.outdated': 'Veraltet',
   'overview.col.scanned': 'Gescannt',
   'overview.noRepos': 'Keine Repos gefunden — bitte erst synchronisieren.',
+  'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
+  'overview.unscannedAction': 'Im Dashboard alle scannen',
+
+  // Pagination
+  'pagination.prev': 'Zurück',
+  'pagination.next': 'Weiter',
+  'pagination.info': '{from}–{to} von {total}',
 } as const;
 
 const en = {
@@ -256,6 +266,9 @@ const en = {
   'dashboard.sort.language': 'Language',
   'dashboard.sync': 'Sync',
   'dashboard.syncing': 'Syncing...',
+  'dashboard.scanAll': 'Scan all',
+  'dashboard.scanAllProgress': '{current}/{total} Scanning...',
+  'dashboard.scanAllCancel': 'Cancel',
   'dashboard.noMatches': 'No matches',
   'dashboard.noRepos': 'No repos — please sync.',
   'dashboard.notScanned': 'Not scanned',
@@ -415,6 +428,13 @@ const en = {
   'overview.col.outdated': 'Outdated',
   'overview.col.scanned': 'Scanned',
   'overview.noRepos': 'No repos found — please sync first.',
+  'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
+  'overview.unscannedAction': 'Scan all in dashboard',
+
+  // Pagination
+  'pagination.prev': 'Previous',
+  'pagination.next': 'Next',
+  'pagination.info': '{from}–{to} of {total}',
 };
 
 export type TranslationKey = keyof typeof de;

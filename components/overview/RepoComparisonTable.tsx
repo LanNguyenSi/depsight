@@ -1,6 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useLocale } from '@/lib/i18n';
+import { Pagination, usePagination } from '@/components/Pagination';
 
 interface RepoHealthSummary {
   repoId: string;
@@ -34,6 +36,9 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
     r.totalDeps > 0 ? Math.round((r.outdatedDeps / r.totalDeps) * 100) : 0;
 
   const sorted = [...repos].sort((a, b) => a.healthScore - b.healthScore);
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
+  const paginatedRepos = usePagination(sorted, page, PAGE_SIZE);
 
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
@@ -56,7 +61,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
-            {sorted.map((repo) => (
+            {paginatedRepos.map((repo) => (
               <tr
                 key={repo.repoId}
                 onClick={() => onSelectRepo?.(repo.repoId)}
@@ -115,6 +120,16 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
           </div>
         )}
       </div>
+      {repos.length > PAGE_SIZE && (
+        <div className="px-4 py-3 border-t border-gray-800">
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={sorted.length}
+            onPageChange={setPage}
+          />
+        </div>
+      )}
     </div>
   );
 }

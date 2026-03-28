@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
-import { useLocale } from '@/lib/i18n';
+import { useState, useMemo, useCallback, useRef } from 'react';
+import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
@@ -9,6 +9,7 @@ import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
+import { Pagination, usePagination } from '@/components/Pagination';
 
 interface ScanSummary {
   id: string;
@@ -160,11 +161,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   const [sbomError, setSbomError] = useState<string | null>(null);
 
-  // Filter & sort
+  // Scan all repos
+  const [scanAllRunning, setScanAllRunning] = useState(false);
+  const [scanAllProgress, setScanAllProgress] = useState({ current: 0, total: 0 });
+  const scanAllCancelRef = useRef(false);
+
+  // Filter, sort & pagination
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('name');
+  const [repoPage, setRepoPage] = useState(1);
+  const REPO_PAGE_SIZE = 20;
 
   const filteredRepos = useMemo(() => {
+    setRepoPage(1);
     let list = repos;
     if (search) {
       const q = search.toLowerCase();
@@ -186,6 +195,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       return a.fullName.localeCompare(b.fullName);
     });
   }, [repos, search, sortBy]);
+
+  const paginatedRepos = usePagination(filteredRepos, repoPage, REPO_PAGE_SIZE);
 
   async function handleSync() {
     setSyncing(true);
@@ -336,6 +347,48 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
+  async function handleScanAll() {
+    scanAllCancelRef.current = false;
+    setScanAllRunning(true);
+    setScanAllProgress({ current: 0, total: repos.length });
+
+    for (let i = 0; i < repos.length; i++) {
+      if (scanAllCancelRef.current) break;
+      setScanAllProgress({ current: i + 1, total: repos.length });
+      const repo = repos[i];
+
+      try {
+        // CVE scan
+        await fetch('/api/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+        // License scan
+        await fetch('/api/license', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+        // Deps scan
+        await fetch('/api/deps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+      } catch (err) {
+        console.error(`Scan failed for ${repo.fullName}:`, err);
+      }
+    }
+
+    setScanAllRunning(false);
+    window.location.reload();
+  }
+
+  function handleCancelScanAll() {
+    scanAllCancelRef.current = true;
+  }
+
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
     setScanDetail(null);
@@ -363,13 +416,36 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
               {t['dashboard.repos']}
             </h2>
-            <button
-              onClick={() => void handleSync()}
-              disabled={syncing}
-              className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
-            >
-              {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
-            </button>
+            <div className="flex items-center gap-2">
+              {scanAllRunning ? (
+                <button
+                  onClick={handleCancelScanAll}
+                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  {interpolate(t['dashboard.scanAllProgress'], {
+                    current: scanAllProgress.current,
+                    total: scanAllProgress.total,
+                  })}{' '}
+                  <span className="text-gray-500">{t['dashboard.scanAllCancel']}</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => void handleScanAll()}
+                  disabled={syncing || repos.length === 0}
+                  className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
+                >
+                  {t['dashboard.scanAll']}
+                </button>
+              )}
+              <span className="text-gray-700">|</span>
+              <button
+                onClick={() => void handleSync()}
+                disabled={syncing || scanAllRunning}
+                className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
+              >
+                {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -412,7 +488,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 {t['dashboard.noRepos']}
               </p>
             )}
-            {filteredRepos.map((repo) => (
+            {paginatedRepos.map((repo) => (
               <button
                 key={repo.id}
                 onClick={() => void handleSelectRepo(repo)}
@@ -438,6 +514,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 </div>
               </button>
             ))}
+          </div>
+          {/* Sidebar pagination */}
+          <div className="pt-2">
+            <Pagination
+              page={repoPage}
+              pageSize={REPO_PAGE_SIZE}
+              total={filteredRepos.length}
+              onPageChange={setRepoPage}
+              compact
+            />
           </div>
         </aside>
 
