@@ -66,7 +66,7 @@ export async function generateSBOM(
   repoId: string,
 ): Promise<CycloneDXBOM> {
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId },
+    where: { id: repoId, userId, tracked: true },
   });
 
   if (!repo) throw new Error('Repository not found or access denied');

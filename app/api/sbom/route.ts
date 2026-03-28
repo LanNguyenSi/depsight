@@ -21,7 +21,12 @@ export async function GET(req: NextRequest) {
 
   // Check that a completed CVE scan exists before generating
   const scan = await prisma.scan.findFirst({
-    where: { repoId, status: 'COMPLETED', repo: { userId: session.user.id }, advisories: { some: {} } },
+    where: {
+      repoId,
+      status: 'COMPLETED',
+      repo: { userId: session.user.id, tracked: true },
+      advisories: { some: {} },
+    },
     orderBy: { scannedAt: 'desc' },
     select: { id: true },
   });

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { getUserRepos } from '@/lib/github';
+import { syncUserRepos } from '@/lib/repos/sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,41 +15,8 @@ export async function POST() {
 
   try {
     const githubRepos = await getUserRepos(session.user.githubToken);
-
-    // Upsert all repos in a transaction
-    await prisma.$transaction(
-      githubRepos.map((repo) =>
-        prisma.repo.upsert({
-          where: {
-            userId_githubId: {
-              userId: session.user.id,
-              githubId: repo.id,
-            },
-          },
-          update: {
-            name: repo.name,
-            fullName: repo.fullName,
-            owner: repo.owner.login,
-            private: repo.private,
-            defaultBranch: repo.defaultBranch,
-            language: repo.language ?? null,
-            updatedAt: new Date(),
-          },
-          create: {
-            userId: session.user.id,
-            githubId: repo.id,
-            name: repo.name,
-            fullName: repo.fullName,
-            owner: repo.owner.login,
-            private: repo.private,
-            defaultBranch: repo.defaultBranch,
-            language: repo.language ?? null,
-          },
-        }),
-      ),
-    );
-
-    return NextResponse.json({ synced: githubRepos.length });
+    const result = await syncUserRepos(prisma, session.user.id, githubRepos);
+    return NextResponse.json({ synced: result.syncedCount, removed: result.removedCount });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Sync failed';
     return NextResponse.json({ error: message }, { status: 500 });

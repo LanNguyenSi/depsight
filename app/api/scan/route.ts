@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
-      repo: { userId: session.user.id },
+      repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
       cvePayload: { not: Prisma.DbNull },
     },
