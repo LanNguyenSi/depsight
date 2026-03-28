@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
 
 export interface LicenseEntry {
   packageName: string;
@@ -14,6 +15,7 @@ export interface LicenseScanResult {
   summary: Record<string, number>; // license -> count
   hasConflicts: boolean;
   conflictCount: number;
+  unsupportedEcosystem?: { ecosystem: Ecosystem; label: string };
 }
 
 // Copyleft licenses that conflict with proprietary use
@@ -88,6 +90,18 @@ export async function detectLicenses(
 ): Promise<LicenseScanResult> {
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
+
+  // Check ecosystem first — only npm is supported
+  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
+  if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
+    return {
+      ...buildLicenseScanResult([]),
+      unsupportedEcosystem: {
+        ecosystem: ecosystemInfo.ecosystem,
+        label: getEcosystemLabel(ecosystemInfo.ecosystem),
+      },
+    };
+  }
 
   try {
     // 1. Get repo-level license via GitHub API

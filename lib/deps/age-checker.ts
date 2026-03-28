@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
 
 import type { DepStatus } from '@prisma/client';
 export type DependencyStatus = DepStatus;
@@ -26,6 +27,7 @@ export interface DepAgeScanResult {
     unknown: number;
     outdatedPercent: number;
   };
+  unsupportedEcosystem?: { ecosystem: Ecosystem; label: string };
 }
 
 interface NpmPackageData {
@@ -69,6 +71,18 @@ export async function analyzeDepAge(
   owner: string,
   repo: string,
 ): Promise<DepAgeScanResult> {
+  // Check ecosystem — only npm supported
+  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
+  if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
+    return {
+      ...buildResult([]),
+      unsupportedEcosystem: {
+        ecosystem: ecosystemInfo.ecosystem,
+        label: getEcosystemLabel(ecosystemInfo.ecosystem),
+      },
+    };
+  }
+
   const octokit = createGitHubClient(accessToken);
   const deps: DependencyInfo[] = [];
 

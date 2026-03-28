@@ -55,6 +55,11 @@ interface ScanDetail {
   }[];
 }
 
+interface UnsupportedEcosystem {
+  ecosystem: string;
+  label: string;
+}
+
 interface LicenseDetail {
   scanId: string;
   licenseCount: number;
@@ -68,6 +73,7 @@ interface LicenseDetail {
     isCompatible: boolean;
     policyViolation: boolean;
   }[];
+  unsupportedEcosystem?: UnsupportedEcosystem;
 }
 
 interface ScanHistoryPoint {
@@ -104,6 +110,7 @@ interface DepsDetail {
   scanId: string;
   summary: DepSummary;
   dependencies: DepEntry[];
+  unsupportedEcosystem?: UnsupportedEcosystem;
 }
 
 type ActiveTab = 'cve' | 'license' | 'deps' | 'history';
@@ -250,13 +257,13 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   async function loadLicenseDetail(repoId: string) {
     const res = await fetch(`/api/license?repoId=${repoId}`);
     const data = (await res.json()) as LicenseDetail;
-    setLicenseDetail(data.licenses?.length > 0 ? data : null);
+    setLicenseDetail(data.licenses?.length > 0 || data.unsupportedEcosystem ? data : null);
   }
 
   async function loadDepsDetail(repoId: string) {
     const res = await fetch(`/api/deps?repoId=${repoId}`);
     const data = (await res.json()) as DepsDetail;
-    setDepsDetail(data.dependencies?.length > 0 ? data : null);
+    setDepsDetail(data.dependencies?.length > 0 || data.unsupportedEcosystem ? data : null);
   }
 
   async function loadScanHistory(repoId: string) {
@@ -465,7 +472,10 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                 {activeTab === 'license' && (
                   <>
                     {scanningLicense && <Loading text="Erkenne Lizenzen..." />}
-                    {licenseDetail && !scanningLicense && (
+                    {licenseDetail?.unsupportedEcosystem && !scanningLicense && (
+                      <EcosystemNotice label={licenseDetail.unsupportedEcosystem.label} />
+                    )}
+                    {licenseDetail && !licenseDetail.unsupportedEcosystem && !scanningLicense && (
                       <LicenseList
                         licenses={licenseDetail.licenses}
                         summary={licenseDetail.summary}
@@ -481,7 +491,10 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                 {activeTab === 'deps' && (
                   <>
                     {scanningDeps && <Loading text="Analysiere Abhängigkeiten..." />}
-                    {depsDetail && !scanningDeps && (
+                    {depsDetail?.unsupportedEcosystem && !scanningDeps && (
+                      <EcosystemNotice label={depsDetail.unsupportedEcosystem.label} />
+                    )}
+                    {depsDetail && !depsDetail.unsupportedEcosystem && !scanningDeps && (
                       <DependencyTable dependencies={depsDetail.dependencies} summary={depsDetail.summary} />
                     )}
                     {!depsDetail && !scanningDeps && (
@@ -525,5 +538,20 @@ function Loading({ text }: { text: string }) {
 function EmptyState({ text }: { text: string }) {
   return (
     <div className="text-center py-12 text-gray-600 text-sm">{text}</div>
+  );
+}
+
+function EcosystemNotice({ label }: { label: string }) {
+  return (
+    <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4 flex items-start gap-3">
+      <span className="text-blue-400 text-xl">ℹ️</span>
+      <div>
+        <p className="text-sm font-medium text-blue-300">Ökosystem nicht unterstützt</p>
+        <p className="text-xs text-gray-400 mt-1">
+          Dieses Repository verwendet <span className="text-gray-200 font-medium">{label}</span>.
+          Lizenz- und Dependency-Scans werden aktuell nur für <span className="text-gray-200 font-medium">Node.js / npm</span> unterstützt.
+        </p>
+      </div>
+    </div>
   );
 }
