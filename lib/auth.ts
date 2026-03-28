@@ -61,6 +61,7 @@ function getProviders(): Provider[] {
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  trustHost: true,
   providers: getProviders(),
   callbacks: {
     async signIn({ user, account, profile }) {
