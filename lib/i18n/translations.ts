@@ -213,6 +213,8 @@ const de = {
   'overview.col.outdated': 'Veraltet',
   'overview.col.scanned': 'Gescannt',
   'overview.noRepos': 'Keine Repos gefunden — bitte erst synchronisieren.',
+  'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
+  'overview.unscannedAction': 'Im Dashboard alle scannen',
 } as const;
 
 const en = {
@@ -421,6 +423,8 @@ const en = {
   'overview.col.outdated': 'Outdated',
   'overview.col.scanned': 'Scanned',
   'overview.noRepos': 'No repos found — please sync first.',
+  'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
+  'overview.unscannedAction': 'Scan all in dashboard',
 };
 
 export type TranslationKey = keyof typeof de;
