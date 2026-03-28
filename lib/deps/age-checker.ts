@@ -1,5 +1,10 @@
 import { createGitHubClient } from '@/lib/github';
 import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import { scanPythonDeps } from './python';
+import { scanGoDeps } from './go';
+import { scanJavaDeps } from './java';
+import { scanRustDeps } from './rust';
+import { scanPhpDeps } from './php';
 
 import type { DepStatus } from '@prisma/client';
 export type DependencyStatus = DepStatus;
@@ -71,7 +76,7 @@ export async function analyzeDepAge(
   owner: string,
   repo: string,
 ): Promise<DepAgeScanResult> {
-  // Check ecosystem — only npm supported
+  // Check ecosystem and dispatch to the correct scanner
   const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
   if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
     return {
@@ -83,6 +88,14 @@ export async function analyzeDepAge(
     };
   }
 
+  // Dispatch to ecosystem-specific scanners
+  if (ecosystemInfo.ecosystem === 'python') return buildResult(await scanPythonDeps(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'go') return buildResult(await scanGoDeps(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'java') return buildResult(await scanJavaDeps(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'rust') return buildResult(await scanRustDeps(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'php') return buildResult(await scanPhpDeps(accessToken, owner, repo));
+
+  // Default: npm
   const octokit = createGitHubClient(accessToken);
   const deps: DependencyInfo[] = [];
 

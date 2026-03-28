@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { logout } from '@/app/actions';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -49,11 +50,21 @@ export function AppShell({ children, repoCount }: AppShellProps) {
               })}
             </nav>
           </div>
-          {typeof repoCount === 'number' && (
-            <span className="text-xs text-gray-500 tabular-nums">
-              {repoCount} Repositories
-            </span>
-          )}
+          <div className="flex items-center gap-4">
+            {typeof repoCount === 'number' && (
+              <span className="text-xs text-gray-500 tabular-nums">
+                {repoCount} Repositories
+              </span>
+            )}
+            <form action={logout}>
+              <button
+                type="submit"
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                Abmelden
+              </button>
+            </form>
+          </div>
         </div>
       </header>
       <main className="max-w-7xl mx-auto px-6 py-6">{children}</main>

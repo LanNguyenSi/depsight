@@ -1,5 +1,10 @@
 import { createGitHubClient } from '@/lib/github';
 import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import { scanPythonLicenses } from './python';
+import { scanGoLicenses } from './go';
+import { scanJavaLicenses } from './java';
+import { scanRustLicenses } from './rust';
+import { scanPhpLicenses } from './php';
 
 export interface LicenseEntry {
   packageName: string;
@@ -91,7 +96,7 @@ export async function detectLicenses(
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
 
-  // Check ecosystem first — only npm is supported
+  // Check ecosystem and dispatch to the correct scanner
   const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
   if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
     return {
@@ -103,6 +108,14 @@ export async function detectLicenses(
     };
   }
 
+  // Dispatch to ecosystem-specific scanners
+  if (ecosystemInfo.ecosystem === 'python') return buildLicenseScanResult(await scanPythonLicenses(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'go') return buildLicenseScanResult(await scanGoLicenses(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'java') return buildLicenseScanResult(await scanJavaLicenses(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'rust') return buildLicenseScanResult(await scanRustLicenses(accessToken, owner, repo));
+  if (ecosystemInfo.ecosystem === 'php') return buildLicenseScanResult(await scanPhpLicenses(accessToken, owner, repo));
+
+  // Default: npm
   try {
     // 1. Get repo-level license via GitHub API
     let repoLicense = 'UNKNOWN';

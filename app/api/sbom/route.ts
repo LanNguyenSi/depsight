@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
 import { generateSBOM } from '@/lib/sbom/cyclonedx';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/sbom?repoId=xxx&format=json — export SBOM for a repo
+// GET /api/sbom?repoId=xxx — export SBOM for a repo
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user) {
@@ -16,6 +17,20 @@ export async function GET(req: NextRequest) {
 
   if (!repoId) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
+  }
+
+  // Check that a completed scan exists before generating
+  const scan = await prisma.scan.findFirst({
+    where: { repoId, status: 'COMPLETED', repo: { userId: session.user.id } },
+    orderBy: { scannedAt: 'desc' },
+    select: { id: true },
+  });
+
+  if (!scan) {
+    return NextResponse.json(
+      { error: 'no_scan', message: 'Kein abgeschlossener Scan vorhanden. Bitte zuerst einen CVE-Scan durchführen.' },
+      { status: 404 },
+    );
   }
 
   try {

@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/AppShell';
 import { TeamHealthCard } from '@/components/overview/TeamHealthCard';
 import { RepoComparisonTable } from '@/components/overview/RepoComparisonTable';
@@ -46,6 +47,11 @@ interface OverviewClientProps {
 
 export function OverviewClient({ data }: OverviewClientProps) {
   const { aggregate, topRiskyRepos, mostOutdated, repos } = data;
+  const router = useRouter();
+
+  function navigateToRepo(repoId: string) {
+    router.push(`/dashboard?repo=${repoId}`);
+  }
 
   return (
     <AppShell repoCount={aggregate.totalRepos}>
@@ -59,7 +65,11 @@ export function OverviewClient({ data }: OverviewClientProps) {
               <h3 className="text-sm font-medium text-gray-400 mb-3">Risikoreichste Repos</h3>
               <div className="space-y-2">
                 {topRiskyRepos.map((repo, i) => (
-                  <div key={repo.repoId} className="flex items-center justify-between py-1">
+                  <button
+                    key={repo.repoId}
+                    onClick={() => navigateToRepo(repo.repoId)}
+                    className="w-full flex items-center justify-between py-1.5 px-2 -mx-2 rounded hover:bg-gray-800/50 transition-colors text-left"
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-600 w-4 tabular-nums">{i + 1}.</span>
                       <span className="text-sm text-gray-300 truncate max-w-[180px]">{repo.fullName}</span>
@@ -74,7 +84,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
                         {repo.riskScore}
                       </span>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -86,7 +96,11 @@ export function OverviewClient({ data }: OverviewClientProps) {
                 {mostOutdated.map((repo, i) => {
                   const pct = repo.totalDeps > 0 ? Math.round((repo.outdatedDeps / repo.totalDeps) * 100) : 0;
                   return (
-                    <div key={repo.repoId} className="flex items-center justify-between py-1">
+                    <button
+                      key={repo.repoId}
+                      onClick={() => navigateToRepo(repo.repoId)}
+                      className="w-full flex items-center justify-between py-1.5 px-2 -mx-2 rounded hover:bg-gray-800/50 transition-colors text-left"
+                    >
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-gray-600 w-4 tabular-nums">{i + 1}.</span>
                         <span className="text-sm text-gray-300 truncate max-w-[180px]">{repo.fullName}</span>
@@ -100,7 +114,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
                         </div>
                         <span className="text-xs text-gray-500 w-8 text-right tabular-nums">{pct}%</span>
                       </div>
-                    </div>
+                    </button>
                   );
                 })}
                 {mostOutdated.length === 0 && (
@@ -111,7 +125,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
           </div>
         )}
 
-        <RepoComparisonTable repos={repos} />
+        <RepoComparisonTable repos={repos} onSelectRepo={navigateToRepo} />
       </div>
     </AppShell>
   );
