@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
@@ -156,6 +156,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [dependabotDisabled, setDependabotDisabled] = useState(false);
   const [enablingDependabot, setEnablingDependabot] = useState(false);
 
+  const [sbomError, setSbomError] = useState<string | null>(null);
+
   // Filter & sort
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('name');
@@ -307,6 +309,30 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     }
   }
 
+  const handleSbomDownload = useCallback(async (repo: RepoItem) => {
+    setSbomError(null);
+    const res = await fetch(`/api/sbom?repoId=${repo.id}`);
+    if (res.ok) {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? 'sbom.cdx.json';
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      const data = (await res.json()) as { error?: string; message?: string };
+      if (data.error === 'no_scan') {
+        setSbomError(data.message ?? 'Kein Scan vorhanden.');
+      } else {
+        setSbomError(data.message ?? 'SBOM-Export fehlgeschlagen.');
+      }
+    }
+  }, []);
+
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
     setScanDetail(null);
@@ -314,6 +340,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     setDepsDetail(null);
     setScanHistory([]);
     setDependabotDisabled(false);
+    setSbomError(null);
     if (repo.latestScan) {
       await Promise.all([
         loadScanDetail(repo.id),
@@ -456,13 +483,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       {scanningDeps ? 'Scanning...' : 'Deps'}
                     </button>
                     <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
-                    <a
-                      href={`/api/sbom?repoId=${selectedRepo.id}`}
-                      download
+                    <button
+                      onClick={() => void handleSbomDownload(selectedRepo)}
                       className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
                     >
                       SBOM
-                    </a>
+                    </button>
                   </div>
                 </div>
 
@@ -493,6 +519,27 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                   })}
                 </div>
               </div>
+
+              {/* SBOM error notice */}
+              {sbomError && (
+                <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-orange-300">{sbomError}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Starte zuerst einen CVE-Scan, damit die SBOM Vulnerability-Daten enthält.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSbomError(null);
+                      if (selectedRepo) void handleCveScan(selectedRepo);
+                    }}
+                    className="shrink-0 text-xs font-medium px-3 py-1.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/40 hover:bg-orange-500/30 transition-colors"
+                  >
+                    CVE Scan starten
+                  </button>
+                </div>
+              )}
 
               {/* Tab content */}
               <div>
