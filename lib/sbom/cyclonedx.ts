@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
 
 // CycloneDX 1.4 JSON schema types
 export interface CycloneDXComponent {
@@ -73,7 +74,7 @@ export async function generateSBOM(
   // Get latest scan of each type (CVE, license, deps create separate scan records)
   const [cveScan, licenseScan, depsScan] = await Promise.all([
     prisma.scan.findFirst({
-      where: { repoId, status: 'COMPLETED', cvePayload: { not: null } },
+      where: { repoId, status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
       orderBy: { scannedAt: 'desc' },
       include: { advisories: true },
     }),
