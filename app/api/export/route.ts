@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
     const archive = buildRepoExportArchive(exportData);
     const filename = `${exportData.repo.fullName.replace(/\//g, '-')}-scan-export.zip`;
 
-    return new NextResponse(archive, {
+    return new NextResponse(Buffer.from(archive), {
       status: 200,
       headers: {
         'Content-Type': 'application/zip',

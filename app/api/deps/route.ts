@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
 import { scanDependencies } from '@/lib/deps/scanner';
 
 export const dynamic = 'force-dynamic';
+
+function isDependencyScanCandidate(scan: {
+  cvePayload: unknown;
+  licensePayload: unknown;
+  dependencies: Array<unknown>;
+  advisories: Array<unknown>;
+  licenses: Array<unknown>;
+}): boolean {
+  if (scan.dependencies.length > 0) return true;
+  return scan.cvePayload === null
+    && scan.licensePayload === null
+    && scan.advisories.length === 0
+    && scan.licenses.length === 0;
+}
 
 // POST /api/deps — trigger dependency age analysis
 export async function POST(req: NextRequest) {
@@ -48,29 +61,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
-  // Find latest scan that actually has dependency data
-  const scan = await prisma.scan.findFirst({
+  const scans = await prisma.scan.findMany({
     where: {
       repoId,
       repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
-      OR: [
-        { dependencies: { some: {} } },
-        {
-          cvePayload: { equals: Prisma.DbNull },
-          licensePayload: { equals: Prisma.DbNull },
-          advisories: { none: {} },
-          licenses: { none: {} },
-        },
-      ],
     },
     orderBy: { scannedAt: 'desc' },
+    take: 20,
     include: {
       dependencies: {
         orderBy: [{ status: 'asc' }, { ageInDays: 'desc' }],
       },
+      advisories: {
+        select: { id: true },
+      },
+      licenses: {
+        select: { id: true },
+      },
     },
   });
+  const scan = scans.find(isDependencyScanCandidate) ?? null;
 
   if (!scan) {
     return NextResponse.json({ dependencies: [], summary: null });

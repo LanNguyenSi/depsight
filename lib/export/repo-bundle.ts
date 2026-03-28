@@ -27,6 +27,20 @@ export interface RepoExportScanOverrides {
   depsScanId?: string;
 }
 
+function isDependencyScanCandidate(scan: {
+  cvePayload: unknown;
+  licensePayload: unknown;
+  dependencies: Array<unknown>;
+  advisories: Array<unknown>;
+  licenses: Array<unknown>;
+}): boolean {
+  if (scan.dependencies.length > 0) return true;
+  return scan.cvePayload === null
+    && scan.licensePayload === null
+    && scan.advisories.length === 0
+    && scan.licenses.length === 0;
+}
+
 async function loadCveScan(repoId: string, scanId?: string) {
   if (scanId) {
     return prisma.scan.findFirst({
@@ -96,27 +110,26 @@ async function loadDepsScan(repoId: string, scanId?: string) {
     return scan;
   }
 
-  return prisma.scan.findFirst({
+  const scans = await prisma.scan.findMany({
     where: {
       repoId,
       status: 'COMPLETED',
-      OR: [
-        { dependencies: { some: {} } },
-        {
-          cvePayload: { equals: Prisma.DbNull },
-          licensePayload: { equals: Prisma.DbNull },
-          advisories: { none: {} },
-          licenses: { none: {} },
-        },
-      ],
     },
     orderBy: { scannedAt: 'desc' },
+    take: 20,
     include: {
       dependencies: {
         orderBy: [{ status: 'asc' }, { ageInDays: 'desc' }],
       },
+      advisories: {
+        select: { id: true },
+      },
+      licenses: {
+        select: { id: true },
+      },
     },
   });
+  return scans.find(isDependencyScanCandidate) ?? null;
 }
 
 export async function loadRepoExportData(
