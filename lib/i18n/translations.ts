@@ -72,6 +72,7 @@ const de = {
   'dashboard.tab.history': 'Verlauf',
   'dashboard.actions': 'Aktionen',
   'dashboard.actions.sbomExport': 'SBOM Export',
+  'dashboard.actions.bundleExport': 'Scan Export (.zip)',
   'dashboard.btn.cveScan': 'CVE Scan',
   'dashboard.btn.license': 'Lizenzen',
   'dashboard.btn.deps': 'Deps',
@@ -94,6 +95,12 @@ const de = {
   'dashboard.sbom.error': 'SBOM-Export fehlgeschlagen.',
   'dashboard.sbom.notice': 'Starte zuerst einen CVE-Scan, damit die SBOM Vulnerability-Daten enthält.',
   'dashboard.sbom.startScan': 'CVE Scan starten',
+  'dashboard.export.preparing': 'Export wird vorbereitet...',
+  'dashboard.export.error': 'Scan-Export fehlgeschlagen.',
+  'dashboard.export.confirmMissing': 'Für den Export fehlen noch diese Scans: {scans}. Sollen sie jetzt ausgeführt werden?',
+  'dashboard.export.scan.cve': 'CVE',
+  'dashboard.export.scan.license': 'Lizenzen',
+  'dashboard.export.scan.deps': 'Dependencies',
 
   // CVE / Advisory
   'advisory.empty': 'Keine CVEs gefunden',
@@ -295,6 +302,7 @@ const en = {
   'dashboard.tab.history': 'History',
   'dashboard.actions': 'Actions',
   'dashboard.actions.sbomExport': 'SBOM Export',
+  'dashboard.actions.bundleExport': 'Scan Export (.zip)',
   'dashboard.btn.cveScan': 'CVE Scan',
   'dashboard.btn.license': 'Licenses',
   'dashboard.btn.deps': 'Deps',
@@ -317,6 +325,12 @@ const en = {
   'dashboard.sbom.error': 'SBOM export failed.',
   'dashboard.sbom.notice': 'Run a CVE scan first so the SBOM includes vulnerability data.',
   'dashboard.sbom.startScan': 'Start CVE Scan',
+  'dashboard.export.preparing': 'Preparing export...',
+  'dashboard.export.error': 'Scan export failed.',
+  'dashboard.export.confirmMissing': 'The following scans are missing for this export: {scans}. Run them now?',
+  'dashboard.export.scan.cve': 'CVE',
+  'dashboard.export.scan.license': 'Licenses',
+  'dashboard.export.scan.deps': 'Dependencies',
 
   // CVE / Advisory
   'advisory.empty': 'No CVEs found',
