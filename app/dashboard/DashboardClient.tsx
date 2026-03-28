@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
@@ -160,6 +160,20 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [enablingDependabot, setEnablingDependabot] = useState(false);
 
   const [sbomError, setSbomError] = useState<string | null>(null);
+
+  // Actions dropdown
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
+        setActionsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [actionsOpen]);
 
   // Scan all repos
   const [scanAllRunning, setScanAllRunning] = useState(false);
@@ -588,8 +602,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
           {selectedRepo && (
             <div className="space-y-4">
-              {/* Repo header + actions — sticky */}
-              <div className="sticky top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+              {/* Repo header + actions dropdown — sticky */}
+              <div className="sticky top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
                 {/* Mobile back button */}
                 <button
                   onClick={() => setSelectedRepo(null)}
@@ -598,9 +612,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                   <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
                   {t['dashboard.repos']}
                 </button>
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
+
+                {/* Row 1: Repo name + Actions dropdown */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-semibold text-white truncate">{selectedRepo.fullName}</h2>
                     {selectedRepo.lastScannedAt && (
                       <p className="text-xs text-gray-500 mt-0.5">
                         {t['dashboard.lastScanned']}{' '}
@@ -608,40 +624,56 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="relative shrink-0" ref={actionsRef}>
                     <button
-                      onClick={() => void handleCveScan(selectedRepo)}
-                      disabled={scanning}
-                      className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                      onClick={() => setActionsOpen((v) => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 transition-colors"
                     >
-                      {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
+                      {t['dashboard.actions']}
+                      <svg viewBox="0 0 20 20" className={`w-3.5 h-3.5 fill-current transition-transform ${actionsOpen ? 'rotate-180' : ''}`}>
+                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
                     </button>
-                    <button
-                      onClick={() => void handleLicenseScan(selectedRepo)}
-                      disabled={scanningLicense}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
-                    >
-                      {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
-                    </button>
-                    <button
-                      onClick={() => void handleDepsScan(selectedRepo)}
-                      disabled={scanningDeps}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
-                    >
-                      {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
-                    </button>
-                    <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
-                    <button
-                      onClick={() => void handleSbomDownload(selectedRepo)}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
-                    >
-                      SBOM
-                    </button>
+                    {actionsOpen && (
+                      <div className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleCveScan(selectedRepo); }}
+                          disabled={scanning}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
+                        </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleLicenseScan(selectedRepo); }}
+                          disabled={scanningLicense}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
+                        </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleDepsScan(selectedRepo); }}
+                          disabled={scanningDeps}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
+                        </button>
+                        <div className="border-t border-gray-800 my-1" />
+                        <div className="px-2 py-1">
+                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
+                        </div>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleSbomDownload(selectedRepo); }}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                        >
+                          {t['dashboard.actions.sbomExport']}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Tabs */}
-                <div className="flex flex-wrap gap-1 border-b border-gray-800 mt-3">
+                {/* Row 2: Tabs — clear visual separation from actions */}
+                <div className="flex flex-wrap gap-1 border-b border-gray-800 mt-4">
                   {TABS.map(({ key, label }) => {
                     const count =
                       key === 'cve' ? scanDetail?.counts.total :
