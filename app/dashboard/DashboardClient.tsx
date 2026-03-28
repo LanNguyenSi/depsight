@@ -358,19 +358,43 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       const repo = repos[i];
 
       try {
-        // CVE scan
-        await fetch('/api/scan', {
+        // 1. CVE scan — handle dependabotDisabled gracefully
+        const cveRes = await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
-        // License scan
+        if (cveRes.ok) {
+          const cveData = (await cveRes.json()) as { dependabotDisabled?: boolean };
+          if (cveData.dependabotDisabled) {
+            // Try to enable dependabot, then retry CVE scan
+            const enableRes = await fetch('/api/dependabot', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ repoId: repo.id }),
+            });
+            if (enableRes.ok) {
+              await fetch('/api/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repoId: repo.id }),
+              });
+            }
+          }
+        }
+
+        if (scanAllCancelRef.current) break;
+
+        // 2. License scan
         await fetch('/api/license', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
-        // Deps scan
+
+        if (scanAllCancelRef.current) break;
+
+        // 3. Deps scan
         await fetch('/api/deps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

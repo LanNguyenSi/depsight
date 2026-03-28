@@ -70,22 +70,37 @@ export async function generateSBOM(
 
   if (!repo) throw new Error('Repository not found or access denied');
 
-  // Get latest completed scan with all data
-  const scan = await prisma.scan.findFirst({
-    where: { repoId, status: 'COMPLETED' },
-    orderBy: { scannedAt: 'desc' },
-    include: {
-      advisories: true,
-      licenses: true,
-      dependencies: { orderBy: { name: 'asc' } },
-    },
-  });
+  // Get latest scan of each type (CVE, license, deps create separate scan records)
+  const [cveScan, licenseScan, depsScan] = await Promise.all([
+    prisma.scan.findFirst({
+      where: { repoId, status: 'COMPLETED', cvePayload: { not: null } },
+      orderBy: { scannedAt: 'desc' },
+      include: { advisories: true },
+    }),
+    prisma.scan.findFirst({
+      where: { repoId, status: 'COMPLETED', licenseCount: { gt: 0 } },
+      orderBy: { scannedAt: 'desc' },
+      include: { licenses: true },
+    }),
+    prisma.scan.findFirst({
+      where: { repoId, status: 'COMPLETED', dependencies: { some: {} } },
+      orderBy: { scannedAt: 'desc' },
+      include: { dependencies: { orderBy: { name: 'asc' } } },
+    }),
+  ]);
+
+  // Merge results from the different scan types
+  const scan = {
+    advisories: cveScan?.advisories ?? [],
+    licenses: licenseScan?.licenses ?? [],
+    dependencies: depsScan?.dependencies ?? [],
+  };
 
   // Build components from dependencies
   const components: CycloneDXComponent[] = [];
   const componentRefs = new Map<string, string>(); // name → bom-ref
 
-  if (scan?.dependencies) {
+  if (scan.dependencies.length > 0) {
     for (const dep of scan.dependencies) {
       const ref = `dep-${dep.id}`;
       componentRefs.set(dep.name, ref);
@@ -127,7 +142,7 @@ export async function generateSBOM(
   }
 
   // If no deps from scan, at least include from license results
-  if (components.length === 0 && scan?.licenses) {
+  if (components.length === 0 && scan.licenses.length > 0) {
     for (const lic of scan.licenses) {
       const ref = `lic-${lic.id}`;
       componentRefs.set(lic.packageName, ref);
@@ -147,7 +162,7 @@ export async function generateSBOM(
   // Build vulnerabilities from advisories
   const vulnerabilities: CycloneDXVulnerability[] = [];
 
-  if (scan?.advisories) {
+  if (scan.advisories.length > 0) {
     for (const advisory of scan.advisories) {
       const vuln: CycloneDXVulnerability = {
         id: advisory.cveId ?? advisory.ghsaId,
