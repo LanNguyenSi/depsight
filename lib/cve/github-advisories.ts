@@ -47,11 +47,29 @@ function calculateRiskScore(counts: ScanResult['counts']): number {
   return Math.min(100, Math.round(score));
 }
 
+export interface ScanResultWithStatus extends ScanResult {
+  dependabotDisabled?: boolean;
+}
+
+export async function enableDependabotAlerts(
+  accessToken: string,
+  owner: string,
+  repo: string,
+): Promise<boolean> {
+  const octokit = createGitHubClient(accessToken);
+  try {
+    await octokit.rest.repos.enableVulnerabilityAlerts({ owner, repo });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchRepoAdvisories(
   accessToken: string,
   owner: string,
   repo: string,
-): Promise<ScanResult> {
+): Promise<ScanResultWithStatus> {
   const octokit = createGitHubClient(accessToken);
   const advisories: GitHubAdvisory[] = [];
 
@@ -84,8 +102,8 @@ export async function fetchRepoAdvisories(
   } catch (error: unknown) {
     const err = error as { status?: number };
     if (err?.status === 404 || err?.status === 403) {
-      // Dependabot alerts not enabled or no access — return empty
-      return buildScanResult([]);
+      // Dependabot alerts not enabled — signal to caller
+      return { ...buildScanResult([]), dependabotDisabled: true };
     }
     throw error;
   }

@@ -20,8 +20,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const scanId = await scanRepository(session.user.id, repoId, session.user.githubToken);
-    return NextResponse.json({ scanId, status: 'completed' });
+    const result = await scanRepository(session.user.id, repoId, session.user.githubToken);
+    return NextResponse.json({
+      scanId: result.scanId,
+      status: 'completed',
+      dependabotDisabled: result.dependabotDisabled ?? false,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Scan failed';
     return NextResponse.json({ error: message }, { status: 500 });

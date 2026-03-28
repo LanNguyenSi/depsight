@@ -3,11 +3,16 @@ import { fetchRepoAdvisories } from './github-advisories';
 import { notifyForScan } from '@/lib/alerts/notifier';
 import type { Severity as PrismaSeverity } from '@prisma/client';
 
+export interface ScanRepositoryResult {
+  scanId: string;
+  dependabotDisabled?: boolean;
+}
+
 export async function scanRepository(
   userId: string,
   repoId: string,
   accessToken: string,
-): Promise<string> {
+): Promise<ScanRepositoryResult> {
   // Get repo info from DB
   const repo = await prisma.repo.findFirst({
     where: { id: repoId, userId },
@@ -82,7 +87,10 @@ export async function scanRepository(
       );
     }
 
-    return scan.id;
+    return {
+      scanId: scan.id,
+      dependabotDisabled: result.dependabotDisabled,
+    };
   } catch (error) {
     // Mark scan as failed
     await prisma.scan.update({
