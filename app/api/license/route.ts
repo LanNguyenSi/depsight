@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanLicenses } from '@/lib/license/scanner';
 
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
       repoId,
       repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
-      licenseCount: { gt: 0 },
+      licensePayload: { not: Prisma.DbNull },
     },
     orderBy: { scannedAt: 'desc' },
     include: {

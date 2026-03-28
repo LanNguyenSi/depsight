@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { analyzeDepAge } from '@/lib/deps/age-checker';
+import { Prisma } from '@prisma/client';
+import { scanDependencies } from '@/lib/deps/scanner';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,42 +27,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await analyzeDepAge(session.user.githubToken, repo.owner, repo.name);
-
-    // Always create a fresh scan record (avoid race conditions with CVE/license scans)
-    const scan = await prisma.scan.create({
-      data: { repoId, status: 'RUNNING' },
-    });
-
-    await prisma.$transaction(async (tx) => {
-
-      if (result.dependencies.length > 0) {
-        await tx.dependency.createMany({
-          data: result.dependencies.map((d) => ({
-            scanId: scan.id,
-            name: d.name,
-            installedVersion: d.installedVersion,
-            latestVersion: d.latestVersion,
-            publishedAt: d.publishedAt,
-            ageInDays: d.ageInDays >= 0 ? d.ageInDays : null,
-            status: d.status,
-            isDeprecated: d.isDeprecated,
-            updateAvailable: d.updateAvailable,
-            latestPublishedAt: d.latestPublishedAt,
-          })),
-        });
-      }
-
-      await tx.scan.update({
-        where: { id: scan.id },
-        data: { status: 'COMPLETED' },
-      });
-    });
-
-    return NextResponse.json({
-      scanId: scan.id,
-      summary: result.summary,
-    });
+    const result = await scanDependencies(session.user.id, repoId, session.user.githubToken);
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Dependency analysis failed';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -87,7 +54,15 @@ export async function GET(req: NextRequest) {
       repoId,
       repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
-      dependencies: { some: {} },
+      OR: [
+        { dependencies: { some: {} } },
+        {
+          cvePayload: Prisma.DbNull,
+          licensePayload: Prisma.DbNull,
+          advisories: { none: {} },
+          licenses: { none: {} },
+        },
+      ],
     },
     orderBy: { scannedAt: 'desc' },
     include: {
@@ -97,7 +72,7 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  if (!scan || scan.dependencies.length === 0) {
+  if (!scan) {
     return NextResponse.json({ dependencies: [], summary: null });
   }
 

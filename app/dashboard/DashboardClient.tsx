@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, useEffectEvent } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
@@ -162,6 +162,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [enablingDependabot, setEnablingDependabot] = useState(false);
 
   const [sbomError, setSbomError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportingBundle, setExportingBundle] = useState(false);
 
   // Actions dropdown
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -198,6 +200,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const selectedRepo = repos.find((repo) => repo.id === selectedRepoId) ?? null;
   const detailRequestRef = useRef(0);
   const selectedRepoIdRef = useRef<string | null>(selectedRepoId);
+  const hydratedRepoIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setRepos(initialRepos);
@@ -219,6 +222,53 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   useEffect(() => {
     selectedRepoIdRef.current = selectedRepoId;
   }, [selectedRepoId]);
+
+  const loadRepoDetails = useEffectEvent(async (repo: RepoItem) => {
+    const requestId = ++detailRequestRef.current;
+    setSelectedRepoId(repo.id);
+    setScanDetail(null);
+    setLicenseDetail(null);
+    setDepsDetail(null);
+    setScanHistory([]);
+    setDependabotDisabled(false);
+    setSbomError(null);
+    setExportError(null);
+    setLoadingDetail(true);
+    setLoadingHistory(true);
+    try {
+      const [scan, license, deps, history] = await Promise.all([
+        fetchScanDetail(repo.id),
+        fetchLicenseDetail(repo.id),
+        fetchDepsDetail(repo.id),
+        fetchScanHistory(repo.id),
+      ]);
+
+      applyScanSummary(repo.id, scan);
+      applyLastScannedAt(repo.id, license.scannedAt);
+      applyLastScannedAt(repo.id, deps.scannedAt);
+
+      if (detailRequestRef.current !== requestId) return;
+
+      setScanDetail(scan);
+      setLicenseDetail(toVisibleLicenseDetail(license));
+      setDepsDetail(toVisibleDepsDetail(deps));
+      setScanHistory(history);
+    } finally {
+      if (detailRequestRef.current === requestId) {
+        setLoadingDetail(false);
+        setLoadingHistory(false);
+      }
+    }
+  });
+
+  useEffect(() => {
+    if (!initialRepoId || selectedRepoId !== initialRepoId) return;
+    const repo = repos.find((item) => item.id === initialRepoId);
+    if (!repo || hydratedRepoIdRef.current === repo.id) return;
+
+    hydratedRepoIdRef.current = repo.id;
+    void loadRepoDetails(repo);
+  }, [initialRepoId, repos, selectedRepoId]);
 
   function updateRepo(repoId: string, updater: (repo: RepoItem) => RepoItem) {
     setRepos((current) => current.map((repo) => (repo.id === repoId ? updater(repo) : repo)));
@@ -245,11 +295,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   }
 
   function toVisibleLicenseDetail(data: LicenseDetail): LicenseDetail | null {
-    return data.licenses?.length > 0 || data.unsupportedEcosystem ? data : null;
+    return Boolean(data.scanId) || data.unsupportedEcosystem ? data : null;
   }
 
   function toVisibleDepsDetail(data: DepsDetail): DepsDetail | null {
-    return data.dependencies?.length > 0 || data.unsupportedEcosystem ? data : null;
+    return Boolean(data.scanId) || data.unsupportedEcosystem ? data : null;
   }
 
   async function fetchScanDetail(repoId: string) {
@@ -405,6 +455,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   const handleSbomDownload = useCallback(async (repo: RepoItem) => {
     setSbomError(null);
+    setExportError(null);
     const res = await fetch(`/api/sbom?repoId=${repo.id}`);
     if (res.ok) {
       const blob = await res.blob();
@@ -424,6 +475,79 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       } else {
         setSbomError(data.message ?? 'SBOM-Export fehlgeschlagen.');
       }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
+
+  const handleBundleExport = useCallback(async (repo: RepoItem) => {
+    const scanLabels = {
+      cve: t['dashboard.export.scan.cve'],
+      license: t['dashboard.export.scan.license'],
+      deps: t['dashboard.export.scan.deps'],
+    } as const;
+
+    setSbomError(null);
+    setExportError(null);
+    setExportingBundle(true);
+
+    try {
+      let reranMissingScans = false;
+      let response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id }),
+      });
+
+      if (response.status === 409) {
+        const payload = (await response.json()) as {
+          error?: string;
+          missingScans?: Array<keyof typeof scanLabels>;
+          message?: string;
+        };
+
+        if (payload.error === 'missing_scans' && payload.missingScans && payload.missingScans.length > 0) {
+          const labels = payload.missingScans.map((scan) => scanLabels[scan]).join(', ');
+          const shouldRun = window.confirm(interpolate(t['dashboard.export.confirmMissing'], { scans: labels }));
+          if (!shouldRun) return;
+
+          reranMissingScans = true;
+          response = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoId: repo.id, runMissingScans: true }),
+          });
+        } else {
+          setExportError(payload.message ?? t['dashboard.export.error']);
+          return;
+        }
+      }
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string; message?: string };
+        setExportError(payload.message ?? payload.error ?? t['dashboard.export.error']);
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? `${repo.name}-scan-export.zip`;
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      if (reranMissingScans) {
+        hydratedRepoIdRef.current = repo.id;
+        await loadRepoDetails(repo);
+      }
+    } catch (error) {
+      console.error(error);
+      setExportError(t['dashboard.export.error']);
+    } finally {
+      setExportingBundle(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
@@ -534,40 +658,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   }
 
   async function handleSelectRepo(repo: RepoItem) {
-    const requestId = ++detailRequestRef.current;
-    setSelectedRepoId(repo.id);
-    setScanDetail(null);
-    setLicenseDetail(null);
-    setDepsDetail(null);
-    setScanHistory([]);
-    setDependabotDisabled(false);
-    setSbomError(null);
-    setLoadingDetail(true);
-    setLoadingHistory(true);
-    try {
-      const [scan, license, deps, history] = await Promise.all([
-        fetchScanDetail(repo.id),
-        fetchLicenseDetail(repo.id),
-        fetchDepsDetail(repo.id),
-        fetchScanHistory(repo.id),
-      ]);
-
-      applyScanSummary(repo.id, scan);
-      applyLastScannedAt(repo.id, license.scannedAt);
-      applyLastScannedAt(repo.id, deps.scannedAt);
-
-      if (detailRequestRef.current !== requestId) return;
-
-      setScanDetail(scan);
-      setLicenseDetail(toVisibleLicenseDetail(license));
-      setDepsDetail(toVisibleDepsDetail(deps));
-      setScanHistory(history);
-    } finally {
-      if (detailRequestRef.current === requestId) {
-        setLoadingDetail(false);
-        setLoadingHistory(false);
-      }
-    }
+    hydratedRepoIdRef.current = repo.id;
+    await loadRepoDetails(repo);
   }
 
   return (
@@ -765,6 +857,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                         >
                           {t['dashboard.actions.sbomExport']}
                         </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleBundleExport(selectedRepo); }}
+                          disabled={exportingBundle}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {exportingBundle ? t['dashboard.export.preparing'] : t['dashboard.actions.bundleExport']}
+                        </button>
                       </div>
                     )}
                   </div>
@@ -816,6 +915,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                   >
                     CVE Scan starten
                   </button>
+                </div>
+              )}
+
+              {exportError && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                  <p className="text-sm font-medium text-red-300">{exportError}</p>
                 </div>
               )}
 
