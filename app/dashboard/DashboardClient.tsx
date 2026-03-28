@@ -356,9 +356,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   return (
     <AppShell repoCount={repos.length}>
-      <div className="flex gap-6 items-start">
+      <div className="flex flex-col md:flex-row gap-6 items-start">
         {/* Sidebar — repo list */}
-        <aside className="w-72 shrink-0 sticky top-20 max-h-[calc(100vh-6rem)] flex flex-col">
+        <aside className={`w-full md:w-72 md:shrink-0 md:sticky md:top-20 md:max-h-[calc(100vh-6rem)] flex flex-col ${selectedRepo ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
               {t['dashboard.repos']}
@@ -442,7 +442,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         </aside>
 
         {/* Detail panel */}
-        <section className="flex-1 min-w-0">
+        <section className={`flex-1 min-w-0 w-full ${!selectedRepo ? 'hidden md:block' : 'block'}`}>
           {!selectedRepo && (
             <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
               {t['dashboard.selectRepo']}
@@ -453,6 +453,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
             <div className="space-y-4">
               {/* Repo header + actions — sticky */}
               <div className="sticky top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+                {/* Mobile back button */}
+                <button
+                  onClick={() => setSelectedRepo(null)}
+                  className="md:hidden flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
+                >
+                  <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                  {t['dashboard.repos']}
+                </button>
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
