@@ -67,13 +67,20 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
       {open && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          style={{ animation: 'fadeIn 150ms ease-out' }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pr-scan-title"
           onClick={() => setOpen(false)}
+          onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
+          tabIndex={-1}
         >
           <div
             className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4"
+            style={{ animation: 'scaleIn 150ms ease-out' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold text-white mb-1">PR CVE Scan</h3>
+            <h3 id="pr-scan-title" className="text-base font-semibold text-white mb-1">PR CVE Scan</h3>
             <p className="text-sm text-gray-500 mb-4">
               Scannt{' '}
               <span className="font-mono text-gray-400">
@@ -104,8 +111,12 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
             )}
 
             {result && (
-              <div className="mb-3 text-sm bg-emerald-950/50 border border-emerald-900/50 rounded-lg px-3 py-2">
-                <div className="font-medium text-emerald-400">
+              <div className={`mb-3 text-sm rounded-lg px-3 py-2 border ${
+                result.newCVECount > 0
+                  ? 'bg-red-950/50 border-red-900/50'
+                  : 'bg-emerald-950/50 border-emerald-900/50'
+              }`}>
+                <div className={`font-medium ${result.newCVECount > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                   {result.newCVECount > 0
                     ? `${result.newCVECount} neue CVE(s) gefunden`
                     : 'Keine neuen CVEs'}
