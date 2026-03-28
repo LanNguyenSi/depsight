@@ -142,6 +142,8 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('cve');
+  const [dependabotDisabled, setDependabotDisabled] = useState(false);
+  const [enablingDependabot, setEnablingDependabot] = useState(false);
 
   async function handleSync() {
     setSyncing(true);
@@ -157,6 +159,7 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
     setScanning(true);
     setSelectedRepo(repo);
     setScanDetail(null);
+    setDependabotDisabled(false);
     setActiveTab('cve');
     try {
       const res = await fetch('/api/scan', {
@@ -165,12 +168,37 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
         body: JSON.stringify({ repoId: repo.id }),
       });
       if (!res.ok) throw new Error('Scan fehlgeschlagen');
-      await loadScanDetail(repo.id);
-      await loadScanHistory(repo.id);
+      const data = await res.json() as { scanId: string; dependabotDisabled?: boolean };
+      if (data.dependabotDisabled) {
+        setDependabotDisabled(true);
+      } else {
+        await loadScanDetail(repo.id);
+        await loadScanHistory(repo.id);
+      }
     } catch (err) {
       console.error(err);
     } finally {
       setScanning(false);
+    }
+  }
+
+  async function handleEnableDependabot(repo: RepoItem) {
+    setEnablingDependabot(true);
+    try {
+      const res = await fetch('/api/dependabot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id }),
+      });
+      if (res.ok) {
+        setDependabotDisabled(false);
+        // Re-run scan now that dependabot is enabled
+        await handleCveScan(repo);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setEnablingDependabot(false);
     }
   }
 
@@ -408,7 +436,27 @@ export function DashboardClient({ repos: initialRepos }: DashboardClientProps) {
                         </div>
                       </>
                     )}
-                    {!scanDetail && !loadingDetail && !scanning && (
+                    {dependabotDisabled && selectedRepo && (
+                      <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <span className="text-yellow-400 text-xl">⚠️</span>
+                          <div>
+                            <p className="text-sm font-medium text-yellow-300">Dependabot ist nicht aktiviert</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              CVE-Scans benötigen Dependabot Vulnerability Alerts. Jetzt automatisch aktivieren?
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => void handleEnableDependabot(selectedRepo)}
+                          disabled={enablingDependabot}
+                          className="text-xs font-medium px-3 py-1.5 rounded bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 hover:bg-yellow-500/30 transition-colors disabled:opacity-50"
+                        >
+                          {enablingDependabot ? '⏳ Aktiviere...' : '✅ Dependabot aktivieren & erneut scannen'}
+                        </button>
+                      </div>
+                    )}
+                    {!scanDetail && !loadingDetail && !scanning && !dependabotDisabled && (
                       <EmptyState text='Noch kein CVE-Scan durchgeführt.' />
                     )}
                   </>
