@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   // Verify user owns repo
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: session.user.id, tracked: true },
     select: { id: true, fullName: true },
   });
 

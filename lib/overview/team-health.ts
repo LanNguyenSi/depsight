@@ -63,7 +63,11 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
     highCount: number; mediumCount: number; lowCount: number;
   }>();
   const cveScans = await prisma.scan.findMany({
-    where: { repo: { userId }, status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
+    where: {
+      repo: { userId, tracked: true },
+      status: 'COMPLETED',
+      cvePayload: { not: Prisma.DbNull },
+    },
     orderBy: { scannedAt: 'desc' },
     distinct: ['repoId'],
     select: {
@@ -78,7 +82,11 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
   // Get latest license scan per repo
   const licenseScansByRepo = new Map<string, { licenseIssues: number }>();
   const licenseScans = await prisma.scan.findMany({
-    where: { repo: { userId }, status: 'COMPLETED', licenseCount: { gt: 0 } },
+    where: {
+      repo: { userId, tracked: true },
+      status: 'COMPLETED',
+      licenseCount: { gt: 0 },
+    },
     orderBy: { scannedAt: 'desc' },
     distinct: ['repoId'],
     select: { repoId: true, licenseIssues: true },
@@ -90,7 +98,11 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
   // Get latest deps scan per repo
   const depsScansByRepo = new Map<string, { scanId: string; depCount: number }>();
   const depsScans = await prisma.scan.findMany({
-    where: { repo: { userId }, status: 'COMPLETED', dependencies: { some: {} } },
+    where: {
+      repo: { userId, tracked: true },
+      status: 'COMPLETED',
+      dependencies: { some: {} },
+    },
     orderBy: { scannedAt: 'desc' },
     distinct: ['repoId'],
     select: { id: true, repoId: true, _count: { select: { dependencies: true } } },

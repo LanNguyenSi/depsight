@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   }
 
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: session.user.id, tracked: true },
   });
 
   if (!repo) {

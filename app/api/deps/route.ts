@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   }
 
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: session.user.id, tracked: true },
   });
   if (!repo) {
     return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
-      repo: { userId: session.user.id },
+      repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
       dependencies: { some: {} },
     },
