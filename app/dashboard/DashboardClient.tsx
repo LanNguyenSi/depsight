@@ -377,7 +377,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Suchen..."
-            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 transition-colors mb-2"
+            aria-label="Repositories durchsuchen"
+            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors mb-2"
           />
 
           {/* Sort */}
@@ -443,7 +444,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         {/* Detail panel */}
         <section className={`flex-1 min-w-0 w-full ${selectedRepo ? 'block' : 'hidden lg:block'}`}>
           {!selectedRepo && (
-            <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
+            <div className="flex flex-col items-center justify-center h-64 text-gray-600 text-sm bg-gray-900 rounded-lg border border-gray-800">
               Repository auswählen
             </div>
           )}
@@ -451,7 +452,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           {selectedRepo && (
             <div className="space-y-4">
               {/* Repo header + actions — sticky */}
-              <div className="sticky top-14 lg:top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+              <div className="sticky top-14 lg:top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
                 {/* Mobile back button */}
                 <button
                   onClick={() => setSelectedRepo(null)}
@@ -624,11 +625,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 {activeTab === 'history' && (
                   <>
                     {loadingHistory && <Loading text="Lade Historie..." />}
-                    {!loadingHistory && <RiskTimeline history={scanHistory} height={250} />}
+                    {!loadingHistory && scanHistory.length > 0 && (
+                      <RiskTimeline history={scanHistory} height={250} />
+                    )}
                     {!loadingHistory && scanHistory.length === 0 && (
-                      <p className="text-center py-4 text-gray-600 text-xs">
-                        Mehrere CVE-Scans durchführen, um den Verlauf zu sehen.
-                      </p>
+                      <EmptyState text="Mehrere CVE-Scans durchführen, um den Verlauf zu sehen." />
                     )}
                   </>
                 )}

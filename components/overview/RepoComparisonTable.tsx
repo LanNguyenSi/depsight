@@ -35,7 +35,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-800">
-        <h3 className="text-sm font-medium text-gray-300">Repository Vergleich</h3>
+        <h3 className="text-sm font-medium text-gray-400">Repository Vergleich</h3>
         <p className="text-[10px] text-gray-600 mt-0.5">Sortiert nach Health Score (schlechteste zuerst)</p>
       </div>
       <div className="overflow-x-auto">
@@ -83,7 +83,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   {repo.licenseIssues > 0 ? (
-                    <span className="text-sm font-semibold text-orange-400 tabular-nums">{repo.licenseIssues}</span>
+                    <span className="text-sm font-semibold text-red-400 tabular-nums">{repo.licenseIssues}</span>
                   ) : (
                     <span className="text-sm text-gray-700">&ndash;</span>
                   )}

@@ -57,7 +57,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
             <span className="text-xs font-normal text-gray-600 ml-1">aktuell</span>
           </span>
         </div>
-        <div className="grid grid-cols-5 gap-2 text-center">
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
           {([
             ['Aktuell', summary.upToDate, 'text-emerald-400'],
             ['Veraltet', summary.outdated, 'text-yellow-400'],
@@ -65,9 +65,9 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
             ['Deprecated', summary.deprecated, 'text-red-400'],
             ['Unbekannt', summary.unknown, 'text-gray-600'],
           ] as const).map(([label, count, color]) => (
-            <div key={label} className="bg-gray-800/50 rounded-md p-2">
+            <div key={label} className="bg-gray-800/50 rounded-lg p-3">
               <div className={`text-lg font-bold tabular-nums ${color}`}>{count}</div>
-              <div className="text-[10px] text-gray-600">{label}</div>
+              <div className="text-xs text-gray-600">{label}</div>
             </div>
           ))}
         </div>
@@ -79,7 +79,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
       </div>
 
       {/* Table */}
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>

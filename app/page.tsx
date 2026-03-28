@@ -48,7 +48,7 @@ export default async function HomePage() {
   if (session?.user) redirect('/dashboard');
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-gray-950">
       {/* Hero */}
       <div className="max-w-5xl mx-auto px-6 pt-24 pb-16">
         <div className="text-center">
@@ -87,7 +87,7 @@ export default async function HomePage() {
               <h3 className={`text-sm font-semibold mb-1.5 ${f.color}`}>
                 {f.title}
               </h3>
-              <p className="text-xs text-gray-400 leading-relaxed">
+              <p className="text-sm text-gray-400 leading-relaxed">
                 {f.description}
               </p>
             </div>
@@ -96,10 +96,10 @@ export default async function HomePage() {
 
         {/* Ecosystems bar */}
         <div className="mt-12 text-center">
-          <p className="text-[10px] text-gray-600 uppercase tracking-widest mb-3">
+          <p className="text-xs text-gray-600 uppercase tracking-widest mb-3">
             Unterstützte Ökosysteme
           </p>
-          <div className="flex items-center justify-center gap-6 text-sm text-gray-500">
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-500">
             {['npm', 'Python', 'Go', 'Java', 'Rust', 'PHP'].map((e) => (
               <span key={e} className="font-mono">{e}</span>
             ))}

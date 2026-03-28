@@ -85,7 +85,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
         </div>
         {/* Mobile dropdown */}
         {menuOpen && (
-          <div className="sm:hidden border-t border-gray-800 px-4 py-3 space-y-1">
+          <div className="sm:hidden border-t border-gray-800 px-4 py-3 space-y-1" style={{ animation: 'slideDown 150ms ease-out' }}>
             {NAV_ITEMS.map(({ href, label }) => {
               const active = pathname === href;
               return (
