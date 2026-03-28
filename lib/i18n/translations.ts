@@ -215,6 +215,11 @@ const de = {
   'overview.noRepos': 'Keine Repos gefunden — bitte erst synchronisieren.',
   'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
   'overview.unscannedAction': 'Im Dashboard alle scannen',
+
+  // Pagination
+  'pagination.prev': 'Zurück',
+  'pagination.next': 'Weiter',
+  'pagination.info': '{from}–{to} von {total}',
 } as const;
 
 const en = {
@@ -425,6 +430,11 @@ const en = {
   'overview.noRepos': 'No repos found — please sync first.',
   'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
   'overview.unscannedAction': 'Scan all in dashboard',
+
+  // Pagination
+  'pagination.prev': 'Previous',
+  'pagination.next': 'Next',
+  'pagination.info': '{from}–{to} of {total}',
 };
 
 export type TranslationKey = keyof typeof de;

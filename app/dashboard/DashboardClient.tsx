@@ -9,6 +9,7 @@ import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
+import { Pagination, usePagination } from '@/components/Pagination';
 
 interface ScanSummary {
   id: string;
@@ -165,11 +166,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [scanAllProgress, setScanAllProgress] = useState({ current: 0, total: 0 });
   const scanAllCancelRef = useRef(false);
 
-  // Filter & sort
+  // Filter, sort & pagination
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('name');
+  const [repoPage, setRepoPage] = useState(1);
+  const REPO_PAGE_SIZE = 20;
 
   const filteredRepos = useMemo(() => {
+    setRepoPage(1);
     let list = repos;
     if (search) {
       const q = search.toLowerCase();
@@ -191,6 +195,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       return a.fullName.localeCompare(b.fullName);
     });
   }, [repos, search, sortBy]);
+
+  const paginatedRepos = usePagination(filteredRepos, repoPage, REPO_PAGE_SIZE);
 
   async function handleSync() {
     setSyncing(true);
@@ -482,7 +488,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 {t['dashboard.noRepos']}
               </p>
             )}
-            {filteredRepos.map((repo) => (
+            {paginatedRepos.map((repo) => (
               <button
                 key={repo.id}
                 onClick={() => void handleSelectRepo(repo)}
@@ -508,6 +514,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 </div>
               </button>
             ))}
+          </div>
+          {/* Sidebar pagination */}
+          <div className="pt-2">
+            <Pagination
+              page={repoPage}
+              pageSize={REPO_PAGE_SIZE}
+              total={filteredRepos.length}
+              onPageChange={setRepoPage}
+              compact
+            />
           </div>
         </aside>
 
