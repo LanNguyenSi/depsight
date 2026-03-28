@@ -64,6 +64,7 @@ interface UnsupportedEcosystem {
 
 interface LicenseDetail {
   scanId: string;
+  scannedAt?: string;
   licenseCount: number;
   conflictCount: number;
   summary: Record<string, number>;
@@ -110,6 +111,7 @@ interface DepEntry {
 
 interface DepsDetail {
   scanId: string;
+  scannedAt?: string;
   summary: DepSummary;
   dependencies: DepEntry[];
   unsupportedEcosystem?: UnsupportedEcosystem;
@@ -133,7 +135,6 @@ const riskColor = (score: number) =>
         : 'text-emerald-400';
 
 export function DashboardClient({ repos: initialRepos, initialRepoId }: DashboardClientProps) {
-  const repos = initialRepos;
   const { t } = useLocale();
 
   const TABS: { key: ActiveTab; label: string }[] = [
@@ -142,8 +143,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     { key: 'deps', label: t['dashboard.tab.deps'] },
     { key: 'history', label: t['dashboard.tab.history'] },
   ];
-  const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(
-    initialRepoId ? repos.find((r) => r.id === initialRepoId) ?? null : null,
+  const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
+    initialRepoId ? initialRepos.find((r) => r.id === initialRepoId)?.id ?? null : null,
   );
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
   const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
@@ -193,9 +195,86 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [sortBy, setSortBy] = useState<SortKey>('name');
   const [repoPage, setRepoPage] = useState(1);
   const REPO_PAGE_SIZE = 20;
+  const selectedRepo = repos.find((repo) => repo.id === selectedRepoId) ?? null;
+  const detailRequestRef = useRef(0);
+  const selectedRepoIdRef = useRef<string | null>(selectedRepoId);
+
+  useEffect(() => {
+    setRepos(initialRepos);
+    setSelectedRepoId((current) => {
+      if (initialRepoId && initialRepos.some((repo) => repo.id === initialRepoId)) {
+        return initialRepoId;
+      }
+      if (current && initialRepos.some((repo) => repo.id === current)) {
+        return current;
+      }
+      return null;
+    });
+  }, [initialRepoId, initialRepos]);
+
+  useEffect(() => {
+    setRepoPage(1);
+  }, [search, sortBy]);
+
+  useEffect(() => {
+    selectedRepoIdRef.current = selectedRepoId;
+  }, [selectedRepoId]);
+
+  function updateRepo(repoId: string, updater: (repo: RepoItem) => RepoItem) {
+    setRepos((current) => current.map((repo) => (repo.id === repoId ? updater(repo) : repo)));
+  }
+
+  function applyScanSummary(repoId: string, detail: ScanDetail | null) {
+    if (!detail) return;
+    updateRepo(repoId, (repo) => ({
+      ...repo,
+      lastScannedAt: detail.scannedAt,
+      latestScan: {
+        id: detail.id,
+        scannedAt: detail.scannedAt,
+        status: detail.status,
+        riskScore: detail.riskScore,
+        counts: detail.counts,
+      },
+    }));
+  }
+
+  function applyLastScannedAt(repoId: string, scannedAt?: string) {
+    if (!scannedAt) return;
+    updateRepo(repoId, (repo) => ({ ...repo, lastScannedAt: scannedAt }));
+  }
+
+  function toVisibleLicenseDetail(data: LicenseDetail): LicenseDetail | null {
+    return data.licenses?.length > 0 || data.unsupportedEcosystem ? data : null;
+  }
+
+  function toVisibleDepsDetail(data: DepsDetail): DepsDetail | null {
+    return data.dependencies?.length > 0 || data.unsupportedEcosystem ? data : null;
+  }
+
+  async function fetchScanDetail(repoId: string) {
+    const res = await fetch(`/api/scan?repoId=${repoId}`);
+    const data = (await res.json()) as { scan: ScanDetail | null };
+    return data.scan;
+  }
+
+  async function fetchLicenseDetail(repoId: string) {
+    const res = await fetch(`/api/license?repoId=${repoId}`);
+    return (await res.json()) as LicenseDetail;
+  }
+
+  async function fetchDepsDetail(repoId: string) {
+    const res = await fetch(`/api/deps?repoId=${repoId}`);
+    return (await res.json()) as DepsDetail;
+  }
+
+  async function fetchScanHistory(repoId: string) {
+    const res = await fetch(`/api/history?repoId=${repoId}&limit=30`);
+    const data = (await res.json()) as { history: ScanHistoryPoint[] };
+    return data.history ?? [];
+  }
 
   const filteredRepos = useMemo(() => {
-    setRepoPage(1);
     let list = repos;
     if (search) {
       const q = search.toLowerCase();
@@ -232,7 +311,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleCveScan(repo: RepoItem) {
     setScanning(true);
-    setSelectedRepo(repo);
+    setSelectedRepoId(repo.id);
     setScanDetail(null);
     setDependabotDisabled(false);
     setActiveTab('cve');
@@ -247,8 +326,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       if (data.dependabotDisabled) {
         setDependabotDisabled(true);
       } else {
-        await loadScanDetail(repo.id);
-        await loadScanHistory(repo.id);
+        const requestId = ++detailRequestRef.current;
+        const [scan, history] = await Promise.all([
+          fetchScanDetail(repo.id),
+          fetchScanHistory(repo.id),
+        ]);
+        applyScanSummary(repo.id, scan);
+        if (detailRequestRef.current === requestId) {
+          setScanDetail(scan);
+          setScanHistory(history);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -278,6 +365,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleLicenseScan(repo: RepoItem) {
     setScanningLicense(true);
+    setSelectedRepoId(repo.id);
     setActiveTab('license');
     try {
       await fetch('/api/license', {
@@ -285,7 +373,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId: repo.id }),
       });
-      await loadLicenseDetail(repo.id);
+      const detail = await fetchLicenseDetail(repo.id);
+      applyLastScannedAt(repo.id, detail.scannedAt);
+      setLicenseDetail(toVisibleLicenseDetail(detail));
     } catch (err) {
       console.error(err);
     } finally {
@@ -295,6 +385,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleDepsScan(repo: RepoItem) {
     setScanningDeps(true);
+    setSelectedRepoId(repo.id);
     setActiveTab('deps');
     try {
       await fetch('/api/deps', {
@@ -302,45 +393,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId: repo.id }),
       });
-      await loadDepsDetail(repo.id);
+      const detail = await fetchDepsDetail(repo.id);
+      applyLastScannedAt(repo.id, detail.scannedAt);
+      setDepsDetail(toVisibleDepsDetail(detail));
     } catch (err) {
       console.error(err);
     } finally {
       setScanningDeps(false);
-    }
-  }
-
-  async function loadScanDetail(repoId: string) {
-    setLoadingDetail(true);
-    try {
-      const res = await fetch(`/api/scan?repoId=${repoId}`);
-      const data = (await res.json()) as { scan: ScanDetail | null };
-      setScanDetail(data.scan);
-    } finally {
-      setLoadingDetail(false);
-    }
-  }
-
-  async function loadLicenseDetail(repoId: string) {
-    const res = await fetch(`/api/license?repoId=${repoId}`);
-    const data = (await res.json()) as LicenseDetail;
-    setLicenseDetail(data.licenses?.length > 0 || data.unsupportedEcosystem ? data : null);
-  }
-
-  async function loadDepsDetail(repoId: string) {
-    const res = await fetch(`/api/deps?repoId=${repoId}`);
-    const data = (await res.json()) as DepsDetail;
-    setDepsDetail(data.dependencies?.length > 0 || data.unsupportedEcosystem ? data : null);
-  }
-
-  async function loadScanHistory(repoId: string) {
-    setLoadingHistory(true);
-    try {
-      const res = await fetch(`/api/history?repoId=${repoId}&limit=30`);
-      const data = (await res.json()) as { history: ScanHistoryPoint[] };
-      setScanHistory(data.history ?? []);
-    } finally {
-      setLoadingHistory(false);
     }
   }
 
@@ -420,11 +479,22 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       const repo = repos[i];
 
       try {
-        await fetch('/api/scan', {
+        const cveRes = await fetch('/api/scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        if (cveRes.ok) {
+          const cveData = (await cveRes.json()) as { dependabotDisabled?: boolean };
+          if (!cveData.dependabotDisabled) {
+            const scan = await fetchScanDetail(repo.id);
+            applyScanSummary(repo.id, scan);
+            if (selectedRepoIdRef.current === repo.id) {
+              setScanDetail(scan);
+              setScanHistory(await fetchScanHistory(repo.id));
+            }
+          }
+        }
 
         if (scanAllCancelRef.current) break;
 
@@ -433,6 +503,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        if (selectedRepoIdRef.current === repo.id) {
+          const license = await fetchLicenseDetail(repo.id);
+          applyLastScannedAt(repo.id, license.scannedAt);
+          setLicenseDetail(toVisibleLicenseDetail(license));
+        }
 
         if (scanAllCancelRef.current) break;
 
@@ -441,13 +516,17 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        const deps = await fetchDepsDetail(repo.id);
+        applyLastScannedAt(repo.id, deps.scannedAt);
+        if (selectedRepoIdRef.current === repo.id) {
+          setDepsDetail(toVisibleDepsDetail(deps));
+        }
       } catch (err) {
         console.error(`Scan failed for ${repo.fullName}:`, err);
       }
     }
 
     setScanAllRunning(false);
-    window.location.reload();
   }
 
   function handleCancelScanAll() {
@@ -455,20 +534,39 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   }
 
   async function handleSelectRepo(repo: RepoItem) {
-    setSelectedRepo(repo);
+    const requestId = ++detailRequestRef.current;
+    setSelectedRepoId(repo.id);
     setScanDetail(null);
     setLicenseDetail(null);
     setDepsDetail(null);
     setScanHistory([]);
     setDependabotDisabled(false);
     setSbomError(null);
-    if (repo.latestScan) {
-      await Promise.all([
-        loadScanDetail(repo.id),
-        loadLicenseDetail(repo.id),
-        loadDepsDetail(repo.id),
-        loadScanHistory(repo.id),
+    setLoadingDetail(true);
+    setLoadingHistory(true);
+    try {
+      const [scan, license, deps, history] = await Promise.all([
+        fetchScanDetail(repo.id),
+        fetchLicenseDetail(repo.id),
+        fetchDepsDetail(repo.id),
+        fetchScanHistory(repo.id),
       ]);
+
+      applyScanSummary(repo.id, scan);
+      applyLastScannedAt(repo.id, license.scannedAt);
+      applyLastScannedAt(repo.id, deps.scannedAt);
+
+      if (detailRequestRef.current !== requestId) return;
+
+      setScanDetail(scan);
+      setLicenseDetail(toVisibleLicenseDetail(license));
+      setDepsDetail(toVisibleDepsDetail(deps));
+      setScanHistory(history);
+    } finally {
+      if (detailRequestRef.current === requestId) {
+        setLoadingDetail(false);
+        setLoadingHistory(false);
+      }
     }
   }
 
@@ -606,7 +704,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
               <div className="sticky top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
                 {/* Mobile back button */}
                 <button
-                  onClick={() => setSelectedRepo(null)}
+                  onClick={() => setSelectedRepoId(null)}
                   className="md:hidden flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
                 >
                   <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
