@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/app/actions';
-import { useLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
+import { useLocale, LOCALE_LABELS } from '@/lib/i18n';
 
 interface AppShellProps {
   children: React.ReactNode;

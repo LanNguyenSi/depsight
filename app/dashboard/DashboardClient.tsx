@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
-import { useLocale, interpolate } from '@/lib/i18n';
+import { useLocale } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
@@ -133,7 +133,7 @@ const riskColor = (score: number) =>
 
 export function DashboardClient({ repos: initialRepos, initialRepoId }: DashboardClientProps) {
   const repos = initialRepos;
-  const { t, locale } = useLocale();
+  const { t } = useLocale();
 
   const TABS: { key: ActiveTab; label: string }[] = [
     { key: 'cve', label: t['dashboard.tab.cve'] },
@@ -333,7 +333,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         setSbomError(data.message ?? 'SBOM-Export fehlgeschlagen.');
       }
     }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
 
   async function handleSelectRepo(repo: RepoItem) {
     setSelectedRepo(repo);
