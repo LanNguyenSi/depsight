@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
 import { listPolicies } from '@/lib/policy/service';
-import { PolicyList } from '@/components/PolicyList';
+import { PoliciesClient } from './PoliciesClient';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,9 +23,5 @@ export default async function PoliciesPage() {
     createdAt: p.createdAt.toISOString(),
   }));
 
-  return (
-    <main className="max-w-3xl mx-auto px-4 py-8">
-      <PolicyList initialPolicies={serialized} />
-    </main>
-  );
+  return <PoliciesClient policies={serialized} />;
 }

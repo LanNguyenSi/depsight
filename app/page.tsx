@@ -9,20 +9,25 @@ export default async function HomePage() {
   if (session?.user) redirect('/dashboard');
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="text-center max-w-md px-6">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">🔍 depsight</h1>
-        <p className="text-lg text-gray-600 mb-2">
+    <main className="min-h-screen flex items-center justify-center">
+      <div className="text-center max-w-lg px-6">
+        <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center mx-auto mb-6">
+          <svg viewBox="0 0 24 24" className="w-7 h-7 text-white fill-current">
+            <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 2a8 8 0 110 16 8 8 0 010-16zm0 3a1 1 0 00-1 1v3.586l-2.707 2.707a1 1 0 001.414 1.414l3-3A1 1 0 0013 12V8a1 1 0 00-1-1z" />
+          </svg>
+        </div>
+        <h1 className="text-3xl font-bold text-white mb-3">depsight</h1>
+        <p className="text-base text-gray-400 mb-1">
           Developer Security Dashboard
         </p>
-        <p className="text-sm text-gray-500 mb-8">
-          CVE-Scanning • Lizenz-Compliance • Dependency Health
+        <p className="text-sm text-gray-500 mb-10">
+          CVE-Scanning &middot; Lizenz-Compliance &middot; Dependency Health
         </p>
         <Link
           href="/login"
-          className="inline-flex items-center gap-2 px-6 py-3 bg-gray-900 text-white font-medium rounded-lg hover:bg-gray-800 transition-colors"
+          className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-500 transition-colors"
         >
-          Mit GitHub anmelden
+          Anmelden
         </Link>
       </div>
     </main>

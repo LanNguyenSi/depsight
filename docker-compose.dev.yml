@@ -11,10 +11,16 @@ services:
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://dev:dev@db:5432/depsight_dev
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=dev-secret-change-in-production
+      - JWT_SECRET=dev-jwt-secret-change-in-production
+    env_file:
+      - path: .env
+        required: false
     depends_on:
       db:
         condition: service_healthy
-    command: npm run dev
+
   db:
     image: postgres:16-alpine
     environment:
@@ -30,5 +36,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
 volumes:
   postgres_data:
