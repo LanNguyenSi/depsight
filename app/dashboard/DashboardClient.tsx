@@ -143,7 +143,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     { key: 'license', label: t['dashboard.tab.license'] },
     { key: 'deps', label: t['dashboard.tab.deps'] },
     { key: 'history', label: t['dashboard.tab.history'] },
-    { key: 'ci', label: 'CI Health' },
+    { key: 'ci', label: t['dashboard.tab.ci'] },
   ];
   const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(

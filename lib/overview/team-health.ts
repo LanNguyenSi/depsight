@@ -132,12 +132,21 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
     }
   }
 
+  // Fetch CI penalties for all repos in parallel (graceful — returns 0 if no CI data)
+  const ciPenalties = await Promise.all(
+    repos.map((repo) => getCIPenalty(repo.fullName))
+  );
+  const ciPenaltyByRepoId = new Map<string, number>(
+    repos.map((repo, i) => [repo.id, ciPenalties[i]])
+  );
+
   const summaries: RepoHealthSummary[] = repos.map((repo) => {
     const cveScan = cveScansByRepo.get(repo.id);
     const licenseScan = licenseScansByRepo.get(repo.id);
     const depsScan = depsScansByRepo.get(repo.id);
     const outdated = depsScan ? (outdatedByScanId.get(depsScan.scanId) ?? 0) : 0;
     const totalDeps = depsScan?.depCount ?? 0;
+    const ciPenalty = ciPenaltyByRepoId.get(repo.id) ?? 0;
 
     const summary: RepoHealthSummary = {
       repoId: repo.id,
@@ -157,10 +166,7 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
       totalDeps,
       healthScore: 0,
     };
-    // CI penalty: calculated from workflow data if available
-    // (async data not available in this sync loop — penalty applied as 0 for now;
-    //  can be enriched in a separate call if CI data is present)
-    summary.healthScore = calcHealthScore(summary, 0);
+    summary.healthScore = calcHealthScore(summary, ciPenalty);
     return summary;
   });
 
