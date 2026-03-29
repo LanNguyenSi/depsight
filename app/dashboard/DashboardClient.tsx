@@ -649,6 +649,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         if (selectedRepoIdRef.current === repo.id) {
           setDepsDetail(toVisibleDepsDetail(deps));
         }
+
+        // Fire-and-forget CI sync — doesn't block scan flow
+        void fetch('/api/ci/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        }).catch(() => { /* CI sync failure is non-fatal */ });
+
       } catch (err) {
         console.error(`Scan failed for ${repo.fullName}:`, err);
       }
