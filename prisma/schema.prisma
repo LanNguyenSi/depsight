@@ -46,6 +46,7 @@ model Repo {
   updatedAt     DateTime  @updatedAt
 
   scans         Scan[]
+  workflows     Workflow[]
 
   @@unique([userId, githubId])
   @@index([userId])
@@ -221,4 +222,67 @@ model SlackConfig {
   enabled       Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// CI Insights Models
+model Workflow {
+  id         String        @id @default(cuid())
+  repoId     String
+  repo       Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  githubId   Int
+  name       String
+  path       String
+  state      String
+  runs       WorkflowRun[]
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@unique([repoId, githubId])
+  @@index([repoId])
+}
+
+model WorkflowRun {
+  id            String   @id @default(cuid())
+  workflowId    String
+  workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  githubRunId   BigInt   @unique
+  runNumber     Int
+  event         String
+  status        String
+  conclusion    String?
+  headBranch    String?
+  headSha       String?
+  headCommitMsg String?  @db.Text
+  runStartedAt  DateTime?
+  runCreatedAt  DateTime
+  runUpdatedAt  DateTime
+  durationMs    Int?
+  jobs          JobRun[]
+  createdAt     DateTime @default(now())
+
+  @@index([workflowId])
+  @@index([headBranch])
+  @@index([runCreatedAt])
+  @@index([conclusion])
+}
+
+model JobRun {
+  id            String      @id @default(cuid())
+  workflowRunId String
+  workflowRun   WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  githubJobId   BigInt      @unique
+  name          String
+  status        String
+  conclusion    String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  durationMs    Int?
+  runnerName    String?
+  steps         Json?
+  createdAt     DateTime    @default(now())
+
+  @@index([workflowRunId])
+  @@index([name])
+  @@index([conclusion])
+  @@index([startedAt])
 }

@@ -39,15 +39,19 @@ export interface TeamHealthOverview {
   mostOutdated: RepoHealthSummary[];
 }
 
-function calcHealthScore(repo: Pick<RepoHealthSummary, 'riskScore' | 'licenseIssues' | 'outdatedDeps' | 'totalDeps'>): number {
-  // Health = inverse risk + license health + dep freshness
+function calcHealthScore(
+  repo: Pick<RepoHealthSummary, 'riskScore' | 'licenseIssues' | 'outdatedDeps' | 'totalDeps'>,
+  ciPenalty: number = 0
+): number {
+  // Health = inverse risk + license health + dep freshness + CI health
   const riskPenalty = repo.riskScore; // 0-100, lower risk = higher health
   const licensePenalty = Math.min(repo.licenseIssues * 5, 20); // max 20 points penalty
   const depPenalty = repo.totalDeps > 0
     ? Math.min((repo.outdatedDeps / repo.totalDeps) * 30, 30) // max 30 points penalty
     : 0;
 
-  const raw = 100 - riskPenalty * 0.5 - licensePenalty - depPenalty;
+  // ciPenalty: fail rate > 20% = -10, flaky jobs = -5 each (max -20), build P95 > 15min = -5
+  const raw = 100 - riskPenalty * 0.5 - licensePenalty - depPenalty - ciPenalty;
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
@@ -153,7 +157,10 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
       totalDeps,
       healthScore: 0,
     };
-    summary.healthScore = calcHealthScore(summary);
+    // CI penalty: calculated from workflow data if available
+    // (async data not available in this sync loop — penalty applied as 0 for now;
+    //  can be enriched in a separate call if CI data is present)
+    summary.healthScore = calcHealthScore(summary, 0);
     return summary;
   });
 
@@ -187,4 +194,73 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
     .slice(0, 5);
 
   return { repos: summaries, aggregate, topRiskyRepos, mostOutdated };
+}
+
+/**
+ * Calculate CI health penalty for team health score.
+ * - Fail rate > 20% → -10 points
+ * - Each flaky job → -5 points (max -20)
+ * - Build P95 > 15min → -5 points
+ */
+export async function getCIPenalty(repoFullName: string): Promise<number> {
+  try {
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const repo = await prisma.repo.findFirst({
+      where: { fullName: repoFullName },
+      include: {
+        workflows: {
+          include: {
+            runs: {
+              where: { runCreatedAt: { gte: since30d }, status: 'completed' },
+              select: { conclusion: true, durationMs: true, jobs: { select: { name: true, conclusion: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    if (!repo || !repo.workflows.length) return 0;
+
+    let totalRuns = 0;
+    let failedRuns = 0;
+    const allP95s: number[] = [];
+    const jobFailMap = new Map<string, { total: number; failed: number }>();
+
+    const FAILURE_CONCLUSIONS = ['failure', 'timed_out', 'action_required'];
+
+    for (const wf of repo.workflows) {
+      const durations = wf.runs.map((r) => r.durationMs).filter((d): d is number => d != null).sort((a, b) => a - b);
+      if (durations.length > 0) {
+        const p95idx = Math.ceil(0.95 * durations.length) - 1;
+        allP95s.push(durations[Math.max(0, p95idx)]);
+      }
+      for (const run of wf.runs) {
+        totalRuns++;
+        if (run.conclusion && FAILURE_CONCLUSIONS.includes(run.conclusion)) failedRuns++;
+        for (const job of run.jobs) {
+          if (!job.conclusion) continue;
+          const entry = jobFailMap.get(job.name) ?? { total: 0, failed: 0 };
+          entry.total++;
+          if (FAILURE_CONCLUSIONS.includes(job.conclusion)) entry.failed++;
+          jobFailMap.set(job.name, entry);
+        }
+      }
+    }
+
+    let penalty = 0;
+    const failRate = totalRuns > 0 ? failedRuns / totalRuns : 0;
+    if (failRate > 0.2) penalty += 10;
+
+    const flakyCount = [...jobFailMap.values()].filter(
+      (j) => j.total >= 5 && j.failed / j.total > 0.2
+    ).length;
+    penalty += Math.min(flakyCount * 5, 20);
+
+    const avgP95 = allP95s.length > 0 ? allP95s.reduce((a, b) => a + b, 0) / allP95s.length : 0;
+    if (avgP95 > 15 * 60 * 1000) penalty += 5;
+
+    return penalty;
+  } catch {
+    return 0; // CI data not available — no penalty
+  }
 }

@@ -10,6 +10,7 @@ import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
+import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
 
 interface ScanSummary {
   id: string;
@@ -117,7 +118,7 @@ interface DepsDetail {
   unsupportedEcosystem?: UnsupportedEcosystem;
 }
 
-type ActiveTab = 'cve' | 'license' | 'deps' | 'history';
+type ActiveTab = 'cve' | 'license' | 'deps' | 'history' | 'ci';
 type SortKey = 'name' | 'risk' | 'language';
 
 interface DashboardClientProps {
@@ -142,6 +143,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     { key: 'license', label: t['dashboard.tab.license'] },
     { key: 'deps', label: t['dashboard.tab.deps'] },
     { key: 'history', label: t['dashboard.tab.history'] },
+    { key: 'ci', label: 'CI Health' },
   ];
   const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
@@ -1006,6 +1008,10 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       </p>
                     )}
                   </>
+                )}
+
+                {activeTab === 'ci' && selectedRepo && (
+                  <CIHealthTab repoId={selectedRepo.id} />
                 )}
               </div>
             </div>
