@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
-import { useLocale } from '@/lib/i18n';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
@@ -9,6 +9,8 @@ import { AdvisoryList } from '@/components/AdvisoryList';
 import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
+import { Pagination, usePagination } from '@/components/Pagination';
+import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
 
 interface ScanSummary {
   id: string;
@@ -63,6 +65,7 @@ interface UnsupportedEcosystem {
 
 interface LicenseDetail {
   scanId: string;
+  scannedAt?: string;
   licenseCount: number;
   conflictCount: number;
   summary: Record<string, number>;
@@ -109,12 +112,13 @@ interface DepEntry {
 
 interface DepsDetail {
   scanId: string;
+  scannedAt?: string;
   summary: DepSummary;
   dependencies: DepEntry[];
   unsupportedEcosystem?: UnsupportedEcosystem;
 }
 
-type ActiveTab = 'cve' | 'license' | 'deps' | 'history';
+type ActiveTab = 'cve' | 'license' | 'deps' | 'history' | 'ci';
 type SortKey = 'name' | 'risk' | 'language';
 
 interface DashboardClientProps {
@@ -132,7 +136,6 @@ const riskColor = (score: number) =>
         : 'text-emerald-400';
 
 export function DashboardClient({ repos: initialRepos, initialRepoId }: DashboardClientProps) {
-  const repos = initialRepos;
   const { t } = useLocale();
 
   const TABS: { key: ActiveTab; label: string }[] = [
@@ -140,9 +143,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     { key: 'license', label: t['dashboard.tab.license'] },
     { key: 'deps', label: t['dashboard.tab.deps'] },
     { key: 'history', label: t['dashboard.tab.history'] },
+    { key: 'ci', label: t['dashboard.tab.ci'] },
   ];
-  const [selectedRepo, setSelectedRepo] = useState<RepoItem | null>(
-    initialRepoId ? repos.find((r) => r.id === initialRepoId) ?? null : null,
+  const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
+    initialRepoId ? initialRepos.find((r) => r.id === initialRepoId)?.id ?? null : null,
   );
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
   const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
@@ -159,10 +164,169 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   const [enablingDependabot, setEnablingDependabot] = useState(false);
 
   const [sbomError, setSbomError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportingBundle, setExportingBundle] = useState(false);
 
-  // Filter & sort
+  // Actions dropdown
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
+        setActionsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [actionsOpen]);
+
+  // Scan all repos
+  const [scanAllRunning, setScanAllRunning] = useState(false);
+  const [scanAllChecking, setScanAllChecking] = useState(false);
+  const [scanAllProgress, setScanAllProgress] = useState({ current: 0, total: 0 });
+  const scanAllCancelRef = useRef(false);
+
+  // Dependabot pre-check modal
+  const [dependabotModal, setDependabotModal] = useState<{
+    disabled: Array<{ repoId: string; fullName: string }>;
+    total: number;
+  } | null>(null);
+  const [enablingAll, setEnablingAll] = useState(false);
+
+  // Filter, sort & pagination
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('name');
+  const [repoPage, setRepoPage] = useState(1);
+  const REPO_PAGE_SIZE = 20;
+  const selectedRepo = repos.find((repo) => repo.id === selectedRepoId) ?? null;
+  const detailRequestRef = useRef(0);
+  const selectedRepoIdRef = useRef<string | null>(selectedRepoId);
+  const hydratedRepoIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setRepos(initialRepos);
+    setSelectedRepoId((current) => {
+      if (initialRepoId && initialRepos.some((repo) => repo.id === initialRepoId)) {
+        return initialRepoId;
+      }
+      if (current && initialRepos.some((repo) => repo.id === current)) {
+        return current;
+      }
+      return null;
+    });
+  }, [initialRepoId, initialRepos]);
+
+  useEffect(() => {
+    setRepoPage(1);
+  }, [search, sortBy]);
+
+  useEffect(() => {
+    selectedRepoIdRef.current = selectedRepoId;
+  }, [selectedRepoId]);
+
+  // Uses stable state setters and refs; keeping this callback stable avoids duplicate initial loads.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadRepoDetails = useCallback(async (repo: RepoItem) => {
+    const requestId = ++detailRequestRef.current;
+    setSelectedRepoId(repo.id);
+    setScanDetail(null);
+    setLicenseDetail(null);
+    setDepsDetail(null);
+    setScanHistory([]);
+    setDependabotDisabled(false);
+    setSbomError(null);
+    setExportError(null);
+    setLoadingDetail(true);
+    setLoadingHistory(true);
+    try {
+      const [scan, license, deps, history] = await Promise.all([
+        fetchScanDetail(repo.id),
+        fetchLicenseDetail(repo.id),
+        fetchDepsDetail(repo.id),
+        fetchScanHistory(repo.id),
+      ]);
+
+      applyScanSummary(repo.id, scan);
+      applyLastScannedAt(repo.id, license.scannedAt);
+      applyLastScannedAt(repo.id, deps.scannedAt);
+
+      if (detailRequestRef.current !== requestId) return;
+
+      setScanDetail(scan);
+      setLicenseDetail(toVisibleLicenseDetail(license));
+      setDepsDetail(toVisibleDepsDetail(deps));
+      setScanHistory(history);
+    } finally {
+      if (detailRequestRef.current === requestId) {
+        setLoadingDetail(false);
+        setLoadingHistory(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!initialRepoId || selectedRepoId !== initialRepoId) return;
+    const repo = repos.find((item) => item.id === initialRepoId);
+    if (!repo || hydratedRepoIdRef.current === repo.id) return;
+
+    hydratedRepoIdRef.current = repo.id;
+    void loadRepoDetails(repo);
+  }, [initialRepoId, loadRepoDetails, repos, selectedRepoId]);
+
+  function updateRepo(repoId: string, updater: (repo: RepoItem) => RepoItem) {
+    setRepos((current) => current.map((repo) => (repo.id === repoId ? updater(repo) : repo)));
+  }
+
+  function applyScanSummary(repoId: string, detail: ScanDetail | null) {
+    if (!detail) return;
+    updateRepo(repoId, (repo) => ({
+      ...repo,
+      lastScannedAt: detail.scannedAt,
+      latestScan: {
+        id: detail.id,
+        scannedAt: detail.scannedAt,
+        status: detail.status,
+        riskScore: detail.riskScore,
+        counts: detail.counts,
+      },
+    }));
+  }
+
+  function applyLastScannedAt(repoId: string, scannedAt?: string) {
+    if (!scannedAt) return;
+    updateRepo(repoId, (repo) => ({ ...repo, lastScannedAt: scannedAt }));
+  }
+
+  function toVisibleLicenseDetail(data: LicenseDetail): LicenseDetail | null {
+    return Boolean(data.scanId) || data.unsupportedEcosystem ? data : null;
+  }
+
+  function toVisibleDepsDetail(data: DepsDetail): DepsDetail | null {
+    return Boolean(data.scanId) || data.unsupportedEcosystem ? data : null;
+  }
+
+  async function fetchScanDetail(repoId: string) {
+    const res = await fetch(`/api/scan?repoId=${repoId}`);
+    const data = (await res.json()) as { scan: ScanDetail | null };
+    return data.scan;
+  }
+
+  async function fetchLicenseDetail(repoId: string) {
+    const res = await fetch(`/api/license?repoId=${repoId}`);
+    return (await res.json()) as LicenseDetail;
+  }
+
+  async function fetchDepsDetail(repoId: string) {
+    const res = await fetch(`/api/deps?repoId=${repoId}`);
+    return (await res.json()) as DepsDetail;
+  }
+
+  async function fetchScanHistory(repoId: string) {
+    const res = await fetch(`/api/history?repoId=${repoId}&limit=30`);
+    const data = (await res.json()) as { history: ScanHistoryPoint[] };
+    return data.history ?? [];
+  }
 
   const filteredRepos = useMemo(() => {
     let list = repos;
@@ -187,6 +351,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     });
   }, [repos, search, sortBy]);
 
+  const paginatedRepos = usePagination(filteredRepos, repoPage, REPO_PAGE_SIZE);
+
   async function handleSync() {
     setSyncing(true);
     try {
@@ -199,7 +365,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleCveScan(repo: RepoItem) {
     setScanning(true);
-    setSelectedRepo(repo);
+    setSelectedRepoId(repo.id);
     setScanDetail(null);
     setDependabotDisabled(false);
     setActiveTab('cve');
@@ -214,8 +380,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
       if (data.dependabotDisabled) {
         setDependabotDisabled(true);
       } else {
-        await loadScanDetail(repo.id);
-        await loadScanHistory(repo.id);
+        const requestId = ++detailRequestRef.current;
+        const [scan, history] = await Promise.all([
+          fetchScanDetail(repo.id),
+          fetchScanHistory(repo.id),
+        ]);
+        applyScanSummary(repo.id, scan);
+        if (detailRequestRef.current === requestId) {
+          setScanDetail(scan);
+          setScanHistory(history);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -245,6 +419,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleLicenseScan(repo: RepoItem) {
     setScanningLicense(true);
+    setSelectedRepoId(repo.id);
     setActiveTab('license');
     try {
       await fetch('/api/license', {
@@ -252,7 +427,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId: repo.id }),
       });
-      await loadLicenseDetail(repo.id);
+      const detail = await fetchLicenseDetail(repo.id);
+      applyLastScannedAt(repo.id, detail.scannedAt);
+      setLicenseDetail(toVisibleLicenseDetail(detail));
     } catch (err) {
       console.error(err);
     } finally {
@@ -262,6 +439,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
   async function handleDepsScan(repo: RepoItem) {
     setScanningDeps(true);
+    setSelectedRepoId(repo.id);
     setActiveTab('deps');
     try {
       await fetch('/api/deps', {
@@ -269,7 +447,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId: repo.id }),
       });
-      await loadDepsDetail(repo.id);
+      const detail = await fetchDepsDetail(repo.id);
+      applyLastScannedAt(repo.id, detail.scannedAt);
+      setDepsDetail(toVisibleDepsDetail(detail));
     } catch (err) {
       console.error(err);
     } finally {
@@ -277,42 +457,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     }
   }
 
-  async function loadScanDetail(repoId: string) {
-    setLoadingDetail(true);
-    try {
-      const res = await fetch(`/api/scan?repoId=${repoId}`);
-      const data = (await res.json()) as { scan: ScanDetail | null };
-      setScanDetail(data.scan);
-    } finally {
-      setLoadingDetail(false);
-    }
-  }
-
-  async function loadLicenseDetail(repoId: string) {
-    const res = await fetch(`/api/license?repoId=${repoId}`);
-    const data = (await res.json()) as LicenseDetail;
-    setLicenseDetail(data.licenses?.length > 0 || data.unsupportedEcosystem ? data : null);
-  }
-
-  async function loadDepsDetail(repoId: string) {
-    const res = await fetch(`/api/deps?repoId=${repoId}`);
-    const data = (await res.json()) as DepsDetail;
-    setDepsDetail(data.dependencies?.length > 0 || data.unsupportedEcosystem ? data : null);
-  }
-
-  async function loadScanHistory(repoId: string) {
-    setLoadingHistory(true);
-    try {
-      const res = await fetch(`/api/history?repoId=${repoId}&limit=30`);
-      const data = (await res.json()) as { history: ScanHistoryPoint[] };
-      setScanHistory(data.history ?? []);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }
-
   const handleSbomDownload = useCallback(async (repo: RepoItem) => {
     setSbomError(null);
+    setExportError(null);
     const res = await fetch(`/api/sbom?repoId=${repo.id}`);
     if (res.ok) {
       const blob = await res.blob();
@@ -336,22 +483,187 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t]);
 
-  async function handleSelectRepo(repo: RepoItem) {
-    setSelectedRepo(repo);
-    setScanDetail(null);
-    setLicenseDetail(null);
-    setDepsDetail(null);
-    setScanHistory([]);
-    setDependabotDisabled(false);
+  const handleBundleExport = useCallback(async (repo: RepoItem) => {
+    const scanLabels = {
+      cve: t['dashboard.export.scan.cve'],
+      license: t['dashboard.export.scan.license'],
+      deps: t['dashboard.export.scan.deps'],
+    } as const;
+
     setSbomError(null);
-    if (repo.latestScan) {
-      await Promise.all([
-        loadScanDetail(repo.id),
-        loadLicenseDetail(repo.id),
-        loadDepsDetail(repo.id),
-        loadScanHistory(repo.id),
-      ]);
+    setExportError(null);
+    setExportingBundle(true);
+
+    try {
+      let reranMissingScans = false;
+      let response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id }),
+      });
+
+      if (response.status === 409) {
+        const payload = (await response.json()) as {
+          error?: string;
+          missingScans?: Array<keyof typeof scanLabels>;
+          message?: string;
+        };
+
+        if (payload.error === 'missing_scans' && payload.missingScans && payload.missingScans.length > 0) {
+          const labels = payload.missingScans.map((scan) => scanLabels[scan]).join(', ');
+          const shouldRun = window.confirm(interpolate(t['dashboard.export.confirmMissing'], { scans: labels }));
+          if (!shouldRun) return;
+
+          reranMissingScans = true;
+          response = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoId: repo.id, runMissingScans: true }),
+          });
+        } else {
+          setExportError(payload.message ?? t['dashboard.export.error']);
+          return;
+        }
+      }
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string; message?: string };
+        setExportError(payload.message ?? payload.error ?? t['dashboard.export.error']);
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? `${repo.name}-scan-export.zip`;
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      if (reranMissingScans) {
+        hydratedRepoIdRef.current = repo.id;
+        await loadRepoDetails(repo);
+      }
+    } catch (error) {
+      console.error(error);
+      setExportError(t['dashboard.export.error']);
+    } finally {
+      setExportingBundle(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t]);
+
+  async function handleScanAllPreCheck() {
+    setScanAllChecking(true);
+    try {
+      const res = await fetch('/api/dependabot/check');
+      if (!res.ok) { runScanAll(); return; }
+      const data = (await res.json()) as {
+        total: number;
+        disabledCount: number;
+        disabled: Array<{ repoId: string; fullName: string }>;
+      };
+      if (data.disabledCount > 0) {
+        setDependabotModal({ disabled: data.disabled, total: data.total });
+      } else {
+        runScanAll();
+      }
+    } catch {
+      runScanAll(); // fallback: scan anyway
+    } finally {
+      setScanAllChecking(false);
+    }
+  }
+
+  async function handleEnableAllAndScan() {
+    if (!dependabotModal) return;
+    setEnablingAll(true);
+    try {
+      await fetch('/api/dependabot/enable-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoIds: dependabotModal.disabled.map((r) => r.repoId) }),
+      });
+    } catch {
+      // continue scanning even if enable fails
+    }
+    setEnablingAll(false);
+    setDependabotModal(null);
+    runScanAll();
+  }
+
+  async function runScanAll() {
+    setDependabotModal(null);
+    scanAllCancelRef.current = false;
+    setScanAllRunning(true);
+    setScanAllProgress({ current: 0, total: repos.length });
+
+    for (let i = 0; i < repos.length; i++) {
+      if (scanAllCancelRef.current) break;
+      setScanAllProgress({ current: i + 1, total: repos.length });
+      const repo = repos[i];
+
+      try {
+        const cveRes = await fetch('/api/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+        if (cveRes.ok) {
+          const cveData = (await cveRes.json()) as { dependabotDisabled?: boolean };
+          if (!cveData.dependabotDisabled) {
+            const scan = await fetchScanDetail(repo.id);
+            applyScanSummary(repo.id, scan);
+            if (selectedRepoIdRef.current === repo.id) {
+              setScanDetail(scan);
+              setScanHistory(await fetchScanHistory(repo.id));
+            }
+          }
+        }
+
+        if (scanAllCancelRef.current) break;
+
+        await fetch('/api/license', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+        if (selectedRepoIdRef.current === repo.id) {
+          const license = await fetchLicenseDetail(repo.id);
+          applyLastScannedAt(repo.id, license.scannedAt);
+          setLicenseDetail(toVisibleLicenseDetail(license));
+        }
+
+        if (scanAllCancelRef.current) break;
+
+        await fetch('/api/deps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoId: repo.id }),
+        });
+        const deps = await fetchDepsDetail(repo.id);
+        applyLastScannedAt(repo.id, deps.scannedAt);
+        if (selectedRepoIdRef.current === repo.id) {
+          setDepsDetail(toVisibleDepsDetail(deps));
+        }
+      } catch (err) {
+        console.error(`Scan failed for ${repo.fullName}:`, err);
+      }
+    }
+
+    setScanAllRunning(false);
+  }
+
+  function handleCancelScanAll() {
+    scanAllCancelRef.current = true;
+  }
+
+  async function handleSelectRepo(repo: RepoItem) {
+    hydratedRepoIdRef.current = repo.id;
+    await loadRepoDetails(repo);
   }
 
   return (
@@ -363,13 +675,36 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
               {t['dashboard.repos']}
             </h2>
-            <button
-              onClick={() => void handleSync()}
-              disabled={syncing}
-              className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
-            >
-              {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
-            </button>
+            <div className="flex items-center gap-2">
+              {scanAllRunning ? (
+                <button
+                  onClick={handleCancelScanAll}
+                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  {interpolate(t['dashboard.scanAllProgress'], {
+                    current: scanAllProgress.current,
+                    total: scanAllProgress.total,
+                  })}{' '}
+                  <span className="text-gray-500">{t['dashboard.scanAllCancel']}</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => void handleScanAllPreCheck()}
+                  disabled={syncing || repos.length === 0 || scanAllChecking}
+                  className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
+                >
+                  {scanAllChecking ? t['dashboard.scanAllChecking'] : t['dashboard.scanAll']}
+                </button>
+              )}
+              <span className="text-gray-700">|</span>
+              <button
+                onClick={() => void handleSync()}
+                disabled={syncing || scanAllRunning}
+                className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
+              >
+                {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -412,7 +747,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                 {t['dashboard.noRepos']}
               </p>
             )}
-            {filteredRepos.map((repo) => (
+            {paginatedRepos.map((repo) => (
               <button
                 key={repo.id}
                 onClick={() => void handleSelectRepo(repo)}
@@ -439,6 +774,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
               </button>
             ))}
           </div>
+          {/* Sidebar pagination */}
+          <div className="pt-2">
+            <Pagination
+              page={repoPage}
+              pageSize={REPO_PAGE_SIZE}
+              total={filteredRepos.length}
+              onPageChange={setRepoPage}
+              compact
+            />
+          </div>
         </aside>
 
         {/* Detail panel */}
@@ -451,19 +796,21 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
 
           {selectedRepo && (
             <div className="space-y-4">
-              {/* Repo header + actions — sticky */}
-              <div className="sticky top-20 z-30 bg-gray-950 pb-3 -mt-2 pt-2">
+              {/* Repo header + actions dropdown — sticky */}
+              <div className="sticky top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
                 {/* Mobile back button */}
                 <button
-                  onClick={() => setSelectedRepo(null)}
+                  onClick={() => setSelectedRepoId(null)}
                   className="md:hidden flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
                 >
                   <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
                   {t['dashboard.repos']}
                 </button>
-                <div className="flex flex-col gap-3">
-                  <div>
-                    <h2 className="text-lg font-semibold text-white">{selectedRepo.fullName}</h2>
+
+                {/* Row 1: Repo name + Actions dropdown */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 className="text-lg font-semibold text-white truncate">{selectedRepo.fullName}</h2>
                     {selectedRepo.lastScannedAt && (
                       <p className="text-xs text-gray-500 mt-0.5">
                         {t['dashboard.lastScanned']}{' '}
@@ -471,40 +818,63 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="relative shrink-0" ref={actionsRef}>
                     <button
-                      onClick={() => void handleCveScan(selectedRepo)}
-                      disabled={scanning}
-                      className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                      onClick={() => setActionsOpen((v) => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 transition-colors"
                     >
-                      {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
+                      {t['dashboard.actions']}
+                      <svg viewBox="0 0 20 20" className={`w-3.5 h-3.5 fill-current transition-transform ${actionsOpen ? 'rotate-180' : ''}`}>
+                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
                     </button>
-                    <button
-                      onClick={() => void handleLicenseScan(selectedRepo)}
-                      disabled={scanningLicense}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
-                    >
-                      {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
-                    </button>
-                    <button
-                      onClick={() => void handleDepsScan(selectedRepo)}
-                      disabled={scanningDeps}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 disabled:opacity-50 transition-colors border border-gray-700"
-                    >
-                      {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
-                    </button>
-                    <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
-                    <button
-                      onClick={() => void handleSbomDownload(selectedRepo)}
-                      className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
-                    >
-                      SBOM
-                    </button>
+                    {actionsOpen && (
+                      <div className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleCveScan(selectedRepo); }}
+                          disabled={scanning}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
+                        </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleLicenseScan(selectedRepo); }}
+                          disabled={scanningLicense}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
+                        </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleDepsScan(selectedRepo); }}
+                          disabled={scanningDeps}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
+                        </button>
+                        <div className="border-t border-gray-800 my-1" />
+                        <div className="px-2 py-1">
+                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
+                        </div>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleSbomDownload(selectedRepo); }}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                        >
+                          {t['dashboard.actions.sbomExport']}
+                        </button>
+                        <button
+                          onClick={() => { setActionsOpen(false); void handleBundleExport(selectedRepo); }}
+                          disabled={exportingBundle}
+                          className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
+                        >
+                          {exportingBundle ? t['dashboard.export.preparing'] : t['dashboard.actions.bundleExport']}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Tabs */}
-                <div className="flex flex-wrap gap-1 border-b border-gray-800 mt-3">
+                {/* Row 2: Tabs — clear visual separation from actions */}
+                <div className="flex flex-wrap gap-1 border-b border-gray-800 mt-4">
                   {TABS.map(({ key, label }) => {
                     const count =
                       key === 'cve' ? scanDetail?.counts.total :
@@ -549,6 +919,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                   >
                     CVE Scan starten
                   </button>
+                </div>
+              )}
+
+              {exportError && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                  <p className="text-sm font-medium text-red-300">{exportError}</p>
                 </div>
               )}
 
@@ -633,11 +1009,49 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
                     )}
                   </>
                 )}
+
+                {activeTab === 'ci' && selectedRepo && (
+                  <CIHealthTab repoId={selectedRepo.id} />
+                )}
               </div>
             </div>
           )}
         </section>
       </div>
+      {/* Dependabot pre-check modal */}
+      {dependabotModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" style={{ animation: 'fadeIn 150ms ease-out' }}>
+          <div className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4" style={{ animation: 'scaleIn 150ms ease-out' }}>
+            <h3 className="text-base font-semibold text-white mb-2">{t['dashboard.dependabot.modalTitle']}</h3>
+            <p className="text-sm text-gray-400 mb-4">
+              {interpolate(t['dashboard.dependabot.modalDesc'], {
+                count: dependabotModal.disabled.length,
+                total: dependabotModal.total,
+              })}
+            </p>
+            <div className="max-h-32 overflow-y-auto mb-4 space-y-1">
+              {dependabotModal.disabled.map((r) => (
+                <div key={r.repoId} className="text-xs text-gray-500 font-mono truncate">{r.fullName}</div>
+              ))}
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setDependabotModal(null); runScanAll(); }}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                {t['dashboard.dependabot.skipScan']}
+              </button>
+              <button
+                onClick={() => void handleEnableAllAndScan()}
+                disabled={enablingAll}
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              >
+                {enablingAll ? t['dashboard.dependabot.enabling.progress'] : t['dashboard.dependabot.enableAll']}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

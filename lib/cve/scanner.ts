@@ -15,7 +15,7 @@ export async function scanRepository(
 ): Promise<ScanRepositoryResult> {
   // Get repo info from DB
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId },
+    where: { id: repoId, userId, tracked: true },
   });
 
   if (!repo) {

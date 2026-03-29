@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   // Verify user owns repo
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: session.user.id, tracked: true },
     select: { id: true, fullName: true },
   });
 
@@ -29,11 +30,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
   }
 
-  // Get completed scans ordered by date
+  // Get completed CVE scans only (not license/deps scans which have riskScore 0)
   const scans = await prisma.scan.findMany({
     where: {
       repoId,
       status: 'COMPLETED',
+      cvePayload: { not: Prisma.DbNull },
     },
     orderBy: { scannedAt: 'asc' },
     take: limit,

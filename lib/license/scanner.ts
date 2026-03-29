@@ -7,7 +7,7 @@ export async function scanLicenses(
   accessToken: string,
 ): Promise<{ scanId: string; licenseCount: number; conflictCount: number }> {
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId },
+    where: { id: repoId, userId, tracked: true },
   });
   if (!repo) throw new Error('Repository not found or access denied');
 

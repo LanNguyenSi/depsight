@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { DashboardClient } from './DashboardClient';
 
@@ -20,6 +21,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     orderBy: { updatedAt: 'desc' },
     include: {
       scans: {
+        where: { status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
         orderBy: { scannedAt: 'desc' },
         take: 1,
         select: {

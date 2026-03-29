@@ -51,6 +51,15 @@ const de = {
   'dashboard.sort.language': 'Sprache',
   'dashboard.sync': 'Sync',
   'dashboard.syncing': 'Sync...',
+  'dashboard.scanAll': 'Alle scannen',
+  'dashboard.scanAllProgress': '{current}/{total} Scanning...',
+  'dashboard.scanAllCancel': 'Abbrechen',
+  'dashboard.scanAllChecking': 'Prüfe...',
+  'dashboard.dependabot.modalTitle': 'Dependabot aktivieren',
+  'dashboard.dependabot.modalDesc': 'Bei {count} von {total} Repos ist Dependabot nicht aktiviert. CVE-Scans benötigen Dependabot Alerts.',
+  'dashboard.dependabot.enableAll': 'Für alle aktivieren & scannen',
+  'dashboard.dependabot.skipScan': 'Ohne Dependabot scannen',
+  'dashboard.dependabot.enabling.progress': 'Aktiviere Dependabot...',
   'dashboard.noMatches': 'Keine Treffer',
   'dashboard.noRepos': 'Keine Repos — bitte synchronisieren.',
   'dashboard.notScanned': 'Nicht gescannt',
@@ -61,6 +70,10 @@ const de = {
   'dashboard.tab.license': 'Lizenzen',
   'dashboard.tab.deps': 'Dependencies',
   'dashboard.tab.history': 'Verlauf',
+  'dashboard.tab.ci': 'CI Health',
+  'dashboard.actions': 'Aktionen',
+  'dashboard.actions.sbomExport': 'SBOM Export',
+  'dashboard.actions.bundleExport': 'Scan Export (.zip)',
   'dashboard.btn.cveScan': 'CVE Scan',
   'dashboard.btn.license': 'Lizenzen',
   'dashboard.btn.deps': 'Deps',
@@ -83,6 +96,12 @@ const de = {
   'dashboard.sbom.error': 'SBOM-Export fehlgeschlagen.',
   'dashboard.sbom.notice': 'Starte zuerst einen CVE-Scan, damit die SBOM Vulnerability-Daten enthält.',
   'dashboard.sbom.startScan': 'CVE Scan starten',
+  'dashboard.export.preparing': 'Export wird vorbereitet...',
+  'dashboard.export.error': 'Scan-Export fehlgeschlagen.',
+  'dashboard.export.confirmMissing': 'Für den Export fehlen noch diese Scans: {scans}. Sollen sie jetzt ausgeführt werden?',
+  'dashboard.export.scan.cve': 'CVE',
+  'dashboard.export.scan.license': 'Lizenzen',
+  'dashboard.export.scan.deps': 'Dependencies',
 
   // CVE / Advisory
   'advisory.empty': 'Keine CVEs gefunden',
@@ -210,6 +229,13 @@ const de = {
   'overview.col.outdated': 'Veraltet',
   'overview.col.scanned': 'Gescannt',
   'overview.noRepos': 'Keine Repos gefunden — bitte erst synchronisieren.',
+  'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
+  'overview.unscannedAction': 'Im Dashboard alle scannen',
+
+  // Pagination
+  'pagination.prev': 'Zurück',
+  'pagination.next': 'Weiter',
+  'pagination.info': '{from}–{to} von {total}',
 } as const;
 
 const en = {
@@ -256,6 +282,15 @@ const en = {
   'dashboard.sort.language': 'Language',
   'dashboard.sync': 'Sync',
   'dashboard.syncing': 'Syncing...',
+  'dashboard.scanAll': 'Scan all',
+  'dashboard.scanAllProgress': '{current}/{total} Scanning...',
+  'dashboard.scanAllCancel': 'Cancel',
+  'dashboard.scanAllChecking': 'Checking...',
+  'dashboard.dependabot.modalTitle': 'Enable Dependabot',
+  'dashboard.dependabot.modalDesc': '{count} of {total} repos do not have Dependabot enabled. CVE scans require Dependabot Alerts.',
+  'dashboard.dependabot.enableAll': 'Enable for all & scan',
+  'dashboard.dependabot.skipScan': 'Scan without Dependabot',
+  'dashboard.dependabot.enabling.progress': 'Enabling Dependabot...',
   'dashboard.noMatches': 'No matches',
   'dashboard.noRepos': 'No repos — please sync.',
   'dashboard.notScanned': 'Not scanned',
@@ -266,6 +301,10 @@ const en = {
   'dashboard.tab.license': 'Licenses',
   'dashboard.tab.deps': 'Dependencies',
   'dashboard.tab.history': 'History',
+  'dashboard.tab.ci': 'CI Health',
+  'dashboard.actions': 'Actions',
+  'dashboard.actions.sbomExport': 'SBOM Export',
+  'dashboard.actions.bundleExport': 'Scan Export (.zip)',
   'dashboard.btn.cveScan': 'CVE Scan',
   'dashboard.btn.license': 'Licenses',
   'dashboard.btn.deps': 'Deps',
@@ -288,6 +327,12 @@ const en = {
   'dashboard.sbom.error': 'SBOM export failed.',
   'dashboard.sbom.notice': 'Run a CVE scan first so the SBOM includes vulnerability data.',
   'dashboard.sbom.startScan': 'Start CVE Scan',
+  'dashboard.export.preparing': 'Preparing export...',
+  'dashboard.export.error': 'Scan export failed.',
+  'dashboard.export.confirmMissing': 'The following scans are missing for this export: {scans}. Run them now?',
+  'dashboard.export.scan.cve': 'CVE',
+  'dashboard.export.scan.license': 'Licenses',
+  'dashboard.export.scan.deps': 'Dependencies',
 
   // CVE / Advisory
   'advisory.empty': 'No CVEs found',
@@ -415,6 +460,13 @@ const en = {
   'overview.col.outdated': 'Outdated',
   'overview.col.scanned': 'Scanned',
   'overview.noRepos': 'No repos found — please sync first.',
+  'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
+  'overview.unscannedAction': 'Scan all in dashboard',
+
+  // Pagination
+  'pagination.prev': 'Previous',
+  'pagination.next': 'Next',
+  'pagination.info': '{from}–{to} of {total}',
 };
 
 export type TranslationKey = keyof typeof de;

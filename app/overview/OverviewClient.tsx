@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useLocale } from '@/lib/i18n';
+import Link from 'next/link';
+import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { TeamHealthCard } from '@/components/overview/TeamHealthCard';
 import { RepoComparisonTable } from '@/components/overview/RepoComparisonTable';
@@ -59,6 +60,23 @@ export function OverviewClient({ data }: OverviewClientProps) {
     <AppShell repoCount={aggregate.totalRepos}>
       <div className="space-y-6">
         <TeamHealthCard aggregate={aggregate} />
+
+        {aggregate.scannedRepos < aggregate.totalRepos && (
+          <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3 flex items-center justify-between">
+            <p className="text-sm text-blue-300">
+              {interpolate(t['overview.unscannedNotice'], {
+                count: aggregate.totalRepos - aggregate.scannedRepos,
+                total: aggregate.totalRepos,
+              })}
+            </p>
+            <Link
+              href="/dashboard"
+              className="shrink-0 text-xs font-medium px-3 py-1.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
+            >
+              {t['overview.unscannedAction']}
+            </Link>
+          </div>
+        )}
 
         {topRiskyRepos.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

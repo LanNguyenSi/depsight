@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { analyzeDepAge } from '@/lib/deps/age-checker';
+import { scanDependencies } from '@/lib/deps/scanner';
 
 export const dynamic = 'force-dynamic';
+
+function isDependencyScanCandidate(scan: {
+  cvePayload: unknown;
+  licensePayload: unknown;
+  dependencies: Array<unknown>;
+  advisories: Array<unknown>;
+  licenses: Array<unknown>;
+}): boolean {
+  if (scan.dependencies.length > 0) return true;
+  return scan.cvePayload === null
+    && scan.licensePayload === null
+    && scan.advisories.length === 0
+    && scan.licenses.length === 0;
+}
 
 // POST /api/deps — trigger dependency age analysis
 export async function POST(req: NextRequest) {
@@ -19,49 +33,15 @@ export async function POST(req: NextRequest) {
   }
 
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: session.user.id, tracked: true },
   });
   if (!repo) {
     return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
   }
 
   try {
-    const result = await analyzeDepAge(session.user.githubToken, repo.owner, repo.name);
-
-    // Always create a fresh scan record (avoid race conditions with CVE/license scans)
-    const scan = await prisma.scan.create({
-      data: { repoId, status: 'RUNNING' },
-    });
-
-    await prisma.$transaction(async (tx) => {
-
-      if (result.dependencies.length > 0) {
-        await tx.dependency.createMany({
-          data: result.dependencies.map((d) => ({
-            scanId: scan.id,
-            name: d.name,
-            installedVersion: d.installedVersion,
-            latestVersion: d.latestVersion,
-            publishedAt: d.publishedAt,
-            ageInDays: d.ageInDays >= 0 ? d.ageInDays : null,
-            status: d.status,
-            isDeprecated: d.isDeprecated,
-            updateAvailable: d.updateAvailable,
-            latestPublishedAt: d.latestPublishedAt,
-          })),
-        });
-      }
-
-      await tx.scan.update({
-        where: { id: scan.id },
-        data: { status: 'COMPLETED' },
-      });
-    });
-
-    return NextResponse.json({
-      scanId: scan.id,
-      summary: result.summary,
-    });
+    const result = await scanDependencies(session.user.id, repoId, session.user.githubToken);
+    return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Dependency analysis failed';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -81,21 +61,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
-  const scan = await prisma.scan.findFirst({
+  const scans = await prisma.scan.findMany({
     where: {
       repoId,
-      repo: { userId: session.user.id },
+      repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
     },
     orderBy: { scannedAt: 'desc' },
+    take: 20,
     include: {
       dependencies: {
         orderBy: [{ status: 'asc' }, { ageInDays: 'desc' }],
       },
+      advisories: {
+        select: { id: true },
+      },
+      licenses: {
+        select: { id: true },
+      },
     },
   });
+  const scan = scans.find(isDependencyScanCandidate) ?? null;
 
-  if (!scan || scan.dependencies.length === 0) {
+  if (!scan) {
     return NextResponse.json({ dependencies: [], summary: null });
   }
 

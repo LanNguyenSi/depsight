@@ -16,7 +16,7 @@ export async function scanPRAndComment(
 
   // Get DB repo
   const dbRepo = await prisma.repo.findFirst({
-    where: { owner, name: repo, userId },
+    where: { owner, name: repo, userId, tracked: true },
   });
 
   // Scan for current CVEs

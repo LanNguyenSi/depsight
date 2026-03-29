@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanLicenses } from '@/lib/license/scanner';
 
@@ -42,11 +43,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });
   }
 
+  // Find latest scan that actually has license data
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
-      repo: { userId: session.user.id },
+      repo: { userId: session.user.id, tracked: true },
       status: 'COMPLETED',
+      licensePayload: { not: Prisma.DbNull },
     },
     orderBy: { scannedAt: 'desc' },
     include: {

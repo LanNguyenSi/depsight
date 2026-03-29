@@ -1,6 +1,8 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useLocale } from '@/lib/i18n';
+import { Pagination, usePagination } from '@/components/Pagination';
 
 interface RepoHealthSummary {
   repoId: string;
@@ -22,8 +24,55 @@ interface RepoComparisonTableProps {
   onSelectRepo?: (repoId: string) => void;
 }
 
+type SortColumn = 'name' | 'health' | 'risk' | 'cves' | 'critical' | 'licenses' | 'outdated' | 'scanned';
+type SortDir = 'asc' | 'desc';
+
+const SORT_FNS: Record<SortColumn, (a: RepoHealthSummary, b: RepoHealthSummary) => number> = {
+  name: (a, b) => a.fullName.localeCompare(b.fullName),
+  health: (a, b) => a.healthScore - b.healthScore,
+  risk: (a, b) => a.riskScore - b.riskScore,
+  cves: (a, b) => a.cveCount - b.cveCount,
+  critical: (a, b) => a.criticalCount - b.criticalCount,
+  licenses: (a, b) => a.licenseIssues - b.licenseIssues,
+  outdated: (a, b) => {
+    const aPct = a.totalDeps > 0 ? a.outdatedDeps / a.totalDeps : 0;
+    const bPct = b.totalDeps > 0 ? b.outdatedDeps / b.totalDeps : 0;
+    return aPct - bPct;
+  },
+  scanned: (a, b) => {
+    const aTime = a.lastScannedAt ? new Date(a.lastScannedAt).getTime() : 0;
+    const bTime = b.lastScannedAt ? new Date(b.lastScannedAt).getTime() : 0;
+    return aTime - bTime;
+  },
+};
+
 export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTableProps) {
   const { t } = useLocale();
+  const [sortCol, setSortCol] = useState<SortColumn>('health');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const PAGE_SIZE = 20;
+  const [page, setPage] = useState(1);
+
+  const sorted = useMemo(() => {
+    const fn = SORT_FNS[sortCol];
+    const list = [...repos].sort(fn);
+    if (sortDir === 'desc') list.reverse();
+    return list;
+  }, [repos, sortCol, sortDir]);
+
+  const paginatedRepos = usePagination(sorted, page, PAGE_SIZE);
+
+  function handleSort(col: SortColumn) {
+    if (col === sortCol) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortCol(col);
+      // Default: descending for numeric columns, ascending for name
+      setSortDir(col === 'name' ? 'asc' : 'desc');
+    }
+    setPage(1);
+  }
+
   const healthColor = (score: number) =>
     score >= 70 ? 'text-emerald-400' : score >= 40 ? 'text-yellow-400' : 'text-red-400';
 
@@ -33,30 +82,42 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
   const outdatedPercent = (r: RepoHealthSummary) =>
     r.totalDeps > 0 ? Math.round((r.outdatedDeps / r.totalDeps) * 100) : 0;
 
-  const sorted = [...repos].sort((a, b) => a.healthScore - b.healthScore);
+  const columns: Array<{ key: SortColumn; label: string; align: 'left' | 'center' }> = [
+    { key: 'name', label: t['overview.col.repository'], align: 'left' },
+    { key: 'health', label: t['overview.col.health'], align: 'center' },
+    { key: 'risk', label: t['overview.col.risk'], align: 'center' },
+    { key: 'cves', label: t['overview.col.cves'], align: 'center' },
+    { key: 'critical', label: t['overview.col.critical'], align: 'center' },
+    { key: 'licenses', label: t['overview.col.licenses'], align: 'center' },
+    { key: 'outdated', label: t['overview.col.outdated'], align: 'center' },
+    { key: 'scanned', label: t['overview.col.scanned'], align: 'left' },
+  ];
 
   return (
     <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-800">
-        <h3 className="text-sm font-medium text-gray-300">{t['overview.repoComparison']}</h3>
-        <p className="text-[10px] text-gray-600 mt-0.5">{t['overview.sortedByHealth']}</p>
+        <h3 className="text-sm font-medium text-gray-400">{t['overview.repoComparison']}</h3>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>
-              <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.repository']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.health']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.risk']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.cves']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.critical']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.licenses']}</th>
-              <th className="text-center px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.outdated']}</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['overview.col.scanned']}</th>
+              {columns.map((col) => (
+                <th
+                  key={col.key}
+                  onClick={() => handleSort(col.key)}
+                  className={`${col.align === 'left' ? 'text-left' : 'text-center'} ${col.key === 'name' ? 'px-4' : 'px-3'} py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-300 transition-colors select-none`}
+                >
+                  {col.label}
+                  {sortCol === col.key && (
+                    <span className="ml-1 text-blue-400">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                  )}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
-            {sorted.map((repo) => (
+            {paginatedRepos.map((repo) => (
               <tr
                 key={repo.repoId}
                 onClick={() => onSelectRepo?.(repo.repoId)}
@@ -86,7 +147,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   {repo.licenseIssues > 0 ? (
-                    <span className="text-sm font-semibold text-orange-400 tabular-nums">{repo.licenseIssues}</span>
+                    <span className="text-sm font-semibold text-red-400 tabular-nums">{repo.licenseIssues}</span>
                   ) : (
                     <span className="text-sm text-gray-700">&ndash;</span>
                   )}
@@ -115,6 +176,16 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
           </div>
         )}
       </div>
+      {repos.length > PAGE_SIZE && (
+        <div className="px-4 py-3 border-t border-gray-800">
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={sorted.length}
+            onPageChange={setPage}
+          />
+        </div>
+      )}
     </div>
   );
 }
