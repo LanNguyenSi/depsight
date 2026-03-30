@@ -26,15 +26,21 @@ GitHub-connected developer security dashboard for tracking CVEs, license risks, 
 - Policy engine for custom CVE/license rules
 - PR integration with automatic CVE comments
 - Webhook and Slack notifications
-- **CI Health** — workflow fail rates, build times, flaky job detection (requires sync, see below)
+- **CI Health** — workflow fail rates, build times, flaky job detection (powered by [ci-insights](https://github.com/LanNguyenSi/ci-insights))
 
 ## CI Health Tab
 
-The **CI Health** tab shows GitHub Actions analytics (fail rates, build times, flaky jobs) for a repository.
+The **CI Health** tab shows GitHub Actions analytics (fail rates, build times, flaky jobs) powered by **[ci-insights](https://github.com/LanNguyenSi/ci-insights)** — a companion service that syncs and stores workflow data from GitHub Actions.
 
 > **The tab is only visible once CI data has been synced.**
 
-To load CI data for a repo, click **Sync** in the dashboard toolbar — or trigger a sync via the API:
+### Setup
+
+1. Deploy [ci-insights](https://github.com/LanNguyenSi/ci-insights) and configure your GitHub token
+2. Run a sync for the repository
+3. The CI Health tab will appear automatically in depsight once data is available
+
+To trigger a sync manually via the depsight API:
 
 ```bash
 curl -X POST https://<your-depsight>/api/ci/sync \
@@ -43,9 +49,7 @@ curl -X POST https://<your-depsight>/api/ci/sync \
   -d '{"repoId": "<repo-id>"}'
 ```
 
-After the first sync the tab appears automatically. Subsequent syncs keep the data up to date.
-
-> **Note:** CI Health uses GitHub Actions data directly — no external service required.
+> **depsight works fully without ci-insights** — the CI Health tab simply won't appear if no data has been synced.
 
 ## Quick Start
 
