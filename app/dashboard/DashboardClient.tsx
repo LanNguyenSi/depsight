@@ -1024,7 +1024,22 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                 )}
 
                 {activeTab === 'ci' && selectedRepo && (
-                  <CIHealthTab repoId={selectedRepo.id} />
+                  ciEnabled
+                    ? <CIHealthTab repoId={selectedRepo.id} />
+                    : (
+                      <div className="rounded-lg border border-gray-700/50 bg-gray-900/40 px-6 py-10 text-center space-y-3">
+                        <p className="text-sm font-medium text-gray-300">{t['dashboard.ci.noData']}</p>
+                        <p className="text-xs text-gray-500">{t['dashboard.ci.noData.hint']}</p>
+                        <button
+                          type="button"
+                          onClick={() => void handleSync()}
+                          disabled={syncing}
+                          className="mt-2 text-xs font-medium px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white transition-colors"
+                        >
+                          {syncing ? t['dashboard.syncing'] : t['dashboard.ci.noData.sync']}
+                        </button>
+                      </div>
+                    )
                 )}
               </div>
             </div>

@@ -26,6 +26,26 @@ GitHub-connected developer security dashboard for tracking CVEs, license risks, 
 - Policy engine for custom CVE/license rules
 - PR integration with automatic CVE comments
 - Webhook and Slack notifications
+- **CI Health** — workflow fail rates, build times, flaky job detection (requires sync, see below)
+
+## CI Health Tab
+
+The **CI Health** tab shows GitHub Actions analytics (fail rates, build times, flaky jobs) for a repository.
+
+> **The tab is only visible once CI data has been synced.**
+
+To load CI data for a repo, click **Sync** in the dashboard toolbar — or trigger a sync via the API:
+
+```bash
+curl -X POST https://<your-depsight>/api/ci/sync \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"repoId": "<repo-id>"}'
+```
+
+After the first sync the tab appears automatically. Subsequent syncs keep the data up to date.
+
+> **Note:** CI Health uses GitHub Actions data directly — no external service required.
 
 ## Quick Start
 
