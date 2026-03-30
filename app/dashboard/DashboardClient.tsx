@@ -124,6 +124,7 @@ type SortKey = 'name' | 'risk' | 'language';
 interface DashboardClientProps {
   repos: RepoItem[];
   initialRepoId?: string | null;
+  ciEnabledRepoIds?: string[];
 }
 
 const riskColor = (score: number) =>
@@ -135,20 +136,22 @@ const riskColor = (score: number) =>
         ? 'text-yellow-400'
         : 'text-emerald-400';
 
-export function DashboardClient({ repos: initialRepos, initialRepoId }: DashboardClientProps) {
+export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledRepoIds = [] }: DashboardClientProps) {
   const { t } = useLocale();
+  const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
+    initialRepoId ? initialRepos.find((r) => r.id === initialRepoId)?.id ?? null : null,
+  );
+
+  const ciEnabled = selectedRepoId ? ciEnabledRepoIds.includes(selectedRepoId) : false;
 
   const TABS: { key: ActiveTab; label: string }[] = [
     { key: 'cve', label: t['dashboard.tab.cve'] },
     { key: 'license', label: t['dashboard.tab.license'] },
     { key: 'deps', label: t['dashboard.tab.deps'] },
     { key: 'history', label: t['dashboard.tab.history'] },
-    { key: 'ci', label: t['dashboard.tab.ci'] },
+    ...(ciEnabled ? [{ key: 'ci' as ActiveTab, label: t['dashboard.tab.ci'] }] : []),
   ];
-  const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
-    initialRepoId ? initialRepos.find((r) => r.id === initialRepoId)?.id ?? null : null,
-  );
   const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null);
   const [licenseDetail, setLicenseDetail] = useState<LicenseDetail | null>(null);
   const [depsDetail, setDepsDetail] = useState<DepsDetail | null>(null);
@@ -239,6 +242,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId }: Dashboar
     setExportError(null);
     setLoadingDetail(true);
     setLoadingHistory(true);
+    // Reset CI tab if new repo has no CI data
+    setActiveTab((current) => (current === 'ci' && !ciEnabledRepoIds.includes(repo.id) ? 'cve' : current));
     try {
       const [scan, license, deps, history] = await Promise.all([
         fetchScanDetail(repo.id),
@@ -1091,3 +1096,4 @@ function EcosystemNotice({ label }: { label: string }) {
     </div>
   );
 }
+

@@ -39,9 +39,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     },
   });
 
+  const repoIds = repos.map((r) => r.id);
+
+  // Determine which repos have CI data ingested — only those show the CI Health tab
+  const ciRepos = repoIds.length > 0
+    ? await prisma.workflow.findMany({
+        where: { repoId: { in: repoIds } },
+        distinct: ['repoId'],
+        select: { repoId: true },
+      })
+    : [];
+  const ciEnabledRepoIds = ciRepos.map((w) => w.repoId);
+
   return (
     <DashboardClient
       initialRepoId={params.repo ?? null}
+      ciEnabledRepoIds={ciEnabledRepoIds}
       repos={repos.map((r) => ({
         id: r.id,
         fullName: r.fullName,
