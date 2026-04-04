@@ -36,9 +36,28 @@ prod: ## Build and start production containers
 prod-down: ## Stop production containers
 	docker compose down
 
+# ── Run commands inside dev container ───────────────────────────────
+
+DC_DEV = docker compose -f docker-compose.dev.yml
+RUN    = $(DC_DEV) run --rm app
+
+test: ## Run tests (in container)
+	$(RUN) npm test
+
+lint: ## Run linting and type-checking (in container)
+	$(RUN) sh -c 'npm run lint && npx tsc --noEmit'
+
+format: ## Format code (in container)
+	$(RUN) npx prettier --write .
+
+format-check: ## Check code formatting (in container)
+	$(RUN) npx prettier --check .
+
+ci: format-check lint test ## Run all CI checks (format, lint, test)
+
 # ── Local (without Docker) ──────────────────────────────────────────
 
-install: ## Install dependencies (local, no Docker)
+install: ## Install dependencies locally (no Docker)
 	npm ci
 	npx prisma generate
 
@@ -47,23 +66,8 @@ hooks: ## Set up Git pre-commit hooks (Husky + lint-staged)
 	cp .husky-pre-commit .husky/pre-commit
 	chmod +x .husky/pre-commit
 
-build: ## Build for production
-	npm run build
-
-test: ## Run tests
-	npm test
-
-lint: ## Run linting and type-checking
-	npm run lint
-	npm run type-check
-
-format: ## Format code
-	npm run format
-
-format-check: ## Check code formatting
-	npm run format:check
-
-ci: format-check lint test build ## Run all CI checks (format, lint, test, build)
+build: ## Build for production (in container)
+	$(RUN) npm run build
 
 clean: ## Remove build artifacts and dependencies
 	rm -rf node_modules .next dist build coverage
