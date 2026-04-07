@@ -1,8 +1,8 @@
 name: depsight
 health: /api/health
-compose_file: docker-compose.yml
+compose_file: docker-compose.traefik.yml
 pre_update:
-  - docker compose build --no-cache
+  - docker compose -f docker-compose.traefik.yml build --no-cache
 post_update:
-  - docker exec depsight-app-1 npx prisma db push --skip-generate
+  - docker compose -f docker-compose.traefik.yml exec app npx prisma db push --skip-generate
 rollback: true
