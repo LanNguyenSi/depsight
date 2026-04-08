@@ -5,5 +5,5 @@ compose_file: docker-compose.traefik.yml
 pre_update:
   - docker compose -f docker-compose.traefik.yml build --no-cache
 post_update:
-  - docker run --rm --network depsight_default -e HOME=/tmp -e DATABASE_URL=postgresql://depsight:depsight@db:5432/depsight -v /root/git/depsight/prisma:/app/prisma -w /app node:20-slim sh -c "apt-get update -qq && apt-get install -y -qq openssl >/dev/null 2>&1 && npx prisma@5.22.0 db push --skip-generate --schema=prisma/schema.prisma"
+  - docker run --rm --network traefik-public -e HOME=/tmp -e DATABASE_URL=postgresql://depsight:depsight@db:5432/depsight -v /root/git/depsight/prisma:/app/prisma -w /app node:20-slim sh -c "apt-get update -qq && apt-get install -y -qq openssl >/dev/null 2>&1 && npx prisma@5.22.0 db push --skip-generate --schema=prisma/schema.prisma"
 rollback: true
