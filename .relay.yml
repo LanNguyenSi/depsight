@@ -1,8 +1,9 @@
 name: depsight
 health: /api/health
+health_port: 3000
 compose_file: docker-compose.traefik.yml
 pre_update:
   - docker compose -f docker-compose.traefik.yml build --no-cache
 post_update:
-  - docker compose -f docker-compose.traefik.yml exec -e HOME=/tmp app npx prisma db push
+  - docker run --rm --network depsight_default -e HOME=/tmp -e DATABASE_URL=postgresql://depsight:depsight@db:5432/depsight -v /root/git/depsight/prisma:/app/prisma -w /app node:20-slim sh -c "npx prisma@5.22.0 db push --skip-generate --schema=prisma/schema.prisma"
 rollback: true
