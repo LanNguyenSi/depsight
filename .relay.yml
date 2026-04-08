@@ -4,5 +4,5 @@ compose_file: docker-compose.traefik.yml
 pre_update:
   - docker compose -f docker-compose.traefik.yml build --no-cache
 post_update:
-  - docker compose -f docker-compose.traefik.yml exec app npx prisma db push --skip-generate
+  - docker compose -f docker-compose.traefik.yml exec -e HOME=/tmp app npx prisma db push
 rollback: true
