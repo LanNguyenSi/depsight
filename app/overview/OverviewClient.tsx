@@ -53,6 +53,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
   const router = useRouter();
   const { t } = useLocale();
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   function navigateToRepo(repoId: string) {
     router.push(`/dashboard?repo=${repoId}`);
@@ -60,9 +61,17 @@ export function OverviewClient({ data }: OverviewClientProps) {
 
   async function handleSync() {
     setSyncing(true);
+    setSyncError(null);
     try {
-      await fetch('/api/repos/sync', { method: 'POST' });
+      const res = await fetch('/api/repos/sync', { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Sync failed' }));
+        setSyncError((data as { error?: string }).error ?? 'Sync failed');
+        return;
+      }
       window.location.reload();
+    } catch {
+      setSyncError('Network error');
     } finally {
       setSyncing(false);
     }
@@ -71,8 +80,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
   return (
     <AppShell repoCount={aggregate.totalRepos}>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-white">{t['overview.teamHealth']}</h1>
+        <div className="flex items-center justify-end">
           <button
             onClick={() => void handleSync()}
             disabled={syncing}
@@ -84,6 +92,12 @@ export function OverviewClient({ data }: OverviewClientProps) {
             {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
           </button>
         </div>
+
+        {syncError && (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">
+            {syncError}
+          </div>
+        )}
 
         <TeamHealthCard aggregate={aggregate} />
 
