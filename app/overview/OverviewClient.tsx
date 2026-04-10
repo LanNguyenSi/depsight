@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useLocale, interpolate } from '@/lib/i18n';
@@ -51,14 +52,53 @@ export function OverviewClient({ data }: OverviewClientProps) {
   const { aggregate, topRiskyRepos, mostOutdated, repos } = data;
   const router = useRouter();
   const { t } = useLocale();
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   function navigateToRepo(repoId: string) {
     router.push(`/dashboard?repo=${repoId}`);
   }
 
+  async function handleSync() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const res = await fetch('/api/repos/sync', { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Sync failed' }));
+        setSyncError((data as { error?: string }).error ?? 'Sync failed');
+        return;
+      }
+      window.location.reload();
+    } catch {
+      setSyncError('Network error');
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <AppShell repoCount={aggregate.totalRepos}>
       <div className="space-y-6">
+        <div className="flex items-center justify-end">
+          <button
+            onClick={() => void handleSync()}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 transition-colors"
+          >
+            <svg viewBox="0 0 16 16" className={`w-4 h-4 fill-current ${syncing ? 'animate-spin' : ''}`}>
+              <path d="M13.65 2.35a8 8 0 10.7 10.3l-1.5-.86a6 6 0 11-.52-7.72L10.5 6H15V1.5l-1.35.85z" />
+            </svg>
+            {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
+          </button>
+        </div>
+
+        {syncError && (
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">
+            {syncError}
+          </div>
+        )}
+
         <TeamHealthCard aggregate={aggregate} />
 
         {aggregate.scannedRepos < aggregate.totalRepos && (
