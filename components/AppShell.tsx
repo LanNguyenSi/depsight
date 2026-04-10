@@ -17,8 +17,8 @@ export function AppShell({ children, repoCount }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const NAV_ITEMS = [
-    { href: '/dashboard', label: t['nav.dashboard'] },
     { href: '/overview', label: t['nav.overview'] },
+    { href: '/dashboard', label: t['nav.dashboard'] },
     { href: '/policies', label: t['nav.policies'] },
   ];
 
@@ -27,7 +27,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
       <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-4 sm:gap-6">
-            <Link href="/dashboard" className="flex items-center gap-2">
+            <Link href="/overview" className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
                 <svg viewBox="0 0 16 16" className="w-4 h-4 text-white fill-current">
                   <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 1.5a5.5 5.5 0 110 11 5.5 5.5 0 010-11zM8 5a1 1 0 00-1 1v2.586l-1.707 1.707a1 1 0 001.414 1.414l2-2A1 1 0 009 9V6a1 1 0 00-1-1z" />

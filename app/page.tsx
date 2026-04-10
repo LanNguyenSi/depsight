@@ -8,7 +8,7 @@ import Link from 'next/link';
 
 export default async function HomePage() {
   const session = await auth();
-  if (session?.user) redirect('/dashboard');
+  if (session?.user) redirect('/overview');
 
   const cookieStore = await cookies();
   const locale = (cookieStore.get('locale')?.value as Locale) || 'de';

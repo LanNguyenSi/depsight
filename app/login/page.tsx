@@ -31,7 +31,7 @@ export default async function LoginPage() {
             <form
               action={async () => {
                 'use server';
-                await signIn('github', { redirectTo: '/dashboard' });
+                await signIn('github', { redirectTo: '/overview' });
               }}
             >
               <button
@@ -62,7 +62,7 @@ export default async function LoginPage() {
                 const username = formData.get('username') as string;
                 await signIn('dev-login', {
                   username: username || 'dev',
-                  redirectTo: '/dashboard',
+                  redirectTo: '/overview',
                 });
               }}
               className="space-y-3"
