@@ -10,7 +10,7 @@ GitHub-connected developer security dashboard for tracking CVEs, license risks, 
 - **Language:** TypeScript (strict mode)
 - **Database:** PostgreSQL 16 + Prisma ORM
 - **Styling:** Tailwind CSS 4
-- **Auth:** NextAuth v5 (GitHub OAuth + Dev Credentials)
+- **Auth:** NextAuth v5 beta (GitHub OAuth + Dev Credentials)
 - **Deployment:** Docker (multi-stage build)
 
 ## Features
@@ -26,6 +26,9 @@ GitHub-connected developer security dashboard for tracking CVEs, license risks, 
 - Policy engine for custom CVE/license rules
 - PR integration with automatic CVE comments
 - Webhook and Slack notifications
+- Dependabot integration (status check, enable per-repo, bulk enable across all repos)
+- Repository export (download as zip)
+- Health check endpoint
 - **CI Health** — workflow fail rates, build times, flaky job detection (powered by [ci-insights](https://github.com/LanNguyenSi/ci-insights))
 
 ## CI Health Tab
@@ -113,6 +116,32 @@ lib/
 prisma/             Database schema
 docker/             Docker entrypoints
 ```
+
+## API
+
+All endpoints require authentication via NextAuth session or Bearer token.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/scan` | Trigger CVE scan for a repository |
+| `POST` | `/api/license` | Run license compliance check |
+| `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
+| `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |
+| `GET` | `/api/export` | Download repository data as zip |
+| `POST` | `/api/repos/sync` | Sync repositories from GitHub |
+| `GET` | `/api/policies` | List policy rules |
+| `POST` | `/api/policies` | Create or update a policy rule |
+| `GET` | `/api/dependabot` | Check Dependabot status for a repository |
+| `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot across all repos |
+| `GET` | `/api/health` | Health check (returns service status) |
+
+## Roadmap
+
+- [ ] Improved CVE auto-triage and severity override rules
+- [ ] Scheduled scan support (cron-based rescans)
+- [ ] Expanded ecosystem coverage (Ruby, .NET)
+- [ ] Dashboard widgets and customizable views
+- [ ] Team-level access controls and role management
 
 ## License
 
