@@ -4,6 +4,12 @@ GitHub-connected developer security dashboard for tracking CVEs, license risks, 
 
 **Live Demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/)
 
+## Why depsight
+
+Dependency trees rot quietly. A CVE disclosed today against a transitive dependency you installed six months ago won't surface until something fails — or until a customer asks. depsight does continuous CVE, license, and staleness scanning across every repo a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a glance at a dashboard rather than an afternoon of manual audits.
+
+For the broader operational picture — fleet-wide repo health signals beyond security — see [agent-ops-dashboard](https://github.com/LanNguyenSi/agent-ops-dashboard), which complements depsight's security focus with a cross-repo ops view.
+
 ## Tech Stack
 
 - **Framework:** Next.js 15 (App Router)
