@@ -11,7 +11,7 @@ export async function getUserRepos(accessToken: string) {
 
   const repos = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
     visibility: 'all',
-    affiliation: 'owner,collaborator,organization_member',
+    affiliation: 'owner,organization_member',
     sort: 'updated',
     per_page: 100,
   });
