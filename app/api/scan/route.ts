@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanRepository } from '@/lib/cve/scanner';
@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic';
 
 // POST /api/scan — trigger a CVE scan for a repository
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await scanRepository(session.user.id, repoId, session.user.githubToken);
+    const result = await scanRepository(user.id, repoId, user.githubToken);
     return NextResponse.json({
       scanId: result.scanId,
       status: 'completed',
@@ -35,8 +35,8 @@ export async function POST(req: NextRequest) {
 
 // GET /api/scan?repoId=xxx — get latest scan for a repo
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
-      repo: { userId: session.user.id, tracked: true },
+      repo: { userId: user.id, tracked: true },
       status: 'COMPLETED',
       cvePayload: { not: Prisma.DbNull },
     },

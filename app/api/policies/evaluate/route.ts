@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { evaluatePolicies } from '@/lib/policy/engine';
 
 export const dynamic = 'force-dynamic';
 
 // POST /api/policies/evaluate — evaluate policies against a scan
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const violations = await evaluatePolicies(session.user.id, scanId.trim());
+    const violations = await evaluatePolicies(user.id, scanId.trim());
     return NextResponse.json({ violations, count: violations.length });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Evaluation failed';

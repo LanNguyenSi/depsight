@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic';
 
 // GET /api/history?repoId=xxx&limit=30 — get scan history for a repo
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
 
   // Verify user owns repo
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id, tracked: true },
+    where: { id: repoId, userId: user.id, tracked: true },
     select: { id: true, fullName: true },
   });
 

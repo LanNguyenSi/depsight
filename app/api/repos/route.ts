@@ -1,21 +1,20 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { getUserRepos } from '@/lib/github';
 
 export async function GET() {
-  const session = await auth();
+  const user = await resolveRequestUser();
 
-  if (!session?.user) {
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const githubToken = session.user.githubToken;
-  if (!githubToken) {
+  if (!user.githubToken) {
     return NextResponse.json({ error: 'No GitHub token found' }, { status: 400 });
   }
 
   try {
-    const repos = await getUserRepos(githubToken);
+    const repos = await getUserRepos(user.githubToken);
     return NextResponse.json({ repos });
   } catch (error) {
     console.error('Failed to fetch repos:', error);

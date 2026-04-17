@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { getWorkflowFailRates } from '@/lib/ci/analytics/fail-rate';
 import { getWorkflowBuildTimes } from '@/lib/ci/analytics/build-times';
@@ -15,8 +15,8 @@ interface Props {
 
 // GET /api/ci/analytics/[repoId]?period=7&type=fail-rate|build-times|flaky|bottleneck
 export async function GET(req: NextRequest, { params }: Props) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, { params }: Props) {
 
   // Verify ownership
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id },
+    where: { id: repoId, userId: user.id },
     select: { fullName: true },
   });
   if (!repo) {
