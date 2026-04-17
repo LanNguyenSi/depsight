@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanLicenses } from '@/lib/license/scanner';
@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic';
 
 // POST /api/license — trigger license scan for a repo
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await scanLicenses(session.user.id, repoId, session.user.githubToken);
+    const result = await scanLicenses(user.id, repoId, user.githubToken);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'License scan failed';
@@ -31,8 +31,8 @@ export async function POST(req: NextRequest) {
 
 // GET /api/license?repoId=xxx — get license results for a repo
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
   const scan = await prisma.scan.findFirst({
     where: {
       repoId,
-      repo: { userId: session.user.id, tracked: true },
+      repo: { userId: user.id, tracked: true },
       status: 'COMPLETED',
       licensePayload: { not: Prisma.DbNull },
     },

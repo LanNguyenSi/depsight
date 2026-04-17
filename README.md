@@ -36,6 +36,7 @@ For the broader operational picture — fleet-wide repo health signals beyond se
 - Repository export (download as zip)
 - Health check endpoint
 - **CI Health** — workflow fail rates, build times, flaky job detection (powered by [ci-insights](https://github.com/LanNguyenSi/ci-insights))
+- **MCP server** — expose read-only queries (CVEs, licenses, deps, policies, CI analytics) to Claude and other agents via [`mcp/`](mcp/README.md)
 
 ## CI Health Tab
 

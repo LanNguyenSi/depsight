@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { scanDependencies } from '@/lib/deps/scanner';
 
@@ -21,8 +21,8 @@ function isDependencyScanCandidate(scan: {
 
 // POST /api/deps — trigger dependency age analysis
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -33,14 +33,14 @@ export async function POST(req: NextRequest) {
   }
 
   const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId: session.user.id, tracked: true },
+    where: { id: repoId, userId: user.id, tracked: true },
   });
   if (!repo) {
     return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
   }
 
   try {
-    const result = await scanDependencies(session.user.id, repoId, session.user.githubToken);
+    const result = await scanDependencies(user.id, repoId, user.githubToken);
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Dependency analysis failed';
@@ -50,8 +50,8 @@ export async function POST(req: NextRequest) {
 
 // GET /api/deps?repoId=xxx — get dependency age results
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
   const scans = await prisma.scan.findMany({
     where: {
       repoId,
-      repo: { userId: session.user.id, tracked: true },
+      repo: { userId: user.id, tracked: true },
       status: 'COMPLETED',
     },
     orderBy: { scannedAt: 'desc' },
