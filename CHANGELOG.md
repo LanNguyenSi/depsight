@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-04-17
+
+**Headline: Agents can now talk to depsight.** New `depsight-mcp`
+subpackage exposes the read API over MCP, with a service-token
+(`dsat_`) auth path that sits alongside the existing NextAuth session
+flow — so Claude and other agents can query overview / CVEs / license
+/ CI analytics without scraping the UI or impersonating a user.
+
+### Added
+
+- **`@opentriologue/depsight-mcp` server** (`mcp/`) — stdio MCP
+  server, npx-installable, zod + MCP SDK, vitest-covered. Mirrors the
+  `ops-mcp` layout. Read-only tools: `depsight_list_repos`,
+  `depsight_get_overview`, `depsight_get_cves` (filters by
+  `minSeverity` + `publishedAfter`), `depsight_get_license_report`,
+  `depsight_get_deps`, `depsight_get_history`,
+  `depsight_evaluate_policy` (pure, no state mutation),
+  `depsight_ci_analytics` (per-repo + cross-repo).
+- **Service-token auth path** — new `lib/auth-api.ts`
+  `resolveRequestUser()` helper. Tries NextAuth session first, then
+  `Authorization: Bearer dsat_<token>` against the existing
+  `ApiToken` Prisma model. Fails closed on non-`dsat_` prefixes,
+  respects `revokedAt`, and stamps `lastUsedAt` fire-and-forget.
+- **`scripts/mint-api-token.ts`** — CLI that mints a `dsat_` token
+  for a given `userId`, prints the raw token once, and stores only
+  the row. Redacts Prisma error details on failure.
+- **MCP docs** (`mcp/README.md`) — Claude Desktop config, smoke
+  test (real `tools/call` round-trip), token-minting procedure,
+  v1 scope notes.
+
+### Changed
+
+- 8 MCP-consumed routes refactored to use `resolveRequestUser()`
+  while preserving semantics for existing session callers:
+  `/api/overview`, `/api/repos`, `/api/scan`, `/api/deps`,
+  `/api/license`, `/api/history`, `/api/policies/evaluate`,
+  `/api/ci/analytics` (both variants).
+
+### Fixed
+
+- **GitHub repo filter** — `getUserRepos` no longer pulls in
+  repos the user is merely a collaborator on. Affiliation is now
+  restricted to `owner` + `organization_member`, so dashboard
+  counts and scans reflect repos the user actually owns.
+- **Root tsconfig excludes `mcp/` + `scripts/`** — the MCP
+  subpackage owns its own tsconfig and deps; `scripts/` runs via
+  `tsx`. The root Next.js `tsc --noEmit` was pulling their files
+  into the main type-check without their types, breaking CI.
+
 ## [0.1.0] - 2026-04-15
 
 **Headline: First tagged release of depsight — a GitHub-connected
