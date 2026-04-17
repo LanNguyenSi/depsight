@@ -1,6 +1,6 @@
 {
   "name": "@opentriologue/depsight-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for depsight — query CVE, license, dependency and CI data from Claude / other agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
