@@ -1,146 +1,43 @@
 # depsight
 
-GitHub-connected developer security dashboard for tracking CVEs, license risks, and dependency health across repositories.
+GitHub-connected security dashboard: CVEs, licenses, and dep health, self-hosted.
 
-**Live Demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/)
+**Live demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/). Dev Login is on the login page; no credentials needed to look around.
+
+<!-- TODO(hero): replace this comment with a hero screenshot of the dashboard, e.g. ![](docs/img/dashboard.png). The "tiny demo output" requirement currently leans on the Live Demo link instead. -->
+
+## Try it in 60 seconds
+
+```bash
+git clone https://github.com/LanNguyenSi/depsight.git
+cd depsight
+make dev          # docker compose up: app + Postgres, runs migrations, starts dev server
+```
+
+Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets.
+
+## What it answers
+
+- **Which of my repos has open CVEs?** Per-repo severity breakdown, risk scores, vulnerability timeline.
+- **Which licenses am I shipping?** Copyleft detection and policy-driven compliance across npm, Python, Go, Java, Rust, PHP.
+- **Which deps are stale?** Age tracking and outdated alerts, plus Dependabot status (and bulk-enable across all repos).
+
+Plus PR auto-comments on CVEs, Slack/webhook alerts, SBOM export (CycloneDX 1.4), and a policy engine for custom CVE/license rules. Full feature list in [docs/features.md](docs/features.md).
 
 ## Why depsight
 
-Dependency trees rot quietly. A CVE disclosed today against a transitive dependency you installed six months ago won't surface until something fails — or until a customer asks. depsight does continuous CVE, license, and staleness scanning across every repo a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a glance at a dashboard rather than an afternoon of manual audits.
+Dependency trees rot quietly. A CVE disclosed today against a transitive dependency you installed six months ago won't surface until something fails, or until a customer asks. depsight does continuous CVE, license, and staleness scanning across every repo a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a glance at a dashboard rather than an afternoon of manual audits.
 
-For the broader operational picture — fleet-wide repo health signals beyond security — see [agent-ops-dashboard](https://github.com/LanNguyenSi/agent-ops-dashboard), which complements depsight's security focus with a cross-repo ops view.
+For the broader operational picture beyond security, see [agent-ops-dashboard](https://github.com/LanNguyenSi/agent-ops-dashboard), which complements depsight with a fleet-wide repo-health view.
 
-## Tech Stack
+## Next steps
 
-- **Framework:** Next.js 15 (App Router)
-- **Language:** TypeScript (strict mode)
-- **Database:** PostgreSQL 16 + Prisma ORM
-- **Styling:** Tailwind CSS 4
-- **Auth:** NextAuth v5 beta (GitHub OAuth + Dev Credentials)
-- **Deployment:** Docker (multi-stage build)
-
-## Features
-
-- GitHub OAuth login and repository discovery
-- CVE scanning per repository (severity breakdown, risk scores)
-- License detection and copyleft compliance checking
-- Dependency age tracking and outdated alerts
-- Multi-ecosystem support: **npm, Python, Go, Java, Rust, PHP**
-- Vulnerability timeline and risk score history
-- Cross-repo comparison and team health overview
-- SBOM export (CycloneDX 1.4 format)
-- Policy engine for custom CVE/license rules
-- PR integration with automatic CVE comments
-- Webhook and Slack notifications
-- Dependabot integration (status check, enable per-repo, bulk enable across all repos)
-- Repository export (download as zip)
-- Health check endpoint
-- **CI Health** — workflow fail rates, build times, flaky job detection (powered by [ci-insights](https://github.com/LanNguyenSi/ci-insights))
-- **MCP server** — expose read-only queries (CVEs, licenses, deps, policies, CI analytics) to Claude and other agents via [`mcp/`](mcp/README.md)
-
-## CI Health Tab
-
-The **CI Health** tab shows GitHub Actions analytics (fail rates, build times, flaky jobs) powered by **[ci-insights](https://github.com/LanNguyenSi/ci-insights)** — a companion service that syncs and stores workflow data from GitHub Actions.
-
-> **The tab is only visible once CI data has been synced.**
-
-### Setup
-
-1. Deploy [ci-insights](https://github.com/LanNguyenSi/ci-insights) and configure your GitHub token
-2. Run a sync for the repository
-3. The CI Health tab will appear automatically in depsight once data is available
-
-To trigger a sync manually via the depsight API:
-
-```bash
-curl -X POST https://<your-depsight>/api/ci/sync \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"repoId": "<repo-id>"}'
-```
-
-> **depsight works fully without ci-insights** — the CI Health tab simply won't appear if no data has been synced.
-
-## Quick Start
-
-```bash
-# Single command — installs deps, starts DB, migrates, runs dev server
-make dev
-```
-
-This starts the full Docker environment (app + PostgreSQL). Access at **http://localhost:3000**.
-
-In development, a **Dev Login** is available on the login page — no GitHub OAuth credentials needed.
-
-### With GitHub OAuth (optional)
-
-```bash
-cp .env.example .env
-# Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
-make dev
-```
-
-### Other Make targets
-
-```bash
-make dev-up      # Start in background
-make dev-down    # Stop
-make dev-logs    # Tail logs
-make dev-clean   # Stop + delete DB volumes
-make prod        # Production build + start
-make test        # Run tests
-make lint        # Linting + type-checking
-make ci          # Full CI pipeline
-```
-
-### Database Management
-
-```bash
-# These run inside the Docker container automatically on `make dev`.
-# For manual use:
-npm run db:generate    # Generate Prisma client
-npm run db:push        # Push schema changes (dev)
-npm run db:studio      # Database GUI
-```
-
-## Project Structure
-
-```
-app/
-  api/              API routes (auth, scan, license, deps, sbom, ...)
-  dashboard/        Main dashboard (repo list, CVE/license/deps tabs)
-  overview/         Team health overview + repo comparison
-  policies/         Policy management
-  login/            Login page
-components/         Shared UI components
-lib/
-  cve/              CVE scanner
-  deps/             Dependency age scanners (npm, python, go, java, rust, php)
-  license/          License scanners (npm, python, go, java, rust, php)
-  sbom/             CycloneDX SBOM generator
-  policy/           Policy engine
-  overview/         Team health aggregation
-prisma/             Database schema
-docker/             Docker entrypoints
-```
-
-## API
-
-All endpoints require authentication via NextAuth session or Bearer token.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/scan` | Trigger CVE scan for a repository |
-| `POST` | `/api/license` | Run license compliance check |
-| `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
-| `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |
-| `GET` | `/api/export` | Download repository data as zip |
-| `POST` | `/api/repos/sync` | Sync repositories from GitHub |
-| `GET` | `/api/policies` | List policy rules |
-| `POST` | `/api/policies` | Create or update a policy rule |
-| `GET` | `/api/dependabot` | Check Dependabot status for a repository |
-| `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot across all repos |
-| `GET` | `/api/health` | Health check (returns service status) |
+| If you want to... | Read |
+|------|------|
+| Configure env vars, Make targets, OAuth, the CI Health (ci-insights) integration | [docs/configuration.md](docs/configuration.md) |
+| Browse the REST API surface | [docs/api.md](docs/api.md) |
+| Understand the architecture (Next.js App Router, Prisma, project layout) | [docs/architecture.md](docs/architecture.md) |
+| Wire depsight up to Claude or another MCP-capable agent | [`mcp/README.md`](mcp/README.md) |
 
 ## Roadmap
 
@@ -152,8 +49,8 @@ All endpoints require authentication via NextAuth session or Bearer token.
 
 ## License
 
-MIT
+MIT.
 
 ---
 
-Generated with [ScaffoldKit](https://github.com/LanNguyenSi/scaffoldkit)
+Generated with [ScaffoldKit](https://github.com/LanNguyenSi/scaffoldkit).
