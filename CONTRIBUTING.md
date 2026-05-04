@@ -4,7 +4,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
 
 ## Issues
 
-- Bug reports: include repro steps, expected vs. actual, the affected surface (Next.js app, MCP server, runner, Prisma schema).
+- Bug reports: include repro steps, expected vs. actual, the affected surface (Next.js UI, API routes, MCP server, runner, Prisma schema, hosted instance).
 - Feature requests: describe the use case before the proposed shape.
 
 ## Pull Requests
@@ -15,6 +15,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
 
    ```bash
    npm install
+   npx prisma generate    # required before build on a fresh clone
    npm run build
    npm test
    ```
