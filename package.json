@@ -42,7 +42,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.2.4",
     "happy-dom": "^20.8.9",
-    "postcss": "^8.4.51",
+    "postcss": "^8.5.10",
     "prisma": "^6.2.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5",
@@ -50,6 +50,7 @@
   },
   "overrides": {
     "effect": ">=3.20.0",
-    "defu": ">=6.1.5"
+    "defu": ">=6.1.5",
+    "postcss": "^8.5.10"
   }
 }
