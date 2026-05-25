@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // Test the PURL generation logic
 function toPurl(ecosystem: string, packageName: string, version?: string): string {
