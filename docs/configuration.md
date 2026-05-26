@@ -1,16 +1,26 @@
 # Configuration
 
+## Environment variables
+
+`.env.example` ships the full set; copy it to `.env` and fill in values before `make dev`.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `DATABASE_URL` | yes | `postgresql://depsight:password@localhost:5432/depsight` | PostgreSQL connection string |
+| `NEXTAUTH_SECRET` | yes | (none) | NextAuth session signing secret. Generate with `openssl rand -base64 32` |
+| `NEXTAUTH_URL` | yes | `http://localhost:3000` | Public base URL of the app |
+| `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
+| `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
+
 ## GitHub OAuth (optional)
 
-`make dev` works out of the box with the **Dev Login** on the login page (no GitHub credentials needed). For real GitHub integration:
+`make dev` works out of the box with the **Dev Login** on the login page (no GitHub credentials needed). For real GitHub login, register an OAuth app at [github.com/settings/developers](https://github.com/settings/developers) and add the two `GITHUB_CLIENT_*` values above:
 
 ```bash
 cp .env.example .env
 # add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to .env
 make dev
 ```
-
-See `.env.example` for the full set of supported env vars.
 
 ## Make targets
 
