@@ -47,6 +47,10 @@ For the broader operational picture beyond security, see [agent-ops-dashboard](h
 - [ ] Dashboard widgets and customizable views
 - [ ] Team-level access controls and role management
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## License
 
 MIT.
