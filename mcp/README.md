@@ -27,7 +27,7 @@ All tools are **read-only** in v1. Scan triggers, webhook management, and policy
 ## Install + run
 
 ```bash
-# One-off via npx (published on npm; see Releasing below)
+# One-off via npx (published on npm via the release workflow; see Releasing below)
 npx -y @opentriologue/depsight-mcp
 
 # Or locally from this repo after `npm run build`
