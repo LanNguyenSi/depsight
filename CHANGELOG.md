@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-05-31
+
+**Headline: self-service API tokens and a hardened, agent-driven CVE
+sweep.** You can now mint and revoke `dsat_` service tokens from the
+Settings page instead of running a CLI, switch the UI language, and
+drive an org-wide CVE sweep from a committed `/cve-sweep` skill that
+sources discovery and triage straight from depsight's MCP. This release
+also closes a HIGH audit finding (repo-ownership scoping plus an SSRF
+guard) and clears a batch of dependency CVEs.
+
+### Added
+
+- **Settings page + user menu** (#55): manage `dsat_` API tokens from
+  the UI (mint, view-once, revoke), backed by the existing `ApiToken`
+  model, and relocates the UI language switch (English/German) into
+  Settings.
+- **`/cve-sweep` skill** (#56): a committed, model-invoked Claude Code
+  skill at `.claude/skills/cve-sweep/` that runs the org CVE sweep off
+  the depsight MCP (`depsight_get_overview` for discovery,
+  `depsight_get_cves` for triage), then lockfile-first remediation one
+  branch per repo with the governance routing.
+- **Tag-driven npm publish for the MCP** (#54): pushing a
+  `depsight-mcp-v*` tag publishes `@opentriologue/depsight-mcp` with
+  provenance via `.github/workflows/publish-npm.yml`.
+- **Open-source surface** (#45): LICENSE, Code of Conduct, contributing
+  guide, security policy, and issue/PR templates.
+
+### Changed
+
+- **ESLint flat config** (#50): migrated off the deprecated `next lint`
+  to a flat `eslint.config.mjs`.
+- **Docs** (#44, #51): README 60-second hook and a restructure into
+  `docs/`, plus an env-var reference table in `configuration.md`.
+- **Config cleanup** (#52): dropped the unused `JWT_SECRET` config and
+  the `jsonwebtoken` dependency.
+- **Repo hygiene** (#48): gitignore `*.tsbuildinfo` and stop tracking
+  `tsconfig.tsbuildinfo`.
+
+### Security
+
+- **Repo-ownership scoping + SSRF guard** (#53, HIGH audit): CI
+  analytics endpoints now enforce repo ownership for the requesting
+  user, and webhook/Slack URL inputs are validated against an SSRF
+  guard before any outbound request.
+- **Dependency CVE sweep** (#46): bumped `fast-uri`, `hono`,
+  `ip-address`, and `express-rate-limit`.
+- **postcss** (#47): pinned `>= 8.5.10` via override (GHSA-qx2v-qp2m-jg93).
+- **qs** (#49): bumped to 6.15.2 in `mcp/` (CVE-2026-8723).
+
 ## [0.2.0] - 2026-04-17
 
 **Headline: Agents can now talk to depsight.** New `depsight-mcp`
