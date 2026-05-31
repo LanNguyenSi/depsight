@@ -27,7 +27,7 @@ All tools are **read-only** in v1. Scan triggers, webhook management, and policy
 ## Install + run
 
 ```bash
-# One-off via npx once published
+# One-off via npx (published on npm via the release workflow; see Releasing below)
 npx -y @opentriologue/depsight-mcp
 
 # Or locally from this repo after `npm run build`
@@ -119,3 +119,19 @@ npm run dev        # runs against DEPSIGHT_URL + DEPSIGHT_API_TOKEN via tsx
 npm test           # vitest
 npm run build      # emits dist/
 ```
+
+## Releasing
+
+Publishing is tag-driven via [`.github/workflows/publish-npm.yml`](../.github/workflows/publish-npm.yml),
+kept separate from the app's `v*` releases so the two never collide.
+
+```bash
+# 1. Bump the version in mcp/package.json (e.g. 0.2.0 -> 0.2.1)
+# 2. Commit, then push a tag whose suffix matches that version:
+git tag depsight-mcp-v0.2.1
+git push origin depsight-mcp-v0.2.1
+```
+
+The workflow checks `mcp/package.json` version against the tag, builds, and runs
+`npm publish --access public --provenance`. It requires a repo secret `NPM_TOKEN`
+with publish rights to the `@opentriologue` npm org (operator one-time setup).

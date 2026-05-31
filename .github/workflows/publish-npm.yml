@@ -1,0 +1,60 @@
+name: Publish MCP to npm
+
+# Tag-driven publish for the standalone mcp/ package (@opentriologue/depsight-mcp).
+# This is intentionally separate from release.yml (which cuts a GitHub Release for
+# the Next.js app on `v*` tags) so app and MCP releases never collide.
+#
+# To cut an MCP release:
+#   1. Bump mcp/package.json version.
+#   2. Commit, then push a matching tag: `git tag depsight-mcp-v0.2.0 && git push origin depsight-mcp-v0.2.0`.
+# The tag suffix must equal mcp/package.json version or the job fails the version check.
+#
+# Prerequisite (operator, one-time): the `@opentriologue` npm org must exist and an
+# automation token with publish rights to it must be stored as the repo secret NPM_TOKEN.
+
+on:
+  push:
+    tags:
+      - "depsight-mcp-v*"
+
+permissions:
+  contents: read
+  id-token: write # required for npm provenance
+
+jobs:
+  publish:
+    name: Publish @opentriologue/depsight-mcp
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mcp/package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify package.json version matches tag
+        run: |
+          expected="${GITHUB_REF_NAME#depsight-mcp-v}"
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$pkg_version" != "$expected" ]; then
+            echo "Tag version ($expected) does not match mcp/package.json ($pkg_version)" >&2
+            exit 1
+          fi
+          echo "Publishing @opentriologue/depsight-mcp@$pkg_version"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
