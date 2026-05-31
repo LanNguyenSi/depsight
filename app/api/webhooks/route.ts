@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { assertPublicUrl, SsrfBlockedError } from '@/lib/net/safe-fetch';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,8 +37,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    new URL(url); // validate URL format
-  } catch {
+    await assertPublicUrl(url); // validate format + reject non-public/internal targets (SSRF)
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     return NextResponse.json({ error: 'Invalid URL format' }, { status: 400 });
   }
 

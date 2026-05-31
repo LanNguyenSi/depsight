@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { Advisory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { safeFetch, SsrfBlockedError } from '@/lib/net/safe-fetch';
 
 export type NotificationEvent =
   | 'cve.critical'
@@ -48,9 +49,12 @@ async function deliverWebhook(
   }
 
   try {
-    const res = await fetch(url, { method: 'POST', headers, body });
+    const res = await safeFetch(url, { method: 'POST', headers, body });
     return { ok: res.ok, status: res.status };
   } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return { ok: false, error: 'blocked: non-public webhook URL' };
+    }
     return { ok: false, error: err instanceof Error ? err.message : 'fetch failed' };
   }
 }
@@ -107,13 +111,16 @@ async function deliverSlack(
   const body = JSON.stringify({ ...message, ...(channel ? { channel } : {}) });
 
   try {
-    const res = await fetch(webhookUrl, {
+    const res = await safeFetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
     });
     return { ok: res.ok };
   } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return { ok: false, error: 'blocked: non-public Slack URL' };
+    }
     return { ok: false, error: err instanceof Error ? err.message : 'fetch failed' };
   }
 }

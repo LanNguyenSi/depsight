@@ -134,7 +134,7 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
 
   // Fetch CI penalties for all repos in parallel (graceful — returns 0 if no CI data)
   const ciPenalties = await Promise.all(
-    repos.map((repo) => getCIPenalty(repo.fullName))
+    repos.map((repo) => getCIPenalty(repo.id))
   );
   const ciPenaltyByRepoId = new Map<string, number>(
     repos.map((repo, i) => [repo.id, ciPenalties[i]])
@@ -208,11 +208,11 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
  * - Each flaky job → -5 points (max -20)
  * - Build P95 > 15min → -5 points
  */
-export async function getCIPenalty(repoFullName: string): Promise<number> {
+export async function getCIPenalty(repoId: string): Promise<number> {
   try {
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const repo = await prisma.repo.findFirst({
-      where: { fullName: repoFullName },
+    const repo = await prisma.repo.findUnique({
+      where: { id: repoId },
       include: {
         workflows: {
           include: {
