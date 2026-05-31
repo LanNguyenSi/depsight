@@ -29,30 +29,32 @@ export async function GET(req: NextRequest, { params }: Props) {
   // Verify ownership
   const repo = await prisma.repo.findFirst({
     where: { id: repoId, userId: user.id },
-    select: { fullName: true },
+    select: { id: true },
   });
   if (!repo) {
     return NextResponse.json({ error: 'Repo not found' }, { status: 404 });
   }
 
-  const fullName = repo.fullName;
+  // Use the ownership-verified repo id for all analytics lookups so the
+  // analytics layer never re-resolves an arbitrary repo by fullName.
+  const ownedRepoId = repo.id;
 
   try {
     switch (type) {
       case 'fail-rate': {
-        const data = await getWorkflowFailRates(fullName, period);
+        const data = await getWorkflowFailRates(ownedRepoId, period);
         return NextResponse.json({ type, period, data });
       }
       case 'build-times': {
-        const data = await getWorkflowBuildTimes(fullName, period);
+        const data = await getWorkflowBuildTimes(ownedRepoId, period);
         return NextResponse.json({ type, period, data });
       }
       case 'flaky': {
-        const data = await detectFlakyJobs(fullName, { period });
+        const data = await detectFlakyJobs(ownedRepoId, { period });
         return NextResponse.json({ type, period, data });
       }
       case 'bottleneck': {
-        const data = await getBottlenecks(fullName, period);
+        const data = await getBottlenecks(ownedRepoId, period);
         return NextResponse.json({ type, period, data });
       }
       default:

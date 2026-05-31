@@ -54,16 +54,19 @@ function computePercentiles(values: number[]): Percentiles {
 /**
  * Get P50/P95 build times for all workflows in a repo.
  * Includes per-branch and per-job breakdown.
+ *
+ * @param repoId Ownership-verified repo id. Lookups are scoped by primary key
+ *   so analytics never leak across users that share a `fullName`.
  */
 export async function getWorkflowBuildTimes(
-  repoFullName: string,
+  repoId: string,
   period: Period = 30
 ): Promise<WorkflowBuildTimes[]> {
   const since = new Date();
   since.setDate(since.getDate() - period);
 
-  const repo = await prisma.repo.findFirst({
-    where: { fullName: repoFullName },
+  const repo = await prisma.repo.findUnique({
+    where: { id: repoId },
     include: {
       workflows: {
         include: {
@@ -88,6 +91,8 @@ export async function getWorkflowBuildTimes(
   });
 
   if (!repo) return [];
+
+  const repoFullName = repo.fullName;
 
   return repo.workflows.map((wf) => {
     const runs = wf.runs;

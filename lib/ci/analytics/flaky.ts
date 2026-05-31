@@ -31,9 +31,12 @@ export interface FlakyJob {
  *    for the same job → non-deterministic, classic flakiness signal.
  *
  * A job must appear in both threshold AND retry to get signal "both".
+ *
+ * @param repoId Ownership-verified repo id. Lookups are scoped by primary key
+ *   so analytics never leak across users that share a `fullName`.
  */
 export async function detectFlakyJobs(
-  repoFullName: string,
+  repoId: string,
   options: {
     period?: Period;
     failRateThreshold?: number;
@@ -47,8 +50,8 @@ export async function detectFlakyJobs(
   const since = new Date();
   since.setDate(since.getDate() - period);
 
-  const repo = await prisma.repo.findFirst({
-    where: { fullName: repoFullName },
+  const repo = await prisma.repo.findUnique({
+    where: { id: repoId },
     include: {
       workflows: {
         include: {
@@ -68,6 +71,7 @@ export async function detectFlakyJobs(
 
   if (!repo) return [];
 
+  const repoFullName = repo.fullName;
   const flakyJobs: FlakyJob[] = [];
 
   for (const wf of repo.workflows) {

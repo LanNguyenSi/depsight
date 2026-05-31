@@ -38,19 +38,24 @@ function toRate(failed: number, total: number): Pick<FailRateResult, "failRate" 
 /**
  * Get fail rate per workflow for a repo over a given period.
  * Includes per-job breakdown.
+ *
+ * @param repoId Ownership-verified repo id. Lookups are scoped by primary key
+ *   so analytics never leak across users that share a `fullName`.
  */
 export async function getWorkflowFailRates(
-  repoFullName: string,
+  repoId: string,
   period: Period = 30
 ): Promise<WorkflowFailRate[]> {
   const since = sinceDate(period);
 
-  const repo = await prisma.repo.findFirst({
-    where: { fullName: repoFullName },
+  const repo = await prisma.repo.findUnique({
+    where: { id: repoId },
     include: { workflows: { include: { runs: { where: { runCreatedAt: { gte: since } }, include: { jobs: true } } } } },
   });
 
   if (!repo) return [];
+
+  const repoFullName = repo.fullName;
 
   return repo.workflows.map((wf) => {
     const runs = wf.runs;
@@ -91,11 +96,11 @@ export async function getWorkflowFailRates(
 /**
  * Get fail rates for all workflows across all repos.
  */
-export async function getAllFailRates(period: Period = 30): Promise<WorkflowFailRate[]> {
-  const repos = await prisma.repo.findMany({ select: { fullName: true } });
+export async function getAllFailRates(userId: string, period: Period = 30): Promise<WorkflowFailRate[]> {
+  const repos = await prisma.repo.findMany({ where: { userId }, select: { id: true } });
   const results: WorkflowFailRate[] = [];
   for (const repo of repos) {
-    const rates = await getWorkflowFailRates(repo.fullName, period);
+    const rates = await getWorkflowFailRates(repo.id, period);
     results.push(...rates);
   }
   return results;
@@ -103,12 +108,15 @@ export async function getAllFailRates(period: Period = 30): Promise<WorkflowFail
 
 /**
  * Fail rates for a specific workflow across periods (1/7/30 days).
+ *
+ * @param userId Owning user id. The workflow's repo must belong to this user,
+ *   otherwise the lookup fails closed (treated as not found).
  */
-export async function getWorkflowFailRateMultiPeriod(workflowId: string): Promise<
+export async function getWorkflowFailRateMultiPeriod(workflowId: string, userId: string): Promise<
   Record<Period, Omit<WorkflowFailRate, "jobs">>
 > {
-  const wf = await prisma.workflow.findUnique({
-    where: { id: workflowId },
+  const wf = await prisma.workflow.findFirst({
+    where: { id: workflowId, repo: { userId } },
     include: { repo: true },
   });
   if (!wf) throw new Error(`Workflow ${workflowId} not found`);

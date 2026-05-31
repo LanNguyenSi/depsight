@@ -30,16 +30,19 @@ function p95(sorted: number[]): number {
 /**
  * Identify job bottlenecks per workflow for a repo.
  * Returns jobs ranked by average duration (slowest first).
+ *
+ * @param repoId Ownership-verified repo id. Lookups are scoped by primary key
+ *   so analytics never leak across users that share a `fullName`.
  */
 export async function getBottlenecks(
-  repoFullName: string,
+  repoId: string,
   period: Period = 30
 ): Promise<JobBottleneck[]> {
   const since = new Date();
   since.setDate(since.getDate() - period);
 
-  const repo = await prisma.repo.findFirst({
-    where: { fullName: repoFullName },
+  const repo = await prisma.repo.findUnique({
+    where: { id: repoId },
     include: {
       workflows: {
         include: {
@@ -64,6 +67,7 @@ export async function getBottlenecks(
 
   if (!repo) return [];
 
+  const repoFullName = repo.fullName;
   const results: JobBottleneck[] = [];
 
   for (const wf of repo.workflows) {

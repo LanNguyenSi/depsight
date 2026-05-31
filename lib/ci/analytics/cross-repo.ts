@@ -22,14 +22,14 @@ export interface RepoHealthSummary {
 }
 
 export async function getCIRepoHealthSummary(
-  repoFullName: string,
+  repoId: string,
   period: Period = 30
 ): Promise<RepoHealthSummary | null> {
   const since = new Date();
   since.setDate(since.getDate() - period);
 
-  const repo = await prisma.repo.findFirst({
-    where: { fullName: repoFullName },
+  const repo = await prisma.repo.findUnique({
+    where: { id: repoId },
     include: {
       _count: { select: { workflows: true } },
       workflows: {
@@ -44,6 +44,8 @@ export async function getCIRepoHealthSummary(
   });
 
   if (!repo) return null;
+
+  const repoFullName = repo.fullName;
 
   let totalRuns = 0;
   let failedRuns = 0;
@@ -63,7 +65,7 @@ export async function getCIRepoHealthSummary(
     ? Math.round((failedRuns / totalRuns) * 1000) / 10
     : 0;
 
-  const buildTimes = await getWorkflowBuildTimes(repoFullName, period);
+  const buildTimes = await getWorkflowBuildTimes(repo.id, period);
   const allP95 = buildTimes.map((b) => b.overall.p95).filter((v): v is number => v !== null);
   const avgBuildTimeMs = allDurations.length > 0
     ? Math.round(allDurations.reduce((a, b) => a + b, 0) / allDurations.length)
@@ -72,7 +74,7 @@ export async function getCIRepoHealthSummary(
     ? Math.round(allP95.reduce((a, b) => a + b, 0) / allP95.length)
     : null;
 
-  const bottlenecks = await getBottlenecks(repoFullName, period);
+  const bottlenecks = await getBottlenecks(repo.id, period);
   const topBottleneck = bottlenecks.find((b) => b.rank === 1)?.jobName ?? null;
 
   const failPenalty = Math.min(40, overallFailRatePct * 0.8);
@@ -108,11 +110,11 @@ export async function getAllCIHealthSummaries(
 ): Promise<RepoHealthSummary[]> {
   const repos = await prisma.repo.findMany({
     where: { userId, tracked: true },
-    select: { fullName: true },
+    select: { id: true },
   });
 
   const summaries = await Promise.all(
-    repos.map((r) => getCIRepoHealthSummary(r.fullName, period))
+    repos.map((r) => getCIRepoHealthSummary(r.id, period))
   );
 
   return summaries
