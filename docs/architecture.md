@@ -48,7 +48,3 @@ docker/             Docker entrypoints
 Browser → Next.js Server Component → Prisma → Postgresql
 Browser → API Route → Prisma → Postgresql
 ```
-
-## Key decisions
-
-See [`docs/adrs/`](adrs/) for architecture decision records.
