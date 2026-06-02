@@ -1,10 +1,28 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const getTree = vi.fn();
+const getContent = vi.fn();
+const reposGet = vi.fn();
+const fakeOctokit = { rest: { git: { getTree }, repos: { get: reposGet, getContent } } };
+
+vi.mock('@/lib/github', () => ({
+  createGitHubClient: () => fakeOctokit,
+}));
+
 import {
   selectManifestPaths,
   pickPrimaryEcosystem,
   unionNpmDeps,
+  detectEcosystem,
+  fetchNpmManifests,
   type TreeEntry,
 } from '@/lib/manifest-discovery';
+
+type Octokit = Parameters<typeof fetchNpmManifests>[0];
+
+function contentResp(obj: unknown) {
+  return { data: { content: Buffer.from(JSON.stringify(obj)).toString('base64') } };
+}
 
 function blob(path: string): TreeEntry {
   return { path, type: 'blob' };
@@ -49,9 +67,16 @@ describe('selectManifestPaths', () => {
       blob('coverage/package.json'),
       blob('vendor/x/composer.json'),
       blob('tests/fixtures/sample/package.json'),
-      blob('examples/demo/package.json'),
     ]);
     expect(refs.map((r) => r.path)).toEqual(['package.json']);
+  });
+
+  it('keeps examples/* (real workspaces commonly live there)', () => {
+    const refs = selectManifestPaths([
+      blob('package.json'),
+      blob('examples/demo/package.json'),
+    ]);
+    expect(refs.map((r) => r.path)).toEqual(['package.json', 'examples/demo/package.json']);
   });
 
   it('orders shallowest paths first', () => {
@@ -108,6 +133,23 @@ describe('pickPrimaryEcosystem', () => {
       ]),
     ).toBe('go');
   });
+
+  it('breaks a polyglot-root tie in npm favour (MANIFEST_MAP precedence)', () => {
+    // Both at root depth: npm must win regardless of path ordering, matching
+    // the pre-tree-walk behaviour. (Regression guard.)
+    expect(
+      pickPrimaryEcosystem([
+        { path: 'go.mod', ecosystem: 'go' },
+        { path: 'package.json', ecosystem: 'npm' },
+      ]),
+    ).toBe('npm');
+    expect(
+      pickPrimaryEcosystem([
+        { path: 'composer.json', ecosystem: 'php' },
+        { path: 'package.json', ecosystem: 'npm' },
+      ]),
+    ).toBe('npm');
+  });
 });
 
 describe('unionNpmDeps', () => {
@@ -142,5 +184,102 @@ describe('unionNpmDeps', () => {
   it('handles manifests with no deps (workspaces orchestration root)', () => {
     const deps = unionNpmDeps([{ name: 'agent-tasks' }]);
     expect(deps).toEqual([]);
+  });
+
+  it('collapses a cross-workspace version conflict to the first-seen spec', () => {
+    // Documented limitation: first (root-first) spec wins, others dropped.
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '^4.0.0' } },
+      { name: 'pkg', dependencies: { lodash: '^3.0.0' } },
+    ]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].versionSpec).toBe('^4.0.0');
+  });
+});
+
+describe('fetchNpmManifests', () => {
+  beforeEach(() => {
+    getContent.mockReset();
+  });
+
+  it('parses valid manifests and skips missing / malformed ones', async () => {
+    getContent.mockImplementation(({ path }: { path: string }) => {
+      if (path === 'package.json') return Promise.resolve(contentResp({ name: 'root' }));
+      if (path === 'broken/package.json') {
+        return Promise.resolve({ data: { content: Buffer.from('{ not json').toString('base64') } });
+      }
+      return Promise.reject(new Error('404'));
+    });
+
+    const manifests = await fetchNpmManifests(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['package.json', 'broken/package.json', 'gone/package.json'],
+    );
+    expect(manifests).toEqual([{ name: 'root' }]);
+  });
+});
+
+describe('detectEcosystem', () => {
+  beforeEach(() => {
+    getTree.mockReset();
+    getContent.mockReset();
+    reposGet.mockReset();
+  });
+
+  it('finds npm manifests across the tree (no-root-manifest monorepo)', async () => {
+    getTree.mockResolvedValue({
+      data: {
+        truncated: false,
+        tree: [
+          { path: 'packages/a/package.json', type: 'blob' },
+          { path: 'packages/b/package.json', type: 'blob' },
+          { path: 'node_modules/x/package.json', type: 'blob' },
+        ],
+      },
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'master');
+    expect(info.ecosystem).toBe('npm');
+    expect(info.supported).toBe(true);
+    expect(info.manifestPaths).toEqual(['packages/a/package.json', 'packages/b/package.json']);
+    expect(getTree).toHaveBeenCalledWith(
+      expect.objectContaining({ tree_sha: 'master', recursive: 'true' }),
+    );
+  });
+
+  it('falls back to a root probe when getTree throws', async () => {
+    getTree.mockRejectedValue(new Error('boom'));
+    getContent.mockResolvedValue({
+      data: [
+        { name: 'package.json', type: 'file' },
+        { name: 'README.md', type: 'file' },
+      ],
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.ecosystem).toBe('npm');
+    expect(info.manifestPaths).toEqual(['package.json']);
+  });
+
+  it('resolves the default branch when none is supplied', async () => {
+    reposGet.mockResolvedValue({ data: { default_branch: 'trunk' } });
+    getTree.mockResolvedValue({ data: { truncated: false, tree: [{ path: 'package.json', type: 'blob' }] } });
+
+    const info = await detectEcosystem('tok', 'o', 'r');
+    expect(reposGet).toHaveBeenCalled();
+    expect(getTree).toHaveBeenCalledWith(expect.objectContaining({ tree_sha: 'trunk' }));
+    expect(info.manifestPaths).toEqual(['package.json']);
+  });
+
+  it('returns unknown for a repo with no manifests', async () => {
+    getTree.mockResolvedValue({ data: { truncated: false, tree: [{ path: 'README.md', type: 'blob' }] } });
+    getContent.mockResolvedValue({ data: [{ name: 'README.md', type: 'file' }] });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.ecosystem).toBe('unknown');
+    expect(info.supported).toBe(false);
+    expect(info.manifestPaths).toEqual([]);
   });
 });

@@ -60,6 +60,16 @@ export function getEcosystemLabel(ecosystem: Ecosystem): string {
  * Map a single file path to its ecosystem by basename, or null if it is not a
  * known manifest. Pure: the basis for tree-wide manifest discovery.
  */
+/**
+ * Precedence of an ecosystem by its first appearance in MANIFEST_MAP. Lower wins.
+ * Used to break ties when a repo root carries manifests for several ecosystems
+ * (e.g. package.json + go.mod), preserving npm-first ordering.
+ */
+export function ecosystemPrecedence(ecosystem: Ecosystem): number {
+  const i = MANIFEST_MAP.findIndex((m) => m.ecosystem === ecosystem);
+  return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+}
+
 export function manifestEcosystem(filePath: string): Ecosystem | null {
   const base = filePath.split('/').pop()?.toLowerCase() ?? '';
   for (const { file, ecosystem } of MANIFEST_MAP) {
