@@ -1,5 +1,10 @@
 import { createGitHubClient } from '@/lib/github';
-import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import { getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import {
+  detectEcosystem,
+  fetchNpmManifests,
+  unionNpmDeps,
+} from '@/lib/manifest-discovery';
 import { scanPythonLicenses } from './python';
 import { scanGoLicenses } from './go';
 import { scanJavaLicenses } from './java';
@@ -57,47 +62,17 @@ function classifyLicense(license: string): { isCompatible: boolean; policyViolat
   return { isCompatible: true, policyViolation: false, needsReview: false };
 }
 
-function parseLicenseFromPackageJson(content: string): LicenseEntry[] {
-  let pkg: Record<string, unknown>;
-  try {
-    pkg = JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    return [];
-  }
-
-  const entries: LicenseEntry[] = [];
-  const deps = {
-    ...(pkg.dependencies as Record<string, string> | undefined ?? {}),
-    ...(pkg.devDependencies as Record<string, string> | undefined ?? {}),
-  };
-
-  for (const [name, version] of Object.entries(deps)) {
-    // We only have version ranges here, not resolved licenses
-    // Real license data requires fetching package registry
-    // For now, mark as needing resolution
-    entries.push({
-      packageName: name,
-      version: String(version),
-      license: 'UNKNOWN',
-      isCompatible: true,
-      policyViolation: false,
-      needsReview: true,
-    });
-  }
-
-  return entries;
-}
-
 export async function detectLicenses(
   accessToken: string,
   owner: string,
   repo: string,
+  branch?: string,
 ): Promise<LicenseScanResult> {
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
 
   // Check ecosystem and dispatch to the correct scanner
-  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
+  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo, branch);
   if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
     return {
       ...buildLicenseScanResult([]),
@@ -126,19 +101,22 @@ export async function detectLicenses(
       // No license file found
     }
 
-    // 2. Parse package.json for dependency list
-    let packageJsonContent: string | null = null;
-    try {
-      const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'package.json' });
-      if ('content' in fileResp.data) {
-        packageJsonContent = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      }
-    } catch {
-      // No package.json
-    }
+    // 2. Read every discovered manifest (root + workspaces / monorepo packages)
+    //    and union their dependencies into the list to resolve.
+    const manifestPaths = ecosystemInfo.manifestPaths.length > 0
+      ? ecosystemInfo.manifestPaths
+      : ['package.json'];
+    const manifests = await fetchNpmManifests(octokit, owner, repo, manifestPaths);
 
-    if (packageJsonContent) {
-      const depEntries = parseLicenseFromPackageJson(packageJsonContent);
+    if (manifests.length > 0) {
+      const depEntries: LicenseEntry[] = unionNpmDeps(manifests).map((d) => ({
+        packageName: d.name,
+        version: d.versionSpec,
+        license: 'UNKNOWN',
+        isCompatible: true,
+        policyViolation: false,
+        needsReview: true,
+      }));
 
       // 3. Fetch npm registry metadata for each dep to get actual license
       const BATCH_SIZE = 10;

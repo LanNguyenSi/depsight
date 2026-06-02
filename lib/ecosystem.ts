@@ -1,5 +1,3 @@
-import { createGitHubClient } from '@/lib/github';
-
 export type Ecosystem =
   | 'npm'
   | 'python'
@@ -15,13 +13,16 @@ export interface EcosystemInfo {
   ecosystem: Ecosystem;
   manifestFile: string | null; // e.g. 'package.json', 'requirements.txt'
   supported: boolean;
+  // Every manifest of the primary ecosystem found in the repo (root + workspaces /
+  // monorepo packages), repo-relative. Empty for unknown/unsupported ecosystems.
+  manifestPaths: string[];
 }
 
-const SUPPORTED_ECOSYSTEMS = new Set<Ecosystem>([
+export const SUPPORTED_ECOSYSTEMS = new Set<Ecosystem>([
   'npm', 'python', 'go', 'java', 'rust', 'php',
 ]);
 
-const MANIFEST_MAP: Array<{ file: string; ecosystem: Ecosystem }> = [
+export const MANIFEST_MAP: Array<{ file: string; ecosystem: Ecosystem }> = [
   { file: 'package.json', ecosystem: 'npm' },
   { file: 'requirements.txt', ecosystem: 'python' },
   { file: 'pyproject.toml', ecosystem: 'python' },
@@ -55,42 +56,18 @@ export function getEcosystemLabel(ecosystem: Ecosystem): string {
   return ECOSYSTEM_LABELS[ecosystem];
 }
 
-export async function detectEcosystem(
-  accessToken: string,
-  owner: string,
-  repo: string,
-): Promise<EcosystemInfo> {
-  const octokit = createGitHubClient(accessToken);
-
-  try {
-    const { data: rootContents } = await octokit.rest.repos.getContent({
-      owner,
-      repo,
-      path: '',
-    });
-
-    if (!Array.isArray(rootContents)) {
-      return { ecosystem: 'unknown', manifestFile: null, supported: false };
+/**
+ * Map a single file path to its ecosystem by basename, or null if it is not a
+ * known manifest. Pure: the basis for tree-wide manifest discovery.
+ */
+export function manifestEcosystem(filePath: string): Ecosystem | null {
+  const base = filePath.split('/').pop()?.toLowerCase() ?? '';
+  for (const { file, ecosystem } of MANIFEST_MAP) {
+    if (file.startsWith('*')) {
+      if (base.endsWith(file.slice(1).toLowerCase())) return ecosystem;
+    } else if (base === file.toLowerCase()) {
+      return ecosystem;
     }
-
-    const fileNames = rootContents
-      .filter((f) => f.type === 'file')
-      .map((f) => f.name.toLowerCase());
-
-    for (const { file, ecosystem } of MANIFEST_MAP) {
-      // Wildcard patterns (*.csproj etc.)
-      if (file.startsWith('*')) {
-        const ext = file.slice(1); // e.g. '.csproj'
-        if (fileNames.some((f) => f.endsWith(ext))) {
-          return { ecosystem, manifestFile: file, supported: SUPPORTED_ECOSYSTEMS.has(ecosystem) };
-        }
-      } else if (fileNames.includes(file.toLowerCase())) {
-        return { ecosystem, manifestFile: file, supported: SUPPORTED_ECOSYSTEMS.has(ecosystem) };
-      }
-    }
-  } catch {
-    // Can't read root — treat as unknown
   }
-
-  return { ecosystem: 'unknown', manifestFile: null, supported: false };
+  return null;
 }

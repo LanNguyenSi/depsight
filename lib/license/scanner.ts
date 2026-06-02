@@ -17,7 +17,7 @@ export async function scanLicenses(
   });
 
   try {
-    const result = await detectLicenses(accessToken, repo.owner, repo.name);
+    const result = await detectLicenses(accessToken, repo.owner, repo.name, repo.defaultBranch);
 
     await prisma.$transaction(async (tx) => {
       if (result.licenses.length > 0) {

@@ -1,5 +1,10 @@
 import { createGitHubClient } from '@/lib/github';
-import { detectEcosystem, getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import { getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
+import {
+  detectEcosystem,
+  fetchNpmManifests,
+  unionNpmDeps,
+} from '@/lib/manifest-discovery';
 import { scanPythonDeps } from './python';
 import { scanGoDeps } from './go';
 import { scanJavaDeps } from './java';
@@ -75,9 +80,10 @@ export async function analyzeDepAge(
   accessToken: string,
   owner: string,
   repo: string,
+  branch?: string,
 ): Promise<DepAgeScanResult> {
   // Check ecosystem and dispatch to the correct scanner
-  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo);
+  const ecosystemInfo = await detectEcosystem(accessToken, owner, repo, branch);
   if (!ecosystemInfo.supported && ecosystemInfo.ecosystem !== 'unknown') {
     return {
       ...buildResult([]),
@@ -95,38 +101,20 @@ export async function analyzeDepAge(
   if (ecosystemInfo.ecosystem === 'rust') return buildResult(await scanRustDeps(accessToken, owner, repo));
   if (ecosystemInfo.ecosystem === 'php') return buildResult(await scanPhpDeps(accessToken, owner, repo));
 
-  // Default: npm
+  // Default: npm. Read every discovered manifest (root + workspaces / monorepo
+  // packages) and union their dependencies.
   const octokit = createGitHubClient(accessToken);
   const deps: DependencyInfo[] = [];
 
-  // Fetch package.json
-  let packageJsonContent: string | null = null;
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'package.json' });
-    if ('content' in fileResp.data) {
-      packageJsonContent = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-    }
-  } catch {
-    return buildResult([]);
-  }
+  const manifestPaths = ecosystemInfo.manifestPaths.length > 0
+    ? ecosystemInfo.manifestPaths
+    : ['package.json'];
 
-  if (!packageJsonContent) return buildResult([]);
+  const manifests = await fetchNpmManifests(octokit, owner, repo, manifestPaths);
+  if (manifests.length === 0) return buildResult([]);
 
-  let pkg: Record<string, unknown>;
-  try {
-    pkg = JSON.parse(packageJsonContent) as Record<string, unknown>;
-  } catch {
-    return buildResult([]);
-  }
-
-  // Combine prod + dev deps
-  const allDeps: Array<{ name: string; versionSpec: string; isDev: boolean }> = [];
-  for (const [name, spec] of Object.entries(pkg.dependencies as Record<string, string> ?? {})) {
-    allDeps.push({ name, versionSpec: String(spec), isDev: false });
-  }
-  for (const [name, spec] of Object.entries(pkg.devDependencies as Record<string, string> ?? {})) {
-    allDeps.push({ name, versionSpec: String(spec), isDev: true });
-  }
+  // Combine prod + dev deps across all manifests, dropping workspace-internal refs.
+  const allDeps = unionNpmDeps(manifests);
 
   // Batch npm registry lookups
   const BATCH_SIZE = 10;
