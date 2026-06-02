@@ -13,7 +13,7 @@ export async function scanDependencies(
     throw new Error('Repository not found or access denied');
   }
 
-  const result = await analyzeDepAge(accessToken, repo.owner, repo.name);
+  const result = await analyzeDepAge(accessToken, repo.owner, repo.name, repo.defaultBranch);
 
   // Always create a fresh scan record (avoid race conditions with CVE/license scans)
   const scan = await prisma.scan.create({
