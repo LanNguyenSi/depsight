@@ -94,12 +94,13 @@ export async function analyzeDepAge(
     };
   }
 
-  // Dispatch to ecosystem-specific scanners
-  if (ecosystemInfo.ecosystem === 'python') return buildResult(await scanPythonDeps(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'go') return buildResult(await scanGoDeps(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'java') return buildResult(await scanJavaDeps(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'rust') return buildResult(await scanRustDeps(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'php') return buildResult(await scanPhpDeps(accessToken, owner, repo));
+  // Dispatch to ecosystem-specific scanners, passing every discovered manifest
+  // path of the primary ecosystem so monorepos union all module deps.
+  if (ecosystemInfo.ecosystem === 'python') return buildResult(await scanPythonDeps(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'go') return buildResult(await scanGoDeps(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'java') return buildResult(await scanJavaDeps(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'rust') return buildResult(await scanRustDeps(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'php') return buildResult(await scanPhpDeps(accessToken, owner, repo, ecosystemInfo.manifestPaths));
 
   // Default: npm. Read every discovered manifest (root + workspaces / monorepo
   // packages) and union their dependencies.

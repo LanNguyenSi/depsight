@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectPythonDeps } from '@/lib/manifests/python';
 import type { LicenseEntry } from './detector';
 
 interface PyPIPackageInfo {
@@ -6,11 +7,6 @@ interface PyPIPackageInfo {
     version?: string;
     license?: string;
   };
-}
-
-interface ParsedDep {
-  name: string;
-  version: string;
 }
 
 // Copyleft-Lizenzen, die mit proprietaerer Nutzung kollidieren
@@ -112,97 +108,20 @@ function classifyLicense(license: string): { isCompatible: boolean; policyViolat
 }
 
 /**
- * Parse a pyproject.toml `dependencies` array using simple regex.
- */
-function parsePyprojectToml(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-
-  const depsBlockMatch = /\bdependencies\s*=\s*\[([^\]]*)\]/s.exec(content);
-  if (!depsBlockMatch) return deps;
-
-  const block = depsBlockMatch[1];
-  const entryPattern = /["']([^"']+)["']/g;
-  let match: RegExpExecArray | null;
-  while ((match = entryPattern.exec(block)) !== null) {
-    const raw = match[1].trim();
-    parseDependencySpec(raw, deps);
-  }
-
-  return deps;
-}
-
-/**
- * Parse requirements.txt lines.
- */
-function parseRequirementsTxt(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-
-  for (const rawLine of content.split('\n')) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#') || line.startsWith('-')) continue;
-    parseDependencySpec(line, deps);
-  }
-
-  return deps;
-}
-
-/**
- * Parse a single dependency specifier like "requests>=2.28" into name + version.
- */
-function parseDependencySpec(spec: string, deps: ParsedDep[]): void {
-  const withoutMarkers = spec.split(';')[0].trim();
-  const withoutExtras = withoutMarkers.replace(/\[.*?\]/, '');
-
-  const splitMatch = /^([a-zA-Z0-9_.-]+)\s*(?:[><=!~]+)\s*(.+)$/.exec(withoutExtras);
-  if (splitMatch) {
-    const name = splitMatch[1].trim();
-    const versionPart = splitMatch[2].split(',')[0].trim();
-    deps.push({ name, version: versionPart });
-  } else {
-    const name = withoutExtras.trim();
-    if (name) {
-      deps.push({ name, version: '' });
-    }
-  }
-}
-
-/**
- * Scannt Python-Abhaengigkeiten (pyproject.toml oder requirements.txt) und
- * ermittelt die Lizenzinformationen ueber die PyPI-Registry.
+ * Scannt Python-Abhaengigkeiten ueber alle entdeckten Manifeste (pyproject.toml
+ * / requirements.txt; Monorepo-Module eingeschlossen) und ermittelt die
+ * Lizenzinformationen ueber die PyPI-Registry.
  */
 export async function scanPythonLicenses(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<LicenseEntry[]> {
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
-  let parsedDeps: ParsedDep[] = [];
 
-  // Versuche pyproject.toml, Fallback auf requirements.txt
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'pyproject.toml' });
-    if ('content' in fileResp.data) {
-      const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      parsedDeps = parsePyprojectToml(content);
-    }
-  } catch {
-    // pyproject.toml nicht gefunden
-  }
-
-  if (parsedDeps.length === 0) {
-    try {
-      const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'requirements.txt' });
-      if ('content' in fileResp.data) {
-        const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-        parsedDeps = parseRequirementsTxt(content);
-      }
-    } catch {
-      // Keine Python-Manifestdatei gefunden
-      return [];
-    }
-  }
-
+  const parsedDeps = await collectPythonDeps(octokit, owner, repo, manifestPaths);
   if (parsedDeps.length === 0) return [];
 
   // PyPI-Registry-Abfragen in Batches

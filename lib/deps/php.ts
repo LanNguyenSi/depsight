@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectPhpDeps } from '@/lib/manifests/php';
 import type { DependencyInfo, DependencyStatus } from './age-checker';
 
 interface PackagistVersionEntry {
@@ -9,11 +10,6 @@ interface PackagistVersionEntry {
 
 interface PackagistData {
   packages: Record<string, PackagistVersionEntry[]>;
-}
-
-interface ParsedDep {
-  name: string;
-  version: string;
 }
 
 function parseVersion(v: string): [number, number, number] {
@@ -41,35 +37,6 @@ function classifyStatus(
   } catch {
     return 'UNKNOWN';
   }
-}
-
-/**
- * Parse composer.json to extract production dependencies.
- * Skips `php` and `ext-*` entries (PHP extensions, not packages).
- */
-function parseComposerJson(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    return deps;
-  }
-
-  const require = parsed.require as Record<string, string> | undefined;
-  if (!require || typeof require !== 'object') return deps;
-
-  for (const [name, version] of Object.entries(require)) {
-    // Skip PHP itself and extensions
-    if (name === 'php' || name.startsWith('ext-')) continue;
-
-    // Clean version constraint: strip ^, ~, >=, etc. to get base version
-    const cleanVersion = String(version).replace(/^[^0-9]*/, '').split(',')[0].trim();
-    deps.push({ name, version: cleanVersion });
-  }
-
-  return deps;
 }
 
 /**
@@ -102,29 +69,19 @@ function makeUnknownDep(name: string, version: string): DependencyInfo {
 }
 
 /**
- * Scan PHP dependencies from composer.json and check version status
- * via the Packagist registry.
+ * Scan PHP dependencies across all discovered composer.json manifests (root +
+ * monorepo packages) and check version status via the Packagist registry.
  */
 export async function scanPhpDeps(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<DependencyInfo[]> {
   const octokit = createGitHubClient(accessToken);
   const deps: DependencyInfo[] = [];
-  let parsedDeps: ParsedDep[] = [];
 
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'composer.json' });
-    if ('content' in fileResp.data) {
-      const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      parsedDeps = parseComposerJson(content);
-    }
-  } catch {
-    // No composer.json found
-    return [];
-  }
-
+  const parsedDeps = await collectPhpDeps(octokit, owner, repo, manifestPaths);
   if (parsedDeps.length === 0) return [];
 
   const BATCH_SIZE = 10;

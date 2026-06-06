@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectPhpDeps } from '@/lib/manifests/php';
 import type { LicenseEntry } from './detector';
 
 interface PackagistVersionEntry {
@@ -8,11 +9,6 @@ interface PackagistVersionEntry {
 
 interface PackagistData {
   packages: Record<string, PackagistVersionEntry[]>;
-}
-
-interface ParsedDep {
-  name: string;
-  version: string;
 }
 
 const COPYLEFT_LICENSES = new Set([
@@ -42,53 +38,19 @@ function classifyLicense(license: string): { isCompatible: boolean; policyViolat
 }
 
 /**
- * Parse composer.json to extract production dependencies.
- * Skips `php` and `ext-*` entries.
- */
-function parseComposerJson(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(content) as Record<string, unknown>;
-  } catch {
-    return deps;
-  }
-
-  const require = parsed.require as Record<string, string> | undefined;
-  if (!require || typeof require !== 'object') return deps;
-
-  for (const [name, version] of Object.entries(require)) {
-    if (name === 'php' || name.startsWith('ext-')) continue;
-    const cleanVersion = String(version).replace(/^[^0-9]*/, '').split(',')[0].trim();
-    deps.push({ name, version: cleanVersion });
-  }
-
-  return deps;
-}
-
-/**
- * Scan PHP package licenses from composer.json via the Packagist registry.
+ * Scan PHP package licenses across all discovered composer.json manifests
+ * (root + monorepo packages) via the Packagist registry.
  */
 export async function scanPhpLicenses(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<LicenseEntry[]> {
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
-  let parsedDeps: ParsedDep[] = [];
 
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'composer.json' });
-    if ('content' in fileResp.data) {
-      const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      parsedDeps = parseComposerJson(content);
-    }
-  } catch {
-    return [];
-  }
-
+  const parsedDeps = await collectPhpDeps(octokit, owner, repo, manifestPaths);
   if (parsedDeps.length === 0) return [];
 
   const BATCH_SIZE = 10;
