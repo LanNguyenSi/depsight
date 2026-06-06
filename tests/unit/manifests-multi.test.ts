@@ -142,6 +142,55 @@ describe('collectJavaDeps', () => {
     const deps = await collectJavaDeps(oct, 'o', 'r', ['pom.xml']);
     expect(deps).toEqual([{ groupId: 'org.foo', artifactId: 'a', version: '1.0' }]);
   });
+
+  it('resolves child versions from a parent dependencyManagement', async () => {
+    const parent = `<project>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>org.foo</groupId><artifactId>lib</artifactId><version>2.5.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>`;
+    const child = `<project>
+  <dependencies>
+    <dependency><groupId>org.foo</groupId><artifactId>lib</artifactId></dependency>
+    <dependency><groupId>org.bar</groupId><artifactId>util</artifactId><version>1.0</version></dependency>
+  </dependencies>
+</project>`;
+    const oct = octokitWith({ 'pom.xml': parent, 'svc/pom.xml': child });
+    const deps = await collectJavaDeps(oct, 'o', 'r', ['pom.xml', 'svc/pom.xml']);
+    const versions = Object.fromEntries(deps.map((d) => [`${d.groupId}:${d.artifactId}`, d.version]));
+    expect(versions).toEqual({ 'org.foo:lib': '2.5.0', 'org.bar:util': '1.0' });
+  });
+
+  it('skips a versionless dependency that no dependencyManagement covers', async () => {
+    const pom = `<project><dependencies>
+    <dependency><groupId>org.x</groupId><artifactId>y</artifactId></dependency>
+    <dependency><groupId>org.z</groupId><artifactId>w</artifactId><version>3.0</version></dependency>
+  </dependencies></project>`;
+    const oct = octokitWith({ 'pom.xml': pom });
+    const deps = await collectJavaDeps(oct, 'o', 'r', ['pom.xml']);
+    expect(deps).toEqual([{ groupId: 'org.z', artifactId: 'w', version: '3.0' }]);
+  });
+
+  it('does not count managed-but-unused dependencyManagement entries as deps', async () => {
+    // Only org.managed:used is actually depended on; the BOM-style unused
+    // managed entry must not surface as an installed dependency.
+    const pom = `<project>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>org.managed</groupId><artifactId>used</artifactId><version>1.0</version></dependency>
+      <dependency><groupId>org.managed</groupId><artifactId>unused</artifactId><version>9.9</version><type>pom</type><scope>import</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency><groupId>org.managed</groupId><artifactId>used</artifactId></dependency>
+  </dependencies>
+</project>`;
+    const oct = octokitWith({ 'pom.xml': pom });
+    const deps = await collectJavaDeps(oct, 'o', 'r', ['pom.xml']);
+    expect(deps).toEqual([{ groupId: 'org.managed', artifactId: 'used', version: '1.0' }]);
+  });
 });
 
 describe('collectRustDeps', () => {
