@@ -175,6 +175,84 @@ tokio = { version = "1", features = ["full"] }
     // crate-a is read before crate-b → its serde spec wins.
     expect(deps.find((d) => d.name === 'serde')?.version).toBe('1.0');
   });
+
+  it('resolves workspace dependency inheritance (workspace = true)', async () => {
+    const wsRoot = `[workspace]
+members = ["crate-a"]
+
+[workspace.dependencies]
+serde = "1.0.195"
+tokio = { version = "1.35", features = ["full"] }
+`;
+    const member = `[package]
+name = "crate-a"
+
+[dependencies]
+serde = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+anyhow = "1.0"
+`;
+    const oct = octokitWith({ 'Cargo.toml': wsRoot, 'crate-a/Cargo.toml': member });
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'crate-a/Cargo.toml']);
+    const versions = Object.fromEntries(deps.map((d) => [d.name, d.version]));
+    expect(versions).toEqual({ serde: '1.0.195', tokio: '1.35', anyhow: '1.0' });
+  });
+
+  it('resolves the dotted-key inherit form (serde.workspace = true)', async () => {
+    const wsRoot = `[workspace]
+members = ["crate-a"]
+
+[workspace.dependencies]
+serde = "1.0.195"
+`;
+    const member = `[package]
+name = "crate-a"
+
+[dependencies]
+serde.workspace = true
+anyhow = "1.0"
+`;
+    const oct = octokitWith({ 'Cargo.toml': wsRoot, 'crate-a/Cargo.toml': member });
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'crate-a/Cargo.toml']);
+    const versions = Object.fromEntries(deps.map((d) => [d.name, d.version]));
+    expect(versions).toEqual({ serde: '1.0.195', anyhow: '1.0' });
+  });
+
+  it('leaves a single non-workspace crate unchanged', async () => {
+    const cargo = `[package]
+name = "solo"
+
+[dependencies]
+serde = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+`;
+    const oct = octokitWith({ 'Cargo.toml': cargo });
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml']);
+    expect(deps).toEqual([
+      { name: 'serde', version: '1.0' },
+      { name: 'tokio', version: '1.35' },
+    ]);
+  });
+
+  it('keeps an empty version when a workspace-inherited dep is absent from the table', async () => {
+    const wsRoot = `[workspace]
+members = ["crate-a"]
+
+[workspace.dependencies]
+serde = "1.0.195"
+`;
+    const member = `[package]
+name = "crate-a"
+
+[dependencies]
+serde = { workspace = true }
+mystery = { workspace = true }
+`;
+    const oct = octokitWith({ 'Cargo.toml': wsRoot, 'crate-a/Cargo.toml': member });
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'crate-a/Cargo.toml']);
+    const versions = Object.fromEntries(deps.map((d) => [d.name, d.version]));
+    expect(versions).toEqual({ serde: '1.0.195', mystery: '' });
+  });
 });
 
 describe('collectPhpDeps', () => {
