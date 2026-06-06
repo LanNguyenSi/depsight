@@ -182,32 +182,66 @@ export async function detectEcosystem(
   };
 }
 
+export type Octokit = ReturnType<typeof createGitHubClient>;
+
+export interface FetchedManifest {
+  path: string;
+  content: string;
+}
+
+/**
+ * Fetch the raw UTF-8 contents of the given repo paths, batched to bound
+ * concurrency against GitHub secondary rate limits. Unreadable / missing files
+ * are skipped so one bad path can't sink the whole scan. Results preserve the
+ * input order, so a downstream first-seen-wins dedup is deterministic
+ * (root-first when `paths` is root-first). The shared primitive behind every
+ * ecosystem's multi-manifest read.
+ */
+export async function fetchManifestContents(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  paths: string[],
+): Promise<FetchedManifest[]> {
+  const results: Array<FetchedManifest | null> = new Array(paths.length).fill(null);
+  const BATCH_SIZE = 10; // bound concurrency to avoid secondary rate limits
+  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+    const batch = paths.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (path, j) => {
+        try {
+          const resp = await octokit.rest.repos.getContent({ owner, repo, path });
+          if (!('content' in resp.data)) return;
+          results[i + j] = {
+            path,
+            content: Buffer.from(resp.data.content, 'base64').toString('utf-8'),
+          };
+        } catch {
+          // Missing or unreadable — skip it.
+        }
+      }),
+    );
+  }
+  return results.filter((r): r is FetchedManifest => r !== null);
+}
+
 /**
  * Fetch and JSON-parse the given package.json paths. Unreadable or malformed
  * manifests are skipped, so one bad file can't sink the whole scan.
  */
 export async function fetchNpmManifests(
-  octokit: ReturnType<typeof createGitHubClient>,
+  octokit: Octokit,
   owner: string,
   repo: string,
   paths: string[],
 ): Promise<ParsedNpmManifest[]> {
   const out: ParsedNpmManifest[] = [];
-  const BATCH_SIZE = 10; // bound concurrency to avoid secondary rate limits
-  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
-    const batch = paths.slice(i, i + BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (path) => {
-        try {
-          const resp = await octokit.rest.repos.getContent({ owner, repo, path });
-          if (!('content' in resp.data)) return;
-          const content = Buffer.from(resp.data.content, 'base64').toString('utf-8');
-          out.push(JSON.parse(content) as ParsedNpmManifest);
-        } catch {
-          // Missing or invalid manifest — skip it.
-        }
-      }),
-    );
+  for (const { content } of await fetchManifestContents(octokit, owner, repo, paths)) {
+    try {
+      out.push(JSON.parse(content) as ParsedNpmManifest);
+    } catch {
+      // Malformed JSON — skip it.
+    }
   }
   return out;
 }

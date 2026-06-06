@@ -15,6 +15,7 @@ import {
   unionNpmDeps,
   detectEcosystem,
   fetchNpmManifests,
+  fetchManifestContents,
   type TreeEntry,
 } from '@/lib/manifest-discovery';
 
@@ -218,6 +219,33 @@ describe('fetchNpmManifests', () => {
       ['package.json', 'broken/package.json', 'gone/package.json'],
     );
     expect(manifests).toEqual([{ name: 'root' }]);
+  });
+});
+
+describe('fetchManifestContents', () => {
+  beforeEach(() => {
+    getContent.mockReset();
+  });
+
+  it('preserves input order and skips unreadable paths', async () => {
+    getContent.mockImplementation(({ path }: { path: string }) => {
+      if (path === 'a.txt') return Promise.resolve({ data: { content: Buffer.from('A').toString('base64') } });
+      if (path === 'b.txt') return Promise.resolve({ data: { content: Buffer.from('B').toString('base64') } });
+      return Promise.reject(new Error('404'));
+    });
+
+    const out = await fetchManifestContents(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['a.txt', 'gone.txt', 'b.txt'],
+    );
+    // Order follows the input (root-first), regardless of resolution timing, so
+    // a downstream first-seen-wins dedup is deterministic.
+    expect(out).toEqual([
+      { path: 'a.txt', content: 'A' },
+      { path: 'b.txt', content: 'B' },
+    ]);
   });
 });
 

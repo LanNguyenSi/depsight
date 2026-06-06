@@ -1,11 +1,6 @@
-import type { LicenseEntry } from './detector';
 import { createGitHubClient } from '@/lib/github';
-
-interface MavenDependency {
-  groupId: string;
-  artifactId: string;
-  version: string;
-}
+import { collectJavaDeps } from '@/lib/manifests/java';
+import type { LicenseEntry } from './detector';
 
 // Copyleft licenses that conflict with proprietary use
 const COPYLEFT_LICENSES = new Set([
@@ -59,35 +54,6 @@ function classifyLicense(license: string): { isCompatible: boolean; policyViolat
   return { isCompatible: true, policyViolation: false, needsReview: false };
 }
 
-function parsePomDependencies(pomXml: string): MavenDependency[] {
-  const deps: MavenDependency[] = [];
-  const depBlockRegex = /<dependency>([\s\S]*?)<\/dependency>/g;
-
-  let match: RegExpExecArray | null;
-  while ((match = depBlockRegex.exec(pomXml)) !== null) {
-    const block = match[1];
-
-    const groupIdMatch = /<groupId>\s*(.*?)\s*<\/groupId>/.exec(block);
-    const artifactIdMatch = /<artifactId>\s*(.*?)\s*<\/artifactId>/.exec(block);
-    const versionMatch = /<version>\s*(.*?)\s*<\/version>/.exec(block);
-
-    if (!groupIdMatch || !artifactIdMatch || !versionMatch) continue;
-
-    const version = versionMatch[1];
-
-    // Skip property references like ${project.version}
-    if (version.startsWith('${')) continue;
-
-    deps.push({
-      groupId: groupIdMatch[1],
-      artifactId: artifactIdMatch[1],
-      version,
-    });
-  }
-
-  return deps;
-}
-
 function parseLicenseFromPom(pomXml: string): string {
   // Match <licenses><license><name>...</name></license></licenses>
   const licensesBlockMatch = /<licenses>([\s\S]*?)<\/licenses>/.exec(pomXml);
@@ -107,25 +73,16 @@ export async function scanJavaLicenses(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<LicenseEntry[]> {
   const octokit = createGitHubClient(accessToken);
   const results: LicenseEntry[] = [];
 
-  // 1. Fetch pom.xml via GitHub Contents API
-  let pomContent: string;
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'pom.xml' });
-    if (!('content' in fileResp.data)) return [];
-    pomContent = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-  } catch {
-    return [];
-  }
-
-  // 2. Parse dependencies from pom.xml
-  const deps = parsePomDependencies(pomContent);
+  // 1. Read every discovered pom.xml (root + reactor modules) and union deps.
+  const deps = await collectJavaDeps(octokit, owner, repo, manifestPaths);
   if (deps.length === 0) return [];
 
-  // 3. Fetch license info from Maven Central POMs in batches
+  // 2. Fetch license info from Maven Central POMs in batches
   const BATCH_SIZE = 10;
   const BATCH_DELAY_MS = 50;
 

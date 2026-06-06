@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectRustDeps } from '@/lib/manifests/rust';
 import type { DependencyInfo, DependencyStatus } from './age-checker';
 
 interface CrateVersion {
@@ -13,11 +14,6 @@ interface CrateData {
     newest_version?: string;
   };
   versions: CrateVersion[];
-}
-
-interface ParsedDep {
-  name: string;
-  version: string;
 }
 
 function parseVersion(v: string): [number, number, number] {
@@ -47,49 +43,6 @@ function classifyStatus(
   }
 }
 
-/**
- * Parse a Cargo.toml file to extract dependencies.
- * Handles formats:
- *   serde = "1.0"
- *   serde = { version = "1.0", features = [...] }
- *   tokio = { version = "1", ... }
- */
-function parseCargoToml(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-  const lines = content.split('\n');
-
-  let inDepsSection = false;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-
-    // Detect section headers
-    if (line.startsWith('[')) {
-      inDepsSection =
-        line === '[dependencies]' ||
-        line === '[dev-dependencies]';
-      continue;
-    }
-
-    if (!inDepsSection || !line || line.startsWith('#')) continue;
-
-    // Match: name = "version"
-    const simpleMatch = /^([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"/.exec(line);
-    if (simpleMatch) {
-      deps.push({ name: simpleMatch[1], version: simpleMatch[2] });
-      continue;
-    }
-
-    // Match: name = { version = "version", ... }
-    const tableMatch = /^([a-zA-Z0-9_-]+)\s*=\s*\{.*?version\s*=\s*"([^"]*)"/.exec(line);
-    if (tableMatch) {
-      deps.push({ name: tableMatch[1], version: tableMatch[2] });
-    }
-  }
-
-  return deps;
-}
-
 function makeUnknownDep(name: string, version: string): DependencyInfo {
   return {
     name,
@@ -105,29 +58,19 @@ function makeUnknownDep(name: string, version: string): DependencyInfo {
 }
 
 /**
- * Scan Rust dependencies from Cargo.toml and check version status
- * via the crates.io registry.
+ * Scan Rust dependencies across all discovered Cargo.toml manifests (workspace
+ * root + member crates) and check version status via the crates.io registry.
  */
 export async function scanRustDeps(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<DependencyInfo[]> {
   const octokit = createGitHubClient(accessToken);
   const deps: DependencyInfo[] = [];
-  let parsedDeps: ParsedDep[] = [];
 
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'Cargo.toml' });
-    if ('content' in fileResp.data) {
-      const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      parsedDeps = parseCargoToml(content);
-    }
-  } catch {
-    // No Cargo.toml found
-    return [];
-  }
-
+  const parsedDeps = await collectRustDeps(octokit, owner, repo, manifestPaths);
   if (parsedDeps.length === 0) return [];
 
   const BATCH_SIZE = 10;

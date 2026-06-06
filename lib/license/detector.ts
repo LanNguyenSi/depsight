@@ -83,12 +83,13 @@ export async function detectLicenses(
     };
   }
 
-  // Dispatch to ecosystem-specific scanners
-  if (ecosystemInfo.ecosystem === 'python') return buildLicenseScanResult(await scanPythonLicenses(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'go') return buildLicenseScanResult(await scanGoLicenses(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'java') return buildLicenseScanResult(await scanJavaLicenses(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'rust') return buildLicenseScanResult(await scanRustLicenses(accessToken, owner, repo));
-  if (ecosystemInfo.ecosystem === 'php') return buildLicenseScanResult(await scanPhpLicenses(accessToken, owner, repo));
+  // Dispatch to ecosystem-specific scanners, passing every discovered manifest
+  // path of the primary ecosystem so monorepos union all module licenses.
+  if (ecosystemInfo.ecosystem === 'python') return buildLicenseScanResult(await scanPythonLicenses(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'go') return buildLicenseScanResult(await scanGoLicenses(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'java') return buildLicenseScanResult(await scanJavaLicenses(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'rust') return buildLicenseScanResult(await scanRustLicenses(accessToken, owner, repo, ecosystemInfo.manifestPaths));
+  if (ecosystemInfo.ecosystem === 'php') return buildLicenseScanResult(await scanPhpLicenses(accessToken, owner, repo, ecosystemInfo.manifestPaths));
 
   // Default: npm
   try {

@@ -1,4 +1,5 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectRustDeps } from '@/lib/manifests/rust';
 import type { LicenseEntry } from './detector';
 
 interface CrateVersion {
@@ -9,11 +10,6 @@ interface CrateVersion {
 
 interface CrateData {
   versions: CrateVersion[];
-}
-
-interface ParsedDep {
-  name: string;
-  version: string;
 }
 
 const COPYLEFT_LICENSES = new Set([
@@ -76,63 +72,19 @@ function selectMostPermissive(spdxExpression: string): string {
 }
 
 /**
- * Parse a Cargo.toml file to extract dependencies.
- */
-function parseCargoToml(content: string): ParsedDep[] {
-  const deps: ParsedDep[] = [];
-  const lines = content.split('\n');
-
-  let inDepsSection = false;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-
-    if (line.startsWith('[')) {
-      inDepsSection =
-        line === '[dependencies]' ||
-        line === '[dev-dependencies]';
-      continue;
-    }
-
-    if (!inDepsSection || !line || line.startsWith('#')) continue;
-
-    const simpleMatch = /^([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"/.exec(line);
-    if (simpleMatch) {
-      deps.push({ name: simpleMatch[1], version: simpleMatch[2] });
-      continue;
-    }
-
-    const tableMatch = /^([a-zA-Z0-9_-]+)\s*=\s*\{.*?version\s*=\s*"([^"]*)"/.exec(line);
-    if (tableMatch) {
-      deps.push({ name: tableMatch[1], version: tableMatch[2] });
-    }
-  }
-
-  return deps;
-}
-
-/**
- * Scan Rust crate licenses from Cargo.toml via the crates.io registry.
+ * Scan Rust crate licenses across all discovered Cargo.toml manifests
+ * (workspace root + member crates) via the crates.io registry.
  */
 export async function scanRustLicenses(
   accessToken: string,
   owner: string,
   repo: string,
+  manifestPaths: string[] = [],
 ): Promise<LicenseEntry[]> {
   const octokit = createGitHubClient(accessToken);
   const licenses: LicenseEntry[] = [];
-  let parsedDeps: ParsedDep[] = [];
 
-  try {
-    const fileResp = await octokit.rest.repos.getContent({ owner, repo, path: 'Cargo.toml' });
-    if ('content' in fileResp.data) {
-      const content = Buffer.from(fileResp.data.content, 'base64').toString('utf-8');
-      parsedDeps = parseCargoToml(content);
-    }
-  } catch {
-    return [];
-  }
-
+  const parsedDeps = await collectRustDeps(octokit, owner, repo, manifestPaths);
   if (parsedDeps.length === 0) return [];
 
   const BATCH_SIZE = 10;
