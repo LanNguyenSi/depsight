@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-06-09
+
+**Headline: monorepo and inherited-version support for the non-npm scanners (Java, Rust, and friends).** depsight now walks the full git tree for manifests and resolves versions inherited from a parent POM or a Cargo workspace, so a polyglot monorepo gets its deps and licenses resolved across every ecosystem instead of just the root. depsight is deployed from `master`; this tag is deploy provenance.
+
+### Added
+
+- **Full git-tree manifest discovery for monorepos** (PRs #59, #62). The scanners walk the entire git tree for manifests and union all manifest paths for the non-npm ecosystems, so deps and licenses resolve across a monorepo's sub-projects rather than only the repository root.
+- **Java: versions resolved from the parent POM `<dependencyManagement>`** (PR #64), so a child module that omits an explicit version inherits it correctly.
+- **Rust: `[workspace.dependencies]` inheritance resolved in `Cargo.toml` scanning** (PR #63), so workspace-inherited crate versions are recognised.
+
+### Changed
+
+- **Removed stale planforge / scaffoldkit bootstrap artifacts** (PR #58).
+
+> The hono (#61) and vitest (#60) CVE bumps in this window were scoped to the `mcp/` package (`@opentriologue/depsight-mcp`), not the deployed app: hono is not an app dependency, and the app's vitest was already current. They are intentionally absent here. The `depsight-mcp` package is not re-released because consumers resolve hono via its `^4` range and vitest is a devDependency.
+
 ## [0.3.0] - 2026-05-31
 
 **Headline: self-service API tokens and a hardened, agent-driven CVE
