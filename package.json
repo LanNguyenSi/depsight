@@ -49,6 +49,7 @@
   "overrides": {
     "effect": ">=3.20.0",
     "defu": ">=6.1.5",
-    "postcss": "^8.5.10"
+    "postcss": "^8.5.10",
+    "esbuild": ">=0.28.1"
   }
 }
