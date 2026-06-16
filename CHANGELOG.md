@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-06-16
+
+**Headline: Security patch for esbuild CVE GHSA-g7r4-m6w7-qqqr across the app and the MCP sub-package.**
+
+### Security
+
+- **esbuild pinned to >=0.28.1 in the root manifest** (PR #66): added an `overrides` entry to constrain the optional peer dep range that vite brings in (`^0.27.0 || ^0.28.0`) to `>=0.28.1` (GHSA-g7r4-m6w7-qqqr).
+- **esbuild pinned to >=0.28.1 in `mcp/`** (PR #67): the `mcp/` sub-package lockfile still resolved esbuild 0.27.7 via `tsx` and `vite`; bumped `tsx` to `^4.22.4` and added an `esbuild ^0.28.1` override (GHSA-gv7w-rqvm-qjhr, GHSA-g7r4-m6w7-qqqr).
+
 ## [0.4.0] - 2026-06-09
 
 **Headline: monorepo and inherited-version support for the non-npm scanners (Java, Rust, and friends).** depsight now walks the full git tree for manifests and resolves versions inherited from a parent POM or a Cargo workspace, so a polyglot monorepo gets its deps and licenses resolved across every ecosystem instead of just the root. depsight is deployed from `master`; this tag is deploy provenance.
