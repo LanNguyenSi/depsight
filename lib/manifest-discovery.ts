@@ -99,8 +99,11 @@ export interface UnionedDep {
  * dev one.
  *
  * Version collapse: if two workspaces pin the same dep at different specs, the
- * first-seen (root-first) spec is kept and the others are dropped. Per-workspace
- * version reporting needs manifest provenance and is a deliberate follow-up.
+ * lowest (oldest) concrete spec is kept so an old, vulnerable pin in one workspace
+ * is not hidden by a newer pin elsewhere (relevant for CVE / dependency-age reporting).
+ * The isDev flag is decided independently: a prod occurrence anywhere clears it,
+ * regardless of which spec wins. Per-workspace version reporting needs manifest
+ * provenance and is a deliberate follow-up.
  */
 export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
   const localNames = new Set(
@@ -108,15 +111,43 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
   );
   const byName = new Map<string, UnionedDep>();
 
+  // Should `candidate` replace `incumbent` as the kept (lowest/oldest) spec?
+  // Dependency-free (no `semver`): strip a leading range operator, then read the
+  // version triple ANCHORED at the start. A spec with no numeric core (`*`,
+  // `latest`, `workspace:*`, a git/url/alias spec) is "non-comparable": a concrete
+  // spec always beats a non-comparable one, and two non-comparable specs keep the
+  // incumbent (first-seen), so the lowest concrete pin always surfaces.
+  const specIsLower = (candidate: string, incumbent: string): boolean => {
+    const parse = (s: string): [number, number, number] | null => {
+      const m = s.trim().replace(/^[\sv=<>~^]+/, '').match(/^\d+(?:\.\d+)?(?:\.\d+)?/);
+      if (!m) return null;
+      const [major = 0, minor = 0, patch = 0] = m[0].split('.').map(Number);
+      return [major, minor, patch];
+    };
+    const pc = parse(candidate);
+    if (!pc) return false; // candidate non-comparable: never displaces the incumbent
+    const pi = parse(incumbent);
+    if (!pi) return true; // concrete candidate beats a non-comparable incumbent
+    for (let i = 0; i < 3; i++) {
+      if (pc[i] !== pi[i]) return pc[i] < pi[i];
+    }
+    return false;
+  };
+
   const add = (name: string, spec: string, isDev: boolean) => {
     if (localNames.has(name)) return; // workspace-internal reference
     const existing = byName.get(name);
     if (!existing) {
       byName.set(name, { name, versionSpec: spec, isDev });
-    } else if (existing.isDev && !isDev) {
-      // Promote: the package is a real runtime dep somewhere in the workspace.
-      byName.set(name, { name, versionSpec: spec, isDev: false });
+      return;
     }
+    // Two independent dimensions: keep the lowest spec seen, and clear isDev if
+    // the package is a runtime (prod) dependency in ANY manifest.
+    byName.set(name, {
+      name,
+      versionSpec: specIsLower(spec, existing.versionSpec) ? spec : existing.versionSpec,
+      isDev: existing.isDev && isDev,
+    });
   };
 
   for (const m of manifests) {
