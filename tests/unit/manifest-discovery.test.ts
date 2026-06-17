@@ -187,14 +187,111 @@ describe('unionNpmDeps', () => {
     expect(deps).toEqual([]);
   });
 
-  it('collapses a cross-workspace version conflict to the first-seen spec', () => {
-    // Documented limitation: first (root-first) spec wins, others dropped.
-    const deps = unionNpmDeps([
+  it('keeps the lowest (most-vulnerable) spec on a cross-workspace version conflict', () => {
+    // Lowest-wins so an old vulnerable pin in one workspace is not hidden by a
+    // newer pin elsewhere. Both orderings must converge on the lower spec.
+    const lowerSecond = unionNpmDeps([
       { name: 'root', dependencies: { lodash: '^4.0.0' } },
       { name: 'pkg', dependencies: { lodash: '^3.0.0' } },
     ]);
-    expect(deps).toHaveLength(1);
-    expect(deps[0].versionSpec).toBe('^4.0.0');
+    expect(lowerSecond).toHaveLength(1);
+    expect(lowerSecond[0].versionSpec).toBe('^3.0.0');
+
+    const lowerFirst = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '^3.0.0' } },
+      { name: 'pkg', dependencies: { lodash: '^4.0.0' } },
+    ]);
+    expect(lowerFirst[0].versionSpec).toBe('^3.0.0');
+  });
+
+  it('compares versions numerically, not lexicographically', () => {
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '1.10.0' } },
+      { name: 'pkg', dependencies: { lodash: '1.2.3' } },
+    ]);
+    expect(deps[0].versionSpec).toBe('1.2.3');
+  });
+
+  it('lets a concrete spec beat a non-comparable one regardless of order', () => {
+    // A concrete pin must surface over `*` / `latest` so the real version stays visible.
+    const wildcardFirst = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '*' } },
+      { name: 'pkg', dependencies: { lodash: '^2.0.0' } },
+    ]);
+    expect(wildcardFirst[0].versionSpec).toBe('^2.0.0');
+
+    const wildcardSecond = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '^2.0.0' } },
+      { name: 'pkg', dependencies: { lodash: 'latest' } },
+    ]);
+    expect(wildcardSecond[0].versionSpec).toBe('^2.0.0');
+  });
+
+  it('surfaces the lowest concrete spec even when a non-comparable spec is seen first', () => {
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '*' } },
+      { name: 'a', dependencies: { lodash: '2.0.0' } },
+      { name: 'b', dependencies: { lodash: '1.0.0' } },
+    ]);
+    expect(deps[0].versionSpec).toBe('1.0.0');
+  });
+
+  it('keeps the first-seen spec when every spec is non-comparable', () => {
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: '*' } },
+      { name: 'pkg', dependencies: { lodash: 'latest' } },
+    ]);
+    expect(deps[0].versionSpec).toBe('*');
+  });
+
+  it('treats git/url specs as non-comparable (no version pulled from the URL)', () => {
+    // The 9.9.9 inside the URL must NOT be parsed; the concrete 1.2.3 wins.
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { lodash: 'git+https://github.com/foo/bar.git#v9.9.9' } },
+      { name: 'pkg', dependencies: { lodash: '1.2.3' } },
+    ]);
+    expect(deps[0].versionSpec).toBe('1.2.3');
+  });
+
+  it('strips range operators beyond ^ when comparing', () => {
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '>=2.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '1.9.9' } },
+      ])[0].versionSpec,
+    ).toBe('1.9.9');
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '~3.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '2.5.0' } },
+      ])[0].versionSpec,
+    ).toBe('2.5.0');
+  });
+
+  it('selects the lowest spec independently of the dev/prod flag', () => {
+    // dev pin lower than the prod pin: keep the lower spec AND mark it prod.
+    const devLower = unionNpmDeps([
+      { name: 'a', devDependencies: { lib: '^5.0.0' } },
+      { name: 'b', dependencies: { lib: '^5.1.0' } },
+    ]);
+    expect(devLower[0].isDev).toBe(false);
+    expect(devLower[0].versionSpec).toBe('^5.0.0');
+
+    // prod pin seen first, then a lower dev pin: stays prod, keeps the lower spec.
+    const prodThenLowerDev = unionNpmDeps([
+      { name: 'a', dependencies: { lib: '^5.1.0' } },
+      { name: 'b', devDependencies: { lib: '^5.0.0' } },
+    ]);
+    expect(prodThenLowerDev[0].isDev).toBe(false);
+    expect(prodThenLowerDev[0].versionSpec).toBe('^5.0.0');
+
+    // dev pin seen first, then a lower prod pin: prod clears isDev, lower spec wins.
+    const devThenLowerProd = unionNpmDeps([
+      { name: 'a', devDependencies: { lib: '^5.1.0' } },
+      { name: 'b', dependencies: { lib: '^5.0.0' } },
+    ]);
+    expect(devThenLowerProd[0].isDev).toBe(false);
+    expect(devThenLowerProd[0].versionSpec).toBe('^5.0.0');
   });
 });
 
