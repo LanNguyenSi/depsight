@@ -34,6 +34,11 @@ Workflow fail rates, build times, flaky-job detection. Powered by the companion 
 
 Read-only queries (CVEs, licenses, deps, policies, CI analytics) exposed to Claude and other agents via [`mcp/`](../mcp/README.md).
 
+## Settings
+
+- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page.
+- **UI language switch:** English / German.
+
 ## Operational
 
 - **Health check endpoint:** `GET /api/health` returns service status.

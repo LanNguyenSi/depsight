@@ -29,15 +29,18 @@ app/
   dashboard/        Main dashboard (repo list, CVE/license/deps tabs)
   overview/         Team health overview + repo comparison
   policies/         Policy management
+  settings/         Settings (API tokens, UI language)
   login/            Login page
 components/         Shared UI components
-lib/
+lib/                Business logic (illustrative selection below)
   cve/              CVE scanner
   deps/             Dependency age scanners (npm, python, go, java, rust, php)
   license/          License scanners (npm, python, go, java, rust, php)
   sbom/             CycloneDX SBOM generator
   policy/           Policy engine
   overview/         Team health aggregation
+  cron/             Scheduled auto-scan
+  export/           Repository export bundle
 prisma/             Database schema
 docker/             Docker entrypoints
 ```

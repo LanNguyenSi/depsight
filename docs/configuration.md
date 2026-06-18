@@ -11,6 +11,7 @@
 | `NEXTAUTH_URL` | yes | `http://localhost:3000` | Public base URL of the app |
 | `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
+| `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron) |
 
 ## GitHub OAuth (optional)
 
