@@ -26,6 +26,24 @@ export interface CVENotificationPayload {
   scannedAt: string;
 }
 
+export interface ScanCompletedPayload {
+  event: 'scan.completed';
+  repoFullName: string;
+  repoId: string;
+  scanId: string;
+  scanType: 'cve' | 'license' | 'deps';
+  summary: Record<string, unknown>;
+  policyViolations: Array<{
+    policyName: string;
+    severity: string;
+    message: string;
+    affectedPackages: string[];
+  }>;
+  scannedAt: string;
+}
+
+export type NotificationPayload = CVENotificationPayload | ScanCompletedPayload;
+
 // ─── Webhook ────────────────────────────────────────────────────────────────
 
 function signPayload(secret: string, body: string): string {
@@ -35,7 +53,7 @@ function signPayload(secret: string, body: string): string {
 async function deliverWebhook(
   url: string,
   secret: string | null,
-  payload: CVENotificationPayload,
+  payload: NotificationPayload,
 ): Promise<{ ok: boolean; status?: number; error?: string }> {
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {
@@ -172,7 +190,7 @@ export async function notifyForScan(
 
   await Promise.allSettled(
     webhooks
-      .filter((wh) => wh.events.includes(event) || wh.events.includes('scan.completed'))
+      .filter((wh) => wh.events.includes(event))
       .map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
   );
 
@@ -187,4 +205,38 @@ export async function notifyForScan(
       await deliverSlack(slack.webhookUrl, slack.channel, payload);
     }
   }
+}
+
+// ─── Scan-completed notification ────────────────────────────────────────────
+
+export async function notifyScanCompleted(
+  userId: string,
+  repoId: string,
+  repoFullName: string,
+  scanId: string,
+  scanType: 'cve' | 'license' | 'deps',
+  summary: Record<string, unknown>,
+  policyViolations: ScanCompletedPayload['policyViolations'],
+): Promise<void> {
+  const webhooks = await prisma.webhookConfig.findMany({
+    where: { userId, enabled: true },
+  });
+
+  const subscribers = webhooks.filter((wh) => wh.events.includes('scan.completed'));
+  if (subscribers.length === 0) return;
+
+  const payload: ScanCompletedPayload = {
+    event: 'scan.completed',
+    repoFullName,
+    repoId,
+    scanId,
+    scanType,
+    summary,
+    policyViolations,
+    scannedAt: new Date().toISOString(),
+  };
+
+  await Promise.allSettled(
+    subscribers.map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
+  );
 }

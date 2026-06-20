@@ -4,6 +4,7 @@ import { syncUserRepos } from '@/lib/repos/sync';
 import { scanRepository } from '@/lib/cve/scanner';
 import { scanLicenses } from '@/lib/license/scanner';
 import { scanDependencies } from '@/lib/deps/scanner';
+import { syncAllUserRepos } from '@/lib/ci/sync';
 
 const INTERVAL_MS = (parseInt(process.env.SCAN_INTERVAL_MINUTES ?? '60', 10) || 60) * 60_000;
 
@@ -38,7 +39,24 @@ async function runAutoScan() {
         const syncResult = await syncUserRepos(prisma, user.id, githubRepos);
         console.log(`[auto-scan] ${user.githubLogin}: synced ${syncResult.syncedCount} repos`);
 
-        // 2. Get tracked repos not scanned within the current interval
+        // 2. Hoist rateLimited above the staleness gate so CI sync can set it
+        let rateLimited = false;
+
+        // 3. Sync CI runs once per user per cycle (before staleness gate so it
+        //    always runs regardless of whether dep scans are due)
+        try {
+          const ciSummary = await syncAllUserRepos(user.id, { daysBack: 30 });
+          console.log(`[auto-scan] ${user.githubLogin}: CI sync completed (${ciSummary.reposSucceeded} repos, ${ciSummary.totalRunsIngested} runs ingested)`);
+        } catch (e) {
+          if (isRateLimited(e)) {
+            console.warn(`[auto-scan] ${user.githubLogin}: CI sync rate limited`);
+            rateLimited = true;
+          } else {
+            console.warn(`[auto-scan] ${user.githubLogin}: CI sync failed:`, (e as Error).message);
+          }
+        }
+
+        // 4. Get tracked repos not scanned within the current interval
         const staleThreshold = new Date(Date.now() - INTERVAL_MS);
         const repos = await prisma.repo.findMany({
           where: {
@@ -52,15 +70,20 @@ async function runAutoScan() {
           select: { id: true, fullName: true },
         });
 
+        // 5. Skip dep scans if nothing is stale (CI already synced above)
         if (repos.length === 0) {
           console.log(`[auto-scan] ${user.githubLogin}: all repos up to date, skipping`);
           continue;
         }
 
+        if (rateLimited) {
+          console.warn(`[auto-scan] ${user.githubLogin}: skipping dep scans, rate limited`);
+          continue;
+        }
+
         console.log(`[auto-scan] ${user.githubLogin}: scanning ${repos.length} stale repos`);
 
-        // 3. Scan each repo (3 scans in parallel per repo)
-        let rateLimited = false;
+        // 6. Scan each repo (3 scans in parallel per repo)
         for (const repo of repos) {
           if (rateLimited) break;
 

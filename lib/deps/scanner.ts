@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { analyzeDepAge } from './age-checker';
+import { runPostScanHooks } from '@/lib/alerts/post-scan';
 
 export async function scanDependencies(
   userId: string,
@@ -49,6 +50,13 @@ export async function scanDependencies(
         data: { lastScannedAt: new Date() },
       });
     });
+
+    // Fire post-scan hooks: policy eval + scan.completed webhook (non-blocking)
+    // analyzeDepAge().summary is a concrete numeric object without an index
+    // signature, so the double-cast satisfies ScanCompletedPayload.summary (Record<string,unknown>).
+    runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'deps', {
+      summary: result.summary as unknown as Record<string, unknown>,
+    }).catch((err) => console.error('[post-scan] deps hook error:', err));
 
     return {
       scanId: scan.id,

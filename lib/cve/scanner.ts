@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { fetchRepoAdvisories } from './github-advisories';
 import { notifyForScan } from '@/lib/alerts/notifier';
+import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
 
 export interface ScanRepositoryResult {
@@ -86,6 +87,14 @@ export async function scanRepository(
         (err) => console.error('Notification error:', err),
       );
     }
+
+    // Fire post-scan hooks: policy eval + scan.completed webhook (non-blocking)
+    runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'cve', {
+      cveCount: result.counts.total,
+      riskScore: result.riskScore,
+      criticalCount: result.counts.critical,
+      highCount: result.counts.high,
+    }).catch((err) => console.error('[post-scan] cve hook error:', err));
 
     return {
       scanId: scan.id,

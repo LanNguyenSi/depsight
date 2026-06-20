@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { detectLicenses } from './detector';
+import { runPostScanHooks } from '@/lib/alerts/post-scan';
 
 export async function scanLicenses(
   userId: string,
@@ -48,6 +49,12 @@ export async function scanLicenses(
         data: { lastScannedAt: new Date() },
       });
     });
+
+    // Fire post-scan hooks: policy eval + scan.completed webhook (non-blocking)
+    runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'license', {
+      licenseCount: result.licenses.length,
+      conflictCount: result.conflictCount,
+    }).catch((err) => console.error('[post-scan] license hook error:', err));
 
     return {
       scanId: scan.id,
