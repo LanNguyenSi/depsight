@@ -39,10 +39,43 @@ export interface CycloneDXBOM {
   vulnerabilities?: CycloneDXVulnerability[];
 }
 
-function toPurl(ecosystem: string, packageName: string, version?: string): string {
+/**
+ * Generate a Package URL (PURL) per the PURL spec (https://github.com/package-url/purl-spec).
+ * Accepts both depsight-internal and GitHub/OSV ecosystem vocabulary (e.g. 'pip', 'packagist').
+ * Each path segment is encoded separately so namespace separators ('/' for golang/composer/npm
+ * scoped packages, ':' for maven group:artifact) are preserved as literal characters.
+ */
+export function toPurl(ecosystem: string, packageName: string, version?: string): string {
   const eco = ecosystem.toLowerCase();
-  const type = eco === 'npm' ? 'npm' : eco === 'pypi' ? 'pypi' : eco === 'maven' ? 'maven' : eco === 'rubygems' ? 'gem' : eco === 'go' ? 'golang' : 'generic';
-  const base = `pkg:${type}/${encodeURIComponent(packageName)}`;
+  // Normalize to PURL type vocabulary — accept both depsight and GitHub/OSV vocabulary
+  const type =
+    eco === 'npm' ? 'npm' :
+    eco === 'pypi' || eco === 'python' || eco === 'pip' ? 'pypi' :
+    eco === 'maven' || eco === 'java' ? 'maven' :
+    eco === 'cargo' || eco === 'rust' || eco === 'crates.io' ? 'cargo' :
+    eco === 'composer' || eco === 'php' || eco === 'packagist' ? 'composer' :
+    eco === 'golang' || eco === 'go' ? 'golang' :
+    eco === 'gem' || eco === 'rubygems' || eco === 'ruby' ? 'gem' :
+    eco === 'nuget' || eco === 'dotnet' ? 'nuget' :
+    'generic';
+
+  // Build the namespaced path — encode each segment separately to preserve separators
+  let namePath: string;
+  if (type === 'maven' && packageName.includes(':')) {
+    // maven: groupId:artifactId -> pkg:maven/<group>/<artifact>
+    const colonIdx = packageName.indexOf(':');
+    const namespace = packageName.slice(0, colonIdx);
+    const artifact = packageName.slice(colonIdx + 1);
+    namePath = `${encodeURIComponent(namespace)}/${encodeURIComponent(artifact)}`;
+  } else if (packageName.includes('/')) {
+    // golang, composer, scoped npm (e.g. @scope/name): encode each segment, preserve '/'
+    namePath = packageName.split('/').map(encodeURIComponent).join('/');
+  } else {
+    // Simple name with no separators
+    namePath = encodeURIComponent(packageName);
+  }
+
+  const base = `pkg:${type}/${namePath}`;
   return version ? `${base}@${encodeURIComponent(version)}` : base;
 }
 
@@ -76,7 +109,10 @@ export async function generateSBOM(
     prisma.scan.findFirst({
       where: { repoId, status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
       orderBy: { scannedAt: 'desc' },
-      include: { advisories: true },
+      select: {
+        ecosystem: true,
+        advisories: true,
+      },
     }),
     prisma.scan.findFirst({
       where: { repoId, status: 'COMPLETED', licenseCount: { gt: 0 } },
@@ -97,6 +133,12 @@ export async function generateSBOM(
     dependencies: depsScan?.dependencies ?? [],
   };
 
+  // Resolve repo ecosystem: scan.ecosystem > first advisory's ecosystem > 'generic'
+  const repoEcosystem: string =
+    cveScan?.ecosystem ??
+    cveScan?.advisories?.[0]?.ecosystem ??
+    'generic';
+
   // Build components from dependencies
   const components: CycloneDXComponent[] = [];
   const componentRefs = new Map<string, string>(); // name → bom-ref
@@ -114,7 +156,7 @@ export async function generateSBOM(
         'bom-ref': ref,
         name: dep.name,
         version: dep.installedVersion || undefined,
-        purl: toPurl('npm', dep.name, dep.installedVersion),
+        purl: toPurl(repoEcosystem, dep.name, dep.installedVersion),
         properties: [],
       };
 
@@ -152,7 +194,7 @@ export async function generateSBOM(
         'bom-ref': ref,
         name: lic.packageName,
         version: lic.version || undefined,
-        purl: toPurl('npm', lic.packageName, lic.version ?? undefined),
+        purl: toPurl(repoEcosystem, lic.packageName, lic.version ?? undefined),
         ...(lic.license && lic.license !== 'UNKNOWN'
           ? { licenses: [{ license: { id: lic.license } }] }
           : {}),
@@ -167,10 +209,15 @@ export async function generateSBOM(
     for (const advisory of scan.advisories) {
       const vuln: CycloneDXVulnerability = {
         id: advisory.cveId ?? advisory.ghsaId,
-        source: {
-          name: advisory.cveId ? 'NVD' : 'GitHub Advisory Database',
-          url: advisory.url ?? undefined,
-        },
+        source: advisory.source === 'osv'
+          ? {
+              name: 'OSV',
+              url: `https://osv.dev/vulnerability/${advisory.ghsaId}`,
+            }
+          : {
+              name: 'GitHub Advisory Database',
+              url: advisory.url ?? undefined,
+            },
         ratings: [{
           severity: severityToCycloneDX(advisory.severity),
           source: { name: advisory.cveId ? 'NVD' : 'GitHub' },

@@ -1,5 +1,8 @@
 import { prisma } from '@/lib/prisma';
-import { fetchRepoAdvisories } from './github-advisories';
+import { fetchRepoAdvisories, buildScanResult } from './github-advisories';
+import type { ScanResultWithStatus } from './github-advisories';
+import { fetchOsvAdvisories } from './osv';
+import { mergeCveAdvisories } from './merge';
 import { notifyForScan } from '@/lib/alerts/notifier';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
@@ -32,15 +35,37 @@ export async function scanRepository(
   });
 
   try {
-    // Fetch advisories from GitHub
-    const result = await fetchRepoAdvisories(accessToken, repo.owner, repo.name);
+    // Fetch Dependabot advisories (source: 'dependabot').
+    // A transient Dependabot failure no longer fails the scan because OSV is an
+    // independent source; the scan completes with whatever sources succeeded.
+    let dependabotResult: ScanResultWithStatus;
+    try {
+      dependabotResult = await fetchRepoAdvisories(accessToken, repo.owner, repo.name);
+    } catch (err) {
+      console.error('[scan] Dependabot fetch failed:', err);
+      dependabotResult = { ...buildScanResult([]), dependabotDisabled: false };
+    }
 
-    // Store advisories in DB
+    // Fetch OSV advisories (never throws; source: 'osv')
+    const { advisories: osvAdvisories, ecosystem } = await fetchOsvAdvisories(
+      accessToken,
+      repo.owner,
+      repo.name,
+      repo.defaultBranch,
+    );
+
+    // Dedup OSV against Dependabot keyed by (identifier, packageName): an OSV
+    // finding for a package Dependabot did NOT cover is preserved, and OSV
+    // alias-pair duplicates of the same vuln+package collapse to one.
+    const mergedAdvisories = mergeCveAdvisories(dependabotResult.advisories, osvAdvisories);
+    const merged = buildScanResult(mergedAdvisories);
+
+    // Store advisories and update scan in DB
     await prisma.$transaction(async (tx) => {
-      // Bulk create advisories
-      if (result.advisories.length > 0) {
+      // Bulk create all advisories (Dependabot + OSV deduped)
+      if (mergedAdvisories.length > 0) {
         await tx.advisory.createMany({
-          data: result.advisories.map((a) => ({
+          data: mergedAdvisories.map((a) => ({
             scanId: scan.id,
             ghsaId: a.ghsaId,
             cveId: a.cveId,
@@ -52,22 +77,24 @@ export async function scanRepository(
             fixedVersion: a.fixedVersion,
             publishedAt: a.publishedAt,
             url: a.url,
+            source: a.source,
           })),
         });
       }
 
-      // Update scan with results
+      // Update scan with merged counts, risk score, and detected ecosystem
       await tx.scan.update({
         where: { id: scan.id },
         data: {
           status: 'COMPLETED',
-          cveCount: result.counts.total,
-          criticalCount: result.counts.critical,
-          highCount: result.counts.high,
-          mediumCount: result.counts.medium,
-          lowCount: result.counts.low,
-          riskScore: result.riskScore,
-          cvePayload: JSON.parse(JSON.stringify(result.advisories)),
+          cveCount: merged.counts.total,
+          criticalCount: merged.counts.critical,
+          highCount: merged.counts.high,
+          mediumCount: merged.counts.medium,
+          lowCount: merged.counts.low,
+          riskScore: merged.riskScore,
+          cvePayload: JSON.parse(JSON.stringify(mergedAdvisories)),
+          ecosystem,
         },
       });
 
@@ -83,22 +110,22 @@ export async function scanRepository(
       where: { scanId: scan.id, severity: { in: ['CRITICAL', 'HIGH'] } },
     });
     if (savedAdvisories.length > 0) {
-      notifyForScan(userId, repoId, repo.fullName, scan.id, result.riskScore, savedAdvisories).catch(
+      notifyForScan(userId, repoId, repo.fullName, scan.id, merged.riskScore, savedAdvisories).catch(
         (err) => console.error('Notification error:', err),
       );
     }
 
     // Fire post-scan hooks: policy eval + scan.completed webhook (non-blocking)
     runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'cve', {
-      cveCount: result.counts.total,
-      riskScore: result.riskScore,
-      criticalCount: result.counts.critical,
-      highCount: result.counts.high,
+      cveCount: merged.counts.total,
+      riskScore: merged.riskScore,
+      criticalCount: merged.counts.critical,
+      highCount: merged.counts.high,
     }).catch((err) => console.error('[post-scan] cve hook error:', err));
 
     return {
       scanId: scan.id,
-      dependabotDisabled: result.dependabotDisabled,
+      dependabotDisabled: dependabotResult.dependabotDisabled,
     };
   } catch (error) {
     // Mark scan as failed
