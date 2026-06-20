@@ -60,6 +60,7 @@ model Scan {
   scannedAt     DateTime  @default(now())
   status        ScanStatus @default(PENDING)
   error         String?
+  ecosystem     String?    // detected primary ecosystem: npm, python, go, java, rust, php
 
   // CVE results
   cveCount      Int       @default(0)
@@ -90,8 +91,9 @@ model Advisory {
   scanId          String
   scan            Scan    @relation(fields: [scanId], references: [id], onDelete: Cascade)
 
-  ghsaId          String  // GHSA-xxxx-xxxx-xxxx
+  ghsaId          String  // primary advisory id: GHSA when available, else the source's canonical id (e.g. OSV PYSEC-/GO-/RUSTSEC-)
   cveId           String? // CVE-YYYY-NNNNN
+  source          String  @default("dependabot") // advisory source: 'dependabot' | 'osv'
   severity        Severity
   summary         String
   packageName     String

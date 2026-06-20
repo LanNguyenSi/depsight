@@ -13,6 +13,7 @@ export interface GitHubAdvisory {
   fixedVersion: string | null;
   publishedAt: Date | null;
   url: string | null;
+  source: 'dependabot' | 'osv';
 }
 
 export interface ScanResult {
@@ -97,6 +98,7 @@ export async function fetchRepoAdvisories(
         fixedVersion: vuln?.first_patched_version?.identifier ?? null,
         publishedAt: advisory.published_at ? new Date(advisory.published_at) : null,
         url: advisory.url ?? null,
+        source: 'dependabot',
       });
     }
   } catch (error: unknown) {
@@ -119,7 +121,7 @@ export async function fetchRepoAdvisories(
   return buildScanResult(advisories);
 }
 
-function buildScanResult(advisories: GitHubAdvisory[]): ScanResult {
+export function buildScanResult(advisories: GitHubAdvisory[]): ScanResult {
   const counts = {
     critical: advisories.filter((a) => a.severity === 'CRITICAL').length,
     high: advisories.filter((a) => a.severity === 'HIGH').length,
