@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
+import { ConfirmModal } from '@/components/ConfirmModal';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
@@ -136,8 +138,16 @@ const riskColor = (score: number) =>
         ? 'text-yellow-400'
         : 'text-emerald-400';
 
+const VALID_TABS: ReadonlyArray<ActiveTab> = ['cve', 'license', 'deps', 'history', 'ci'];
+
+function parseTab(v: string | null): ActiveTab {
+  return v !== null && (VALID_TABS as string[]).includes(v) ? (v as ActiveTab) : 'cve';
+}
+
 export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledRepoIds = [] }: DashboardClientProps) {
   const { t } = useLocale();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [repos, setRepos] = useState<RepoItem[]>(initialRepos);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
     initialRepoId ? initialRepos.find((r) => r.id === initialRepoId)?.id ?? null : null,
@@ -162,13 +172,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('cve');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => parseTab(searchParams.get('tab')));
   const [dependabotDisabled, setDependabotDisabled] = useState(false);
   const [enablingDependabot, setEnablingDependabot] = useState(false);
 
   const [sbomError, setSbomError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportingBundle, setExportingBundle] = useState(false);
+  const [exportConfirm, setExportConfirm] = useState<{ message: string; repo: RepoItem } | null>(null);
 
   // Actions dropdown
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -206,6 +217,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const detailRequestRef = useRef(0);
   const selectedRepoIdRef = useRef<string | null>(selectedRepoId);
   const hydratedRepoIdRef = useRef<string | null>(null);
+  const activeTabRef = useRef<ActiveTab>(activeTab);
+  const reposRef = useRef<RepoItem[]>(repos);
+  // Guard: set to true before we push/replace the URL ourselves so the sync
+  // effect ignores the resulting searchParams change (avoids re-entrant loads).
+  const handlingUrlChange = useRef(false);
 
   useEffect(() => {
     setRepos(initialRepos);
@@ -227,6 +243,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   useEffect(() => {
     selectedRepoIdRef.current = selectedRepoId;
   }, [selectedRepoId]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    reposRef.current = repos;
+  }, [repos]);
 
   // Uses stable state setters and refs; keeping this callback stable avoids duplicate initial loads.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -269,6 +293,41 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
       }
     }
   }, []);
+
+  // Sync URL → state when the browser navigates (Back / Forward).
+  // All mutable values are read through refs so the effect only re-runs when
+  // searchParams or loadRepoDetails changes, never on internal state updates.
+  // The handlingUrlChange guard skips URL changes we triggered ourselves to
+  // prevent re-entrant loadRepoDetails calls.
+  useEffect(() => {
+    if (handlingUrlChange.current) {
+      handlingUrlChange.current = false;
+      return;
+    }
+    const urlRepo = searchParams.get('repo');
+    const urlTab = parseTab(searchParams.get('tab'));
+    if (urlTab !== activeTabRef.current) {
+      setActiveTab(urlTab);
+    }
+    const currentRepoId = selectedRepoIdRef.current;
+    if (urlRepo !== currentRepoId) {
+      if (urlRepo) {
+        const repo = reposRef.current.find((r) => r.id === urlRepo);
+        if (repo) {
+          hydratedRepoIdRef.current = repo.id;
+          void loadRepoDetails(repo);
+        }
+      } else {
+        setSelectedRepoId(null);
+        setScanDetail(null);
+        setLicenseDetail(null);
+        setDepsDetail(null);
+        setScanHistory([]);
+      }
+    }
+  // handlingUrlChange, activeTabRef, selectedRepoIdRef, reposRef, hydratedRepoIdRef
+  // are stable refs; state setters are stable — neither needs to be in deps.
+  }, [searchParams, loadRepoDetails]);
 
   useEffect(() => {
     if (!initialRepoId || selectedRepoId !== initialRepoId) return;
@@ -482,7 +541,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
       if (data.error === 'no_scan') {
         setSbomError(data.message ?? t['dashboard.sbom.noScan']);
       } else {
-        setSbomError(data.message ?? 'SBOM-Export fehlgeschlagen.');
+        setSbomError(data.message ?? t['dashboard.sbom.error']);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -500,8 +559,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
     setExportingBundle(true);
 
     try {
-      let reranMissingScans = false;
-      let response = await fetch('/api/export', {
+      const response = await fetch('/api/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId: repo.id }),
@@ -516,15 +574,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
         if (payload.error === 'missing_scans' && payload.missingScans && payload.missingScans.length > 0) {
           const labels = payload.missingScans.map((scan) => scanLabels[scan]).join(', ');
-          const shouldRun = window.confirm(interpolate(t['dashboard.export.confirmMissing'], { scans: labels }));
-          if (!shouldRun) return;
-
-          reranMissingScans = true;
-          response = await fetch('/api/export', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repoId: repo.id, runMissingScans: true }),
+          setExportConfirm({
+            message: interpolate(t['dashboard.export.confirmMissing'], { scans: labels }),
+            repo,
           });
+          return;
         } else {
           setExportError(payload.message ?? t['dashboard.export.error']);
           return;
@@ -547,11 +601,46 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
       anchor.download = filename;
       anchor.click();
       URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      setExportError(t['dashboard.export.error']);
+    } finally {
+      setExportingBundle(false);
+    }
+  }, [t]);
 
-      if (reranMissingScans) {
-        hydratedRepoIdRef.current = repo.id;
-        await loadRepoDetails(repo);
+  const handleBundleExportWithMissingScans = useCallback(async (repo: RepoItem) => {
+    setExportConfirm(null);
+    setSbomError(null);
+    setExportError(null);
+    setExportingBundle(true);
+
+    try {
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoId: repo.id, runMissingScans: true }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json()) as { error?: string; message?: string };
+        setExportError(payload.message ?? payload.error ?? t['dashboard.export.error']);
+        return;
       }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const disposition = response.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/);
+      const filename = match?.[1] ?? `${repo.name}-scan-export.zip`;
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      hydratedRepoIdRef.current = repo.id;
+      await loadRepoDetails(repo);
     } catch (error) {
       console.error(error);
       setExportError(t['dashboard.export.error']);
@@ -674,9 +763,23 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
     scanAllCancelRef.current = true;
   }
 
-  async function handleSelectRepo(repo: RepoItem) {
+  function handleSelectRepo(repo: RepoItem) {
+    // Re-selecting the same repo is a no-op: the URL would not change and
+    // details are already loaded (or currently loading).
+    if (repo.id === selectedRepoIdRef.current) return;
+    // Mirror the CI-tab reset in loadRepoDetails so the pushed URL reflects
+    // the final rendered tab (avoids a stale ?tab=ci in the URL).
+    const finalTab =
+      activeTabRef.current === 'ci' && !ciEnabledRepoIds.includes(repo.id)
+        ? 'cve'
+        : activeTabRef.current;
     hydratedRepoIdRef.current = repo.id;
-    await loadRepoDetails(repo);
+    // Push the URL first so click order is reflected synchronously.
+    // handlingUrlChange prevents the searchParams effect from double-loading.
+    handlingUrlChange.current = true;
+    router.push(`/dashboard?repo=${repo.id}&tab=${finalTab}`);
+    // Fire detail load concurrently; detailRequestRef cancels any stale load.
+    void loadRepoDetails(repo);
   }
 
   return (
@@ -813,7 +916,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
               <div className="sticky top-20 z-30 bg-gray-950/90 backdrop-blur-sm pb-3 -mt-2 pt-2">
                 {/* Mobile back button */}
                 <button
-                  onClick={() => setSelectedRepoId(null)}
+                  onClick={() => {
+                    handlingUrlChange.current = true;
+                    setSelectedRepoId(null);
+                    router.push('/dashboard');
+                  }}
                   className="md:hidden flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
                 >
                   <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
@@ -897,7 +1004,15 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     return (
                       <button
                         key={key}
-                        onClick={() => setActiveTab(key)}
+                        onClick={() => {
+                          if (key === activeTab) return;
+                          handlingUrlChange.current = true;
+                          setActiveTab(key);
+                          const url = selectedRepoId
+                            ? `/dashboard?repo=${selectedRepoId}&tab=${key}`
+                            : `/dashboard?tab=${key}`;
+                          router.replace(url);
+                        }}
                         className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
                           activeTab === key
                             ? 'text-blue-400 border-blue-400'
@@ -920,7 +1035,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                   <div>
                     <p className="text-sm font-medium text-orange-300">{sbomError}</p>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Starte zuerst einen CVE-Scan, damit die SBOM Vulnerability-Daten enthält.
+                      {t['dashboard.sbom.notice']}
                     </p>
                   </div>
                   <button
@@ -930,7 +1045,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     }}
                     className="shrink-0 text-xs font-medium px-3 py-1.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/40 hover:bg-orange-500/30 transition-colors"
                   >
-                    CVE Scan starten
+                    {t['dashboard.sbom.startScan']}
                   </button>
                 </div>
               )}
@@ -1080,6 +1195,15 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
           </div>
         </div>
       )}
+      <ConfirmModal
+        open={exportConfirm !== null}
+        title={t['dashboard.actions.bundleExport']}
+        message={exportConfirm?.message ?? ''}
+        confirmLabel={t['dashboard.export.runAndExport']}
+        cancelLabel={t['confirm.cancel']}
+        onConfirm={() => { if (exportConfirm) void handleBundleExportWithMissingScans(exportConfirm.repo); }}
+        onCancel={() => setExportConfirm(null)}
+      />
     </AppShell>
   );
 }
@@ -1101,12 +1225,14 @@ function EmptyState({ text }: { text: string }) {
 }
 
 function EcosystemNotice({ label }: { label: string }) {
+  const { t } = useLocale();
+  // Split the description around {label} to render the package name with emphasis.
+  const [pre, suf] = t['dashboard.ecosystem.unsupportedDesc'].split('{label}');
   return (
     <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
-      <p className="text-sm font-medium text-blue-300">Ökosystem nicht unterstützt</p>
+      <p className="text-sm font-medium text-blue-300">{t['dashboard.ecosystem.unsupported']}</p>
       <p className="text-xs text-gray-400 mt-1">
-        Dieses Repository verwendet <span className="text-gray-200 font-medium">{label}</span>.
-        Lizenz- und Dependency-Scans werden aktuell nur für <span className="text-gray-200 font-medium">Node.js / npm</span> unterstützt.
+        {pre}<span className="text-gray-200 font-medium">{label}</span>{suf}
       </p>
     </div>
   );

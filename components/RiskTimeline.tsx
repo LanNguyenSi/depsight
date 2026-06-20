@@ -26,7 +26,8 @@ interface RiskTimelineProps {
 }
 
 export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const localeStr = locale === 'de' ? 'de-DE' : 'en-US';
 
   if (history.length === 0) {
     return (
@@ -37,11 +38,11 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
   }
 
   const data = history.map((point) => ({
-    date: new Date(point.scannedAt).toLocaleDateString('de-DE', {
+    date: new Date(point.scannedAt).toLocaleDateString(localeStr, {
       day: '2-digit',
       month: '2-digit',
     }),
-    fullDate: new Date(point.scannedAt).toLocaleDateString('de-DE', {
+    fullDate: new Date(point.scannedAt).toLocaleDateString(localeStr, {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
