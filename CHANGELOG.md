@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-06-20
+
+**Headline: OSV.dev added as a second CVE source, plus a UI hardening pass and the notification/policy pipeline wired end to end.** depsight is deployed from `master`; this tag is deploy provenance.
+
+### Added
+
+- **OSV.dev as a second CVE source** (PR #76): dependencies are now matched against OSV.dev in addition to GitHub Dependabot, so CVEs that Dependabot misses (it must be enabled per-repo, is capped, and covers Go/PyPI weakly) are caught. Cross-source dedup keys on (advisory id, package) and collapses OSV alias twins to the canonical record. Adds `Advisory.source` and `Scan.ecosystem`; CycloneDX SBOM PURLs are now ecosystem-aware, and a repo with a clean scan (no advisories) can export an SBOM.
+- **Notification settings UI** (PR #73): Slack and outbound-webhook configuration now have a UI under Settings (previously reachable only via the API).
+- **Content-list filters and dashboard deep links** (PR #73): severity/status filter chips plus text search on the advisory, dependency, and license lists; the dashboard's selected repo and active tab are reflected in the URL for deep links and Back/Forward.
+- **scan.completed event and automatic post-scan policy evaluation** (PR #75): the scan.completed webhook event now fires for every scan, policy evaluation runs automatically after each scan, the license and dependency scanners now emit notifications, and the background cron syncs CI every cycle.
+- **MCP v0.3.0** (PR #77): new read-only `depsight_list_policies` and `depsight_get_sbom` tools; the ci-analytics period input is now a numeric literal union.
+
+### Fixed
+
+- **Scanner correctness** (PR #74): Dependabot alerts now paginate (were capped at the first 100) with rate-limit-aware 403 handling, so a transient 403 no longer hides every advisory; Maven dependency age is computed from the installed version (`core=gav`) instead of the latest release; Go latest-version selection no longer assumes the proxy list is sorted; the cross-repo CI summary reports the real flaky-job count.
+- **Cross-workspace dependency conflict** (PR #70): keep the lowest concrete version when two workspaces pin the same dependency to different specs.
+- **i18n leaks** (PR #73): the CI Health tab and several dashboard strings were hardcoded; they are now localized, and timeline dates follow the active locale.
+
+### Security
+
+- **CVE sweep** (PR #69): vite and js-yaml advisories cleared.
+- **hono bumped in `mcp/`** (PR #72) for the CORS advisory.
+
+### Docs
+
+- **README and docs drift fixes** (PR #71).
+
 ## [0.4.1] - 2026-06-16
 
 **Headline: Security patch for esbuild CVE GHSA-g7r4-m6w7-qqqr across the app and the MCP sub-package.**
