@@ -19,6 +19,41 @@ function parseVersion(v: string): [number, number, number] {
   return [cleaned[0] ?? 0, cleaned[1] ?? 0, cleaned[2] ?? 0];
 }
 
+/**
+ * Pick the highest stable version from a Go proxy `@v/list` response.
+ *
+ * The list is NOT guaranteed to be sorted. Pre-releases (versions containing
+ * '-', including pseudo-versions like v0.0.0-20210101120000-abcdef012345) and
+ * '+incompatible' suffixes are excluded when at least one clean stable version
+ * exists. If only pre-release/pseudo versions are present the last element is
+ * returned (previous behaviour). Empty input returns ''.
+ */
+export function pickLatestGoVersion(versions: string[]): string {
+  if (versions.length === 0) return '';
+
+  const stable = versions.filter((v) => !v.includes('-') && !v.includes('+'));
+
+  if (stable.length === 0) {
+    // No stable versions — fall back to the last element (original behaviour).
+    // Known limitation: if the list consists entirely of '+incompatible' entries
+    // the true semantic maximum may differ; distinguishing that case is a follow-up.
+    return versions[versions.length - 1];
+  }
+
+  return stable.reduce((best, v) => {
+    const [bMaj, bMin, bPat] = parseVersion(best);
+    const [vMaj, vMin, vPat] = parseVersion(v);
+    if (
+      vMaj > bMaj ||
+      (vMaj === bMaj && vMin > bMin) ||
+      (vMaj === bMaj && vMin === bMin && vPat > bPat)
+    ) {
+      return v;
+    }
+    return best;
+  });
+}
+
 function classifyStatus(
   installed: string,
   latest: string,
@@ -89,7 +124,7 @@ export async function scanGoDeps(
 
           const listText = await listResp.text();
           const versions = listText.trim().split('\n').filter(Boolean);
-          const latestVersion = versions.length > 0 ? versions[versions.length - 1] : '';
+          const latestVersion = pickLatestGoVersion(versions);
 
           // Fetch version info for installed version
           let publishedAt: Date | null = null;

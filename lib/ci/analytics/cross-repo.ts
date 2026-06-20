@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getWorkflowBuildTimes } from "./build-times";
 import { getBottlenecks } from "./bottleneck";
+import { detectFlakyJobs } from "./flaky";
 import type { Period } from "./fail-rate";
 
 export interface RepoHealthSummary {
@@ -77,6 +78,9 @@ export async function getCIRepoHealthSummary(
   const bottlenecks = await getBottlenecks(repo.id, period);
   const topBottleneck = bottlenecks.find((b) => b.rank === 1)?.jobName ?? null;
 
+  // Note: adds one flaky-detection query per repo when called from getAllCIHealthSummaries (informational count; does not feed ciHealthScore)
+  const flakyJobs = await detectFlakyJobs(repo.id, { period });
+
   const failPenalty = Math.min(40, overallFailRatePct * 0.8);
   const slowPenalty = p95BuildTimeMs != null
     ? Math.min(30, (p95BuildTimeMs / 600000) * 30)
@@ -97,7 +101,7 @@ export async function getCIRepoHealthSummary(
     overallFailRatePct,
     avgBuildTimeMs,
     p95BuildTimeMs,
-    flakyJobCount: 0,
+    flakyJobCount: flakyJobs.length,
     topBottleneck,
     ciHealthScore,
     ciHealthStatus,

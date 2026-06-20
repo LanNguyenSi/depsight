@@ -74,15 +74,15 @@ export async function fetchRepoAdvisories(
   const advisories: GitHubAdvisory[] = [];
 
   try {
-    // Primary: GitHub Dependabot Alerts
-    const response = await octokit.rest.dependabot.listAlertsForRepo({
+    // Primary: GitHub Dependabot Alerts — paginate to fetch all open alerts
+    const alerts = await octokit.paginate(octokit.rest.dependabot.listAlertsForRepo, {
       owner,
       repo,
       per_page: 100,
       state: 'open',
     });
 
-    for (const alert of response.data as unknown as VulnerabilityAlert[]) {
+    for (const alert of alerts as unknown as VulnerabilityAlert[]) {
       const advisory = alert.security_advisory;
       const vuln = alert.security_vulnerability;
 
@@ -100,7 +100,15 @@ export async function fetchRepoAdvisories(
       });
     }
   } catch (error: unknown) {
-    const err = error as { status?: number };
+    const err = error as { status?: number; message?: string; response?: { headers?: Record<string, string> } };
+    const headers = err?.response?.headers ?? {};
+    const isRateLimited =
+      headers['retry-after'] != null ||
+      headers['x-ratelimit-remaining'] === '0' ||
+      /rate limit/i.test(err?.message ?? '');
+    if (err?.status === 403 && isRateLimited) {
+      throw error; // transient — not a 'disabled' state
+    }
     if (err?.status === 404 || err?.status === 403) {
       // Dependabot alerts not enabled — signal to caller
       return { ...buildScanResult([]), dependabotDisabled: true };
