@@ -13,6 +13,17 @@ interface MavenSearchResponse {
   };
 }
 
+// Response shape for core=gav queries (per-version lookup)
+interface MavenGavDoc {
+  timestamp: number;
+}
+
+interface MavenGavResponse {
+  response: {
+    docs: MavenGavDoc[];
+  };
+}
+
 function parseVersion(v: string): [number, number, number] {
   const cleaned = v.replace(/^[^0-9]*/, '').split('.').map(Number);
   return [cleaned[0] ?? 0, cleaned[1] ?? 0, cleaned[2] ?? 0];
@@ -54,6 +65,25 @@ function makeUnknownDep(dep: MavenDependency): DependencyInfo {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Resolve the installed-version publish date and age from a Maven GAV document.
+ * Exported for unit testing. Returns null/−1 when the doc is absent or lacks a
+ * numeric timestamp (guards against Invalid Date / NaN ageInDays).
+ */
+export function resolveInstalledAge(
+  gavDoc: { timestamp?: number } | undefined,
+  now: Date,
+): { publishedAt: Date | null; ageInDays: number } {
+  if (gavDoc?.timestamp) {
+    const publishedAt = new Date(gavDoc.timestamp);
+    const ageInDays = Math.floor(
+      (now.getTime() - publishedAt.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    return { publishedAt, ageInDays };
+  }
+  return { publishedAt: null, ageInDays: -1 };
 }
 
 export async function scanJavaDeps(
@@ -103,9 +133,24 @@ export async function scanJavaDeps(
           const latestVersion = doc.latestVersion;
           const latestPublishedAt = doc.timestamp ? new Date(doc.timestamp) : null;
 
-          const ageInDays = latestPublishedAt
-            ? Math.floor((now.getTime() - latestPublishedAt.getTime()) / (1000 * 60 * 60 * 24))
-            : -1;
+          // Fetch the INSTALLED version's publish timestamp separately (core=gav)
+          let installedPublishedAt: Date | null = null;
+          let installedAgeInDays = -1;
+          try {
+            const gavUrl =
+              `https://search.maven.org/solrsearch/select?q=g:${encodeURIComponent(dep.groupId)}` +
+              `+AND+a:${encodeURIComponent(dep.artifactId)}` +
+              `+AND+v:${encodeURIComponent(dep.version)}&core=gav&rows=1&wt=json`;
+            const gavResp = await fetch(gavUrl, { headers: { Accept: 'application/json' } });
+            if (gavResp.ok) {
+              const gavData = await gavResp.json() as MavenGavResponse;
+              const gavDoc = gavData.response.docs[0];
+              ({ publishedAt: installedPublishedAt, ageInDays: installedAgeInDays } =
+                resolveInstalledAge(gavDoc, now));
+            }
+          } catch {
+            // Graceful degradation — installed timestamp unavailable
+          }
 
           const status = classifyStatus(dep.version, latestVersion);
 
@@ -113,8 +158,8 @@ export async function scanJavaDeps(
             name: `${dep.groupId}:${dep.artifactId}`,
             installedVersion: dep.version,
             latestVersion,
-            publishedAt: latestPublishedAt,
-            ageInDays,
+            publishedAt: installedPublishedAt,
+            ageInDays: installedAgeInDays,
             status,
             isDeprecated: false,
             updateAvailable: status === 'OUTDATED' || status === 'MAJOR_BEHIND',
