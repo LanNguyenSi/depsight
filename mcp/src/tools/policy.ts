@@ -8,6 +8,20 @@ export function registerPolicyTools(
   client: DepsightClient,
 ): void {
   server.tool(
+    "depsight_list_policies",
+    "List the user's configured dependency policies. Returns each policy's name, type (LICENSE_DENY, LICENSE_ALLOW_ONLY, CVE_MIN_SEVERITY, DEPENDENCY_MAX_AGE), rule object, severity, and enabled flag. Use this before depsight_evaluate_policy to see which policies are active.",
+    {},
+    async () => {
+      try {
+        const data = await client.listPolicies();
+        return ok(data);
+      } catch (e) {
+        return errResult(e);
+      }
+    },
+  );
+
+  server.tool(
     "depsight_evaluate_policy",
     "Evaluate the user's enabled policies (LICENSE_DENY, LICENSE_ALLOW_ONLY, CVE_MIN_SEVERITY, DEPENDENCY_MAX_AGE) against a specific scan. Read-only — does not mutate state. Returns the violations with affected packages.",
     {

@@ -3,7 +3,9 @@ import { z } from "zod";
 import type { DepsightClient } from "../client.js";
 import { errResult, ok } from "./shared.js";
 
-const PERIODS = [1, 7, 30] as const;
+export const ciPeriodSchema = z
+  .union([z.literal(1), z.literal(7), z.literal(30)])
+  .optional();
 
 export function registerCiTools(
   server: McpServer,
@@ -25,32 +27,21 @@ export function registerCiTools(
         .describe(
           "Analytics type (repo-scoped only, default fail-rate). Ignored for cross-repo queries.",
         ),
-      period: z
-        .enum(["1", "7", "30"])
-        .optional()
-        .describe("Lookback window in days. Default 30."),
+      period: ciPeriodSchema.describe("Lookback window in days. Default 30."),
     },
     async ({ repoId, type, period }) => {
       try {
-        const parsedPeriod = (period ? Number(period) : 30) as
-          | 1
-          | 7
-          | 30;
-        const validPeriod = (PERIODS as readonly number[]).includes(
-          parsedPeriod,
-        )
-          ? parsedPeriod
-          : 30;
+        const resolvedPeriod = period ?? 30;
 
         if (!repoId) {
-          const data = await client.getCiAnalyticsCrossRepo(validPeriod);
+          const data = await client.getCiAnalyticsCrossRepo(resolvedPeriod);
           return ok(data);
         }
 
         const data = await client.getCiAnalytics(
           repoId,
           type ?? "fail-rate",
-          validPeriod,
+          resolvedPeriod,
         );
         return ok(data);
       } catch (e) {

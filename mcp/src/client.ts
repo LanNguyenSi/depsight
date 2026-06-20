@@ -82,8 +82,16 @@ export class DepsightClient {
     return this.request("GET", "/api/history", { query: { repoId, limit } });
   }
 
+  listPolicies(): Promise<unknown> {
+    return this.request("GET", "/api/policies");
+  }
+
   evaluatePolicy(scanId: string): Promise<unknown> {
     return this.request("POST", "/api/policies/evaluate", { body: { scanId } });
+  }
+
+  getSbom(repoId: string): Promise<unknown> {
+    return this.request("GET", "/api/sbom", { query: { repoId } });
   }
 
   getCiAnalytics(

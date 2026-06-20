@@ -9,11 +9,12 @@ import { registerLicenseTools } from "./tools/license.js";
 import { registerHistoryTools } from "./tools/history.js";
 import { registerPolicyTools } from "./tools/policy.js";
 import { registerCiTools } from "./tools/ci.js";
+import { registerSbomTools } from "./tools/sbom.js";
 
 export function createServer(config: Config): McpServer {
   const server = new McpServer({
     name: "depsight",
-    version: "0.1.0",
+    version: "0.3.0",
   });
 
   const client = new DepsightClient(config);
@@ -25,6 +26,7 @@ export function createServer(config: Config): McpServer {
   registerHistoryTools(server, client);
   registerPolicyTools(server, client);
   registerCiTools(server, client);
+  registerSbomTools(server, client);
 
   return server;
 }

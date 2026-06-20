@@ -131,4 +131,83 @@ describe("DepsightClient", () => {
       return e.status === 504 && e.body === "gateway timeout";
     });
   });
+
+  it("listPolicies hits GET /api/policies with no query params", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(makeResponse({ policies: [] }));
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    await client.listPolicies();
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("https://depsight.example.com/api/policies");
+    expect(init?.method).toBe("GET");
+  });
+
+  it("getSbom hits GET /api/sbom?repoId=...", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(makeResponse({ bomFormat: "CycloneDX" }));
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    await client.getSbom("repo-xyz");
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://depsight.example.com/api/sbom?repoId=repo-xyz",
+    );
+    expect(init?.method).toBe("GET");
+  });
+
+  it("getSbom resolves to a parsed object, not a string (guards against double-encoding)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ bomFormat: "CycloneDX", components: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    const result = await client.getSbom("repo-xyz");
+    expect(typeof result).toBe("object");
+    expect((result as { bomFormat: string }).bomFormat).toBe("CycloneDX");
+  });
+
+  it("getSbom throws HttpError on 404 (exercises the errResult path)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      makeResponse({ error: "no_scan" }, { status: 404 }),
+    );
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    await expect(client.getSbom("repo-missing")).rejects.toBeInstanceOf(
+      HttpError,
+    );
+    try {
+      await client.getSbom("repo-missing");
+      throw new Error("expected getSbom to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpError);
+      const e = err as HttpError;
+      expect(e.status).toBe(404);
+      expect(e.path).toBe("/api/sbom");
+      expect((e.body as { error: string }).error).toBe("no_scan");
+    }
+  });
 });
