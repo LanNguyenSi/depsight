@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
+import { ConfirmModal } from '@/components/ConfirmModal';
 
 type PolicyType = 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE';
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
@@ -87,6 +88,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const handleToggle = async (policy: Policy) => {
     try {
@@ -104,7 +106,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
   };
 
   const handleDelete = async (policyId: string) => {
-    if (!confirm(t['policy.deleteConfirm'])) return;
+    setDeleteConfirmId(null);
     try {
       const res = await fetch(`/api/policies/${policyId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(t['policy.error.delete']);
@@ -317,12 +319,23 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
               key={policy.id}
               policy={policy}
               onToggle={handleToggle}
-              onDelete={handleDelete}
+              onDelete={(id) => setDeleteConfirmId(id)}
               t={t}
             />
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        open={deleteConfirmId !== null}
+        title={t['policy.delete']}
+        message={t['policy.deleteConfirm']}
+        confirmLabel={t['policy.delete']}
+        cancelLabel={t['confirm.cancel']}
+        onConfirm={() => { if (deleteConfirmId) void handleDelete(deleteConfirmId); }}
+        onCancel={() => setDeleteConfirmId(null)}
+        destructive
+      />
     </div>
   );
 }

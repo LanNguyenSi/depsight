@@ -13,6 +13,7 @@ export async function GET() {
   const webhooks = await prisma.webhookConfig.findMany({
     where: { userId: session.user.id },
     orderBy: { createdAt: 'desc' },
+    select: { id: true, name: true, url: true, events: true, enabled: true, createdAt: true },
   });
 
   return NextResponse.json({ webhooks });

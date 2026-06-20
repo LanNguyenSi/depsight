@@ -24,6 +24,50 @@ const de = {
   'settings.languageDesc': 'Sprache der Oberfläche.',
   'settings.tokens': 'API-Tokens',
   'settings.tokensDesc': 'Tokens für den Zugriff über die API oder den MCP-Server (z. B. Claude). Behandle sie wie Passwörter.',
+
+  // Webhook settings
+  'settings.webhooks.title': 'Webhooks',
+  'settings.webhooks.desc': 'HTTP-Callbacks für CVE-Alerts und Scan-Ereignisse.',
+  'settings.webhooks.name': 'Name',
+  'settings.webhooks.namePlaceholder': 'z. B. mein-server',
+  'settings.webhooks.url': 'URL',
+  'settings.webhooks.urlPlaceholder': 'https://...',
+  'settings.webhooks.secret': 'Secret (optional)',
+  'settings.webhooks.secretPlaceholder': 'Signatur-Secret',
+  'settings.webhooks.events': 'Ereignisse',
+  'settings.webhooks.event.cve.critical': 'CVE kritisch',
+  'settings.webhooks.event.cve.high': 'CVE hoch',
+  'settings.webhooks.event.scan.completed': 'Scan abgeschlossen',
+  'settings.webhooks.create': 'Webhook erstellen',
+  'settings.webhooks.creating': 'Wird erstellt…',
+  'settings.webhooks.listTitle': 'Deine Webhooks',
+  'settings.webhooks.empty': 'Noch keine Webhooks.',
+  'settings.webhooks.noDelete': 'Webhooks können derzeit nicht gelöscht werden.',
+  'settings.webhooks.nameRequired': 'Bitte einen Namen eingeben.',
+  'settings.webhooks.urlRequired': 'Bitte eine URL eingeben.',
+  'settings.webhooks.eventsRequired': 'Bitte mindestens ein Ereignis auswählen.',
+  'settings.webhooks.createError': 'Webhook konnte nicht erstellt werden.',
+  'settings.webhooks.loadError': 'Webhooks konnten nicht geladen werden.',
+  'settings.webhooks.enabled': 'Aktiv',
+  'settings.webhooks.disabled': 'Inaktiv',
+
+  // Slack settings
+  'settings.slack.title': 'Slack',
+  'settings.slack.desc': 'Sende CVE-Alerts direkt in einen Slack-Kanal.',
+  'settings.slack.webhookUrl': 'Webhook-URL',
+  'settings.slack.webhookUrlPlaceholder': 'https://hooks.slack.com/services/…',
+  'settings.slack.channel': 'Kanal (optional)',
+  'settings.slack.channelPlaceholder': '#security',
+  'settings.slack.minSeverity': 'Mindest-Schweregrad',
+  'settings.slack.enabled': 'Aktiviert',
+  'settings.slack.save': 'Speichern',
+  'settings.slack.saving': 'Wird gespeichert…',
+  'settings.slack.remove': 'Entfernen',
+  'settings.slack.removing': 'Wird entfernt…',
+  'settings.slack.urlRequired': 'Bitte eine Webhook-URL eingeben.',
+  'settings.slack.saveError': 'Slack-Konfiguration konnte nicht gespeichert werden.',
+  'settings.slack.removeError': 'Slack-Konfiguration konnte nicht entfernt werden.',
+  'settings.slack.loadError': 'Slack-Konfiguration konnte nicht geladen werden.',
   'token.namePlaceholder': 'Name (z. B. claude-desktop)',
   'token.create': 'Token erstellen',
   'token.creating': 'Wird erstellt…',
@@ -134,6 +178,7 @@ const de = {
   'dashboard.export.scan.cve': 'CVE',
   'dashboard.export.scan.license': 'Lizenzen',
   'dashboard.export.scan.deps': 'Dependencies',
+  'dashboard.export.runAndExport': 'Scans ausführen & exportieren',
 
   // CVE / Advisory
   'advisory.empty': 'Keine CVEs gefunden',
@@ -150,6 +195,12 @@ const de = {
   'severity.medium': 'Mittel',
   'severity.low': 'Niedrig',
   'severity.total': '{count} CVEs gesamt',
+
+  // Filter / Search (shared across AdvisoryList, DependencyTable, LicenseList)
+  'filter.search': 'Pakete suchen…',
+  'filter.noMatches': 'Keine Treffer',
+  'filter.showAll': 'Alle anzeigen',
+  'filter.showLess': 'Weniger anzeigen',
 
   // Dependencies
   'deps.title': 'Dependency Health',
@@ -264,10 +315,43 @@ const de = {
   'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
   'overview.unscannedAction': 'Im Dashboard alle scannen',
 
+  // CI Health
+  'ci.health.title': 'CI Health',
+  'ci.health.sync': 'Sync',
+  'ci.health.syncing': 'Synchronisiere…',
+  'ci.health.period.1d': 'Letzter Tag',
+  'ci.health.period.7d': 'Letzte 7 Tage',
+  'ci.health.period.30d': 'Letzte 30 Tage',
+  'ci.health.loadError': 'CI-Daten konnten nicht geladen werden',
+  'ci.health.syncError': 'Sync fehlgeschlagen — GitHub-Token-Berechtigungen prüfen (actions:read erforderlich)',
+  'ci.health.loading': 'Lade CI-Daten…',
+  'ci.health.empty': 'Noch keine CI-Daten vorhanden.',
+  'ci.health.empty.hint': 'Auf "Sync" klicken, um Workflow-Runs von GitHub zu laden.',
+  'ci.health.failRate': 'Fehlerrate',
+  'ci.health.buildTimeP50': 'Build-Zeit P50',
+  'ci.health.flakyJobs': 'Instabile Jobs',
+  'ci.health.workflows': 'Workflows',
+  'ci.health.failPct': '{pct}% Fehler',
+  'ci.health.shaRetry': 'SHA-Retry-Muster ({count})',
+  'ci.health.flakyFailPct': '{pct}% Fehlerrate',
+
   // Pagination
   'pagination.prev': 'Zurück',
   'pagination.next': 'Weiter',
   'pagination.info': '{from}–{to} von {total}',
+
+  // Empty state (TeamHealthCard)
+  'overview.noScans': 'Noch keine Scans',
+  'overview.noScans.hint': 'Starte einen Scan im Dashboard, um die Team-Health-Übersicht zu sehen.',
+  'overview.noScans.action': 'Zum Dashboard',
+
+  // Error boundaries
+  'error.title': 'Etwas ist schiefgelaufen',
+  'error.message': 'Beim Laden der Seite ist ein Fehler aufgetreten.',
+  'error.retry': 'Erneut versuchen',
+
+  // ConfirmModal generic labels
+  'confirm.cancel': 'Abbrechen',
 } as const;
 
 const en = {
@@ -287,6 +371,50 @@ const en = {
   'settings.languageDesc': 'Interface language.',
   'settings.tokens': 'API tokens',
   'settings.tokensDesc': 'Tokens for API or MCP-server access (e.g. Claude). Treat them like passwords.',
+
+  // Webhook settings
+  'settings.webhooks.title': 'Webhooks',
+  'settings.webhooks.desc': 'HTTP callbacks for CVE alerts and scan events.',
+  'settings.webhooks.name': 'Name',
+  'settings.webhooks.namePlaceholder': 'e.g. my-server',
+  'settings.webhooks.url': 'URL',
+  'settings.webhooks.urlPlaceholder': 'https://...',
+  'settings.webhooks.secret': 'Secret (optional)',
+  'settings.webhooks.secretPlaceholder': 'Signature secret',
+  'settings.webhooks.events': 'Events',
+  'settings.webhooks.event.cve.critical': 'CVE critical',
+  'settings.webhooks.event.cve.high': 'CVE high',
+  'settings.webhooks.event.scan.completed': 'Scan completed',
+  'settings.webhooks.create': 'Create webhook',
+  'settings.webhooks.creating': 'Creating…',
+  'settings.webhooks.listTitle': 'Your webhooks',
+  'settings.webhooks.empty': 'No webhooks yet.',
+  'settings.webhooks.noDelete': 'Webhooks cannot be deleted at this time.',
+  'settings.webhooks.nameRequired': 'Please enter a name.',
+  'settings.webhooks.urlRequired': 'Please enter a URL.',
+  'settings.webhooks.eventsRequired': 'Please select at least one event.',
+  'settings.webhooks.createError': 'Could not create the webhook.',
+  'settings.webhooks.loadError': 'Could not load webhooks.',
+  'settings.webhooks.enabled': 'Active',
+  'settings.webhooks.disabled': 'Inactive',
+
+  // Slack settings
+  'settings.slack.title': 'Slack',
+  'settings.slack.desc': 'Send CVE alerts directly to a Slack channel.',
+  'settings.slack.webhookUrl': 'Webhook URL',
+  'settings.slack.webhookUrlPlaceholder': 'https://hooks.slack.com/services/…',
+  'settings.slack.channel': 'Channel (optional)',
+  'settings.slack.channelPlaceholder': '#security',
+  'settings.slack.minSeverity': 'Minimum severity',
+  'settings.slack.enabled': 'Enabled',
+  'settings.slack.save': 'Save',
+  'settings.slack.saving': 'Saving…',
+  'settings.slack.remove': 'Remove',
+  'settings.slack.removing': 'Removing…',
+  'settings.slack.urlRequired': 'Please enter a webhook URL.',
+  'settings.slack.saveError': 'Could not save Slack config.',
+  'settings.slack.removeError': 'Could not remove Slack config.',
+  'settings.slack.loadError': 'Could not load Slack config.',
   'token.namePlaceholder': 'Name (e.g. claude-desktop)',
   'token.create': 'Create token',
   'token.creating': 'Creating…',
@@ -397,6 +525,7 @@ const en = {
   'dashboard.export.scan.cve': 'CVE',
   'dashboard.export.scan.license': 'Licenses',
   'dashboard.export.scan.deps': 'Dependencies',
+  'dashboard.export.runAndExport': 'Run scans & export',
 
   // CVE / Advisory
   'advisory.empty': 'No CVEs found',
@@ -413,6 +542,12 @@ const en = {
   'severity.medium': 'Medium',
   'severity.low': 'Low',
   'severity.total': '{count} CVEs total',
+
+  // Filter / Search (shared across AdvisoryList, DependencyTable, LicenseList)
+  'filter.search': 'Search packages…',
+  'filter.noMatches': 'No matches',
+  'filter.showAll': 'Show all',
+  'filter.showLess': 'Show less',
 
   // Dependencies
   'deps.title': 'Dependency Health',
@@ -527,10 +662,43 @@ const en = {
   'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
   'overview.unscannedAction': 'Scan all in dashboard',
 
+  // CI Health
+  'ci.health.title': 'CI Health',
+  'ci.health.sync': 'Sync',
+  'ci.health.syncing': 'Syncing…',
+  'ci.health.period.1d': 'Last day',
+  'ci.health.period.7d': 'Last 7 days',
+  'ci.health.period.30d': 'Last 30 days',
+  'ci.health.loadError': 'Failed to load CI data',
+  'ci.health.syncError': 'Sync failed — check GitHub token permissions (actions:read required)',
+  'ci.health.loading': 'Loading CI data…',
+  'ci.health.empty': 'No CI data yet.',
+  'ci.health.empty.hint': 'Click "Sync" to import workflow runs from GitHub.',
+  'ci.health.failRate': 'Fail Rate',
+  'ci.health.buildTimeP50': 'Build Time P50',
+  'ci.health.flakyJobs': 'Flaky Jobs',
+  'ci.health.workflows': 'Workflows',
+  'ci.health.failPct': '{pct}% fail',
+  'ci.health.shaRetry': 'SHA-retry pattern ({count})',
+  'ci.health.flakyFailPct': '{pct}% fail rate',
+
   // Pagination
   'pagination.prev': 'Previous',
   'pagination.next': 'Next',
   'pagination.info': '{from}–{to} of {total}',
+
+  // Empty state (TeamHealthCard)
+  'overview.noScans': 'No scans yet',
+  'overview.noScans.hint': 'Run a scan from the Dashboard to see the team health overview.',
+  'overview.noScans.action': 'Go to Dashboard',
+
+  // Error boundaries
+  'error.title': 'Something went wrong',
+  'error.message': 'An error occurred while loading the page.',
+  'error.retry': 'Try again',
+
+  // ConfirmModal generic labels
+  'confirm.cancel': 'Cancel',
 };
 
 export type TranslationKey = keyof typeof de;
@@ -541,4 +709,15 @@ const translations: Record<Locale, Translations> = { de, en: enTyped };
 
 export function getTranslations(locale: Locale): Translations {
   return translations[locale];
+}
+
+/**
+ * Reads the app's locale from a raw cookie string.
+ * The LocaleProvider writes the cookie as `locale=<de|en>`.
+ * Returns DEFAULT_LOCALE when the cookie is absent or unrecognised.
+ */
+export function parseLocaleCookie(cookie: string | undefined): Locale {
+  if (!cookie) return DEFAULT_LOCALE;
+  const match = cookie.match(/(?:^|;\s*)locale=(de|en)/);
+  return (match?.[1] as Locale) ?? DEFAULT_LOCALE;
 }

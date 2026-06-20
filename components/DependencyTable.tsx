@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
 
@@ -30,6 +31,14 @@ interface DependencyTableProps {
   summary: DepSummary;
 }
 
+const ALL_STATUSES: DepStatus[] = [
+  'UP_TO_DATE',
+  'OUTDATED',
+  'MAJOR_BEHIND',
+  'DEPRECATED',
+  'UNKNOWN',
+];
+
 const STATUS_STYLES: Record<DepStatus, { cls: string }> = {
   UP_TO_DATE:   { cls: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/50' },
   OUTDATED:     { cls: 'text-yellow-400 bg-yellow-950/50 border-yellow-900/50' },
@@ -49,7 +58,7 @@ function statusLabel(status: DepStatus, t: Translations): string {
 }
 
 function formatAge(days: number | null): string {
-  if (days === null || days < 0) return '\u2013';
+  if (days === null || days < 0) return '–';
   if (days < 30) return `${days}d`;
   if (days < 365) return `${Math.floor(days / 30)}mo`;
   return `${(days / 365).toFixed(1)}j`;
@@ -57,29 +66,65 @@ function formatAge(days: number | null): string {
 
 export function DependencyTable({ dependencies, summary }: DependencyTableProps) {
   const { t } = useLocale();
+  const [activeStatuses, setActiveStatuses] = useState<Set<DepStatus>>(
+    () => new Set(ALL_STATUSES)
+  );
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return dependencies.filter((d) => {
+      const matchesStatus = activeStatuses.has(d.status);
+      const matchesSearch = !q || d.name.toLowerCase().includes(q);
+      return matchesStatus && matchesSearch;
+    });
+  }, [dependencies, activeStatuses, search]);
+
+  const toggleStatus = (s: DepStatus) => {
+    setActiveStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) {
+        next.delete(s);
+      } else {
+        next.add(s);
+      }
+      return next;
+    });
+  };
 
   const outdatedTotal = summary.outdated + summary.majorBehind + summary.deprecated;
-  const healthPercent = summary.total > 0 ? Math.round((summary.upToDate / summary.total) * 100) : 100;
+  const healthPercent =
+    summary.total > 0 ? Math.round((summary.upToDate / summary.total) * 100) : 100;
 
   return (
     <div className="space-y-4">
-      {/* Summary */}
+      {/* Summary — always shows full counts, unaffected by filter */}
       <div className="bg-gray-900 rounded-lg border border-gray-800 p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-medium text-gray-400">{t['deps.title']}</h3>
-          <span className={`text-lg font-bold tabular-nums ${healthPercent >= 80 ? 'text-emerald-400' : healthPercent >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+          <span
+            className={`text-lg font-bold tabular-nums ${
+              healthPercent >= 80
+                ? 'text-emerald-400'
+                : healthPercent >= 50
+                  ? 'text-yellow-400'
+                  : 'text-red-400'
+            }`}
+          >
             {healthPercent}%
             <span className="text-xs font-normal text-gray-600 ml-1">{t['deps.current']}</span>
           </span>
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
-          {([
-            [t['deps.upToDate'], summary.upToDate, 'text-emerald-400'],
-            [t['deps.outdated'], summary.outdated, 'text-yellow-400'],
-            [t['deps.majorBehind'], summary.majorBehind, 'text-orange-400'],
-            [t['deps.deprecated'], summary.deprecated, 'text-red-400'],
-            [t['deps.unknown'], summary.unknown, 'text-gray-600'],
-          ] as const).map(([label, count, color]) => (
+          {(
+            [
+              [t['deps.upToDate'], summary.upToDate, 'text-emerald-400'],
+              [t['deps.outdated'], summary.outdated, 'text-yellow-400'],
+              [t['deps.majorBehind'], summary.majorBehind, 'text-orange-400'],
+              [t['deps.deprecated'], summary.deprecated, 'text-red-400'],
+              [t['deps.unknown'], summary.unknown, 'text-gray-600'],
+            ] as const
+          ).map(([label, count, color]) => (
             <div key={label} className="bg-gray-800/50 rounded-lg p-3">
               <div className={`text-lg font-bold tabular-nums ${color}`}>{count}</div>
               <div className="text-xs text-gray-600">{label}</div>
@@ -93,20 +138,56 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
         )}
       </div>
 
+      {/* Filter controls — only meaningful when there are dependencies to filter */}
+      {dependencies.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {ALL_STATUSES.map((s) => {
+            const active = activeStatuses.has(s);
+            const { cls } = STATUS_STYLES[s];
+            return (
+              <button
+                key={s}
+                onClick={() => toggleStatus(s)}
+                className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-medium transition-opacity ${cls} ${active ? '' : 'opacity-30'}`}
+              >
+                {statusLabel(s, t)}
+              </button>
+            );
+          })}
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t['filter.search']}
+            className="ml-auto min-w-0 w-48 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-600 transition-colors"
+          />
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.package']}</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.installed']}</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.latest']}</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.age']}</th>
-              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t['deps.col.status']}</th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                {t['deps.col.package']}
+              </th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                {t['deps.col.installed']}
+              </th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                {t['deps.col.latest']}
+              </th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                {t['deps.col.age']}
+              </th>
+              <th className="text-left px-3 py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                {t['deps.col.status']}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/50">
-            {dependencies.map((dep) => {
+            {filtered.map((dep) => {
               const style = STATUS_STYLES[dep.status];
               return (
                 <tr key={dep.id} className="hover:bg-gray-800/30 transition-colors">
@@ -114,20 +195,22 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
                     {dep.name}
                   </td>
                   <td className="px-3 py-2 font-mono text-gray-600 text-xs">
-                    {dep.installedVersion || '\u2013'}
+                    {dep.installedVersion || '–'}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">
                     {dep.updateAvailable ? (
                       <span className="text-blue-400 font-medium">{dep.latestVersion}</span>
                     ) : (
-                      <span className="text-gray-600">{dep.latestVersion || '\u2013'}</span>
+                      <span className="text-gray-600">{dep.latestVersion || '–'}</span>
                     )}
                   </td>
                   <td className="px-3 py-2 text-xs text-gray-600 tabular-nums">
                     {formatAge(dep.ageInDays)}
                   </td>
                   <td className="px-3 py-2">
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.cls}`}>
+                    <span
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${style.cls}`}
+                    >
                       {statusLabel(dep.status, t)}
                     </span>
                   </td>
@@ -137,9 +220,10 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
           </tbody>
         </table>
         {dependencies.length === 0 && (
-          <div className="text-center py-8 text-gray-600 text-sm">
-            {t['deps.empty']}
-          </div>
+          <div className="text-center py-8 text-gray-600 text-sm">{t['deps.empty']}</div>
+        )}
+        {dependencies.length > 0 && filtered.length === 0 && (
+          <div className="text-center py-8 text-gray-600 text-sm">{t['filter.noMatches']}</div>
         )}
       </div>
     </div>

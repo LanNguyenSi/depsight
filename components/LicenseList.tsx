@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 
 interface LicenseEntry {
@@ -20,14 +21,44 @@ interface LicenseListProps {
 
 export function LicenseList({ licenses, summary, conflictCount }: LicenseListProps) {
   const { t } = useLocale();
+  const [showAllLicenses, setShowAllLicenses] = useState(false);
+  const [search, setSearch] = useState('');
 
-  const topLicenses = Object.entries(summary)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 8);
+  const {
+    allSortedLicenses,
+    hasMoreLicenses,
+    filteredViolations,
+    filteredNeedsReview,
+    filteredCompatible,
+  } = useMemo(() => {
+    const sorted = Object.entries(summary).sort(([, a], [, b]) => b - a);
 
-  const violations = licenses.filter((l) => l.policyViolation);
-  const needsReview = licenses.filter((l) => !l.policyViolation && l.needsReview);
-  const compatible = licenses.filter((l) => !l.policyViolation && !l.needsReview && l.isCompatible);
+    const violations = licenses.filter((l) => l.policyViolation);
+    const needsReview = licenses.filter((l) => !l.policyViolation && l.needsReview);
+    const compatible = licenses.filter(
+      (l) => !l.policyViolation && !l.needsReview && l.isCompatible,
+    );
+
+    const q = search.trim().toLowerCase();
+    const match = (l: LicenseEntry) => !q || l.packageName.toLowerCase().includes(q);
+
+    return {
+      allSortedLicenses: sorted,
+      hasMoreLicenses: sorted.length > 8,
+      filteredViolations: violations.filter(match),
+      filteredNeedsReview: needsReview.filter(match),
+      filteredCompatible: compatible.filter(match),
+    };
+  }, [licenses, summary, search]);
+
+  const displayedLicenses = showAllLicenses ? allSortedLicenses : allSortedLicenses.slice(0, 8);
+
+  const isSearchActive = search.trim().length > 0;
+  const noMatches =
+    isSearchActive &&
+    filteredViolations.length === 0 &&
+    filteredNeedsReview.length === 0 &&
+    filteredCompatible.length === 0;
 
   return (
     <div className="space-y-4">
@@ -46,7 +77,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
           )}
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {topLicenses.map(([license, count]) => (
+          {displayedLicenses.map(([license, count]) => (
             <span
               key={license}
               className="inline-flex items-center gap-1 px-2 py-1 bg-gray-800 text-gray-400 text-xs rounded"
@@ -56,14 +87,38 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
             </span>
           ))}
         </div>
+        {hasMoreLicenses && (
+          <button
+            onClick={() => setShowAllLicenses((v) => !v)}
+            className="mt-2 text-[11px] text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            {showAllLicenses ? t['filter.showLess'] : t['filter.showAll']}
+          </button>
+        )}
       </div>
 
+      {/* Package search */}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t['filter.search']}
+        className="w-full bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-600 transition-colors"
+      />
+
+      {/* No-match state */}
+      {noMatches && (
+        <div className="text-center py-8 text-gray-600 text-sm">{t['filter.noMatches']}</div>
+      )}
+
       {/* Policy violations */}
-      {violations.length > 0 && (
+      {filteredViolations.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">{t['license.violations']}</h4>
+          <h4 className="text-xs font-semibold text-red-400 mb-2 uppercase tracking-wider">
+            {t['license.violations']}
+          </h4>
           <div className="space-y-1">
-            {violations.map((l) => (
+            {filteredViolations.map((l) => (
               <LicenseRow key={l.id} entry={l} />
             ))}
           </div>
@@ -71,11 +126,13 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       )}
 
       {/* Needs review */}
-      {needsReview.length > 0 && (
+      {filteredNeedsReview.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-yellow-400 mb-2 uppercase tracking-wider">{t['license.review']}</h4>
+          <h4 className="text-xs font-semibold text-yellow-400 mb-2 uppercase tracking-wider">
+            {t['license.review']}
+          </h4>
           <div className="space-y-1">
-            {needsReview.map((l) => (
+            {filteredNeedsReview.map((l) => (
               <LicenseRow key={l.id} entry={l} />
             ))}
           </div>
@@ -83,13 +140,13 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       )}
 
       {/* Compatible */}
-      {compatible.length > 0 && (
+      {filteredCompatible.length > 0 && (
         <div>
           <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">
-            {interpolate(t['license.compatible'], { count: compatible.length })}
+            {interpolate(t['license.compatible'], { count: filteredCompatible.length })}
           </h4>
           <div className="space-y-1 max-h-64 overflow-y-auto">
-            {compatible.map((l) => (
+            {filteredCompatible.map((l) => (
               <LicenseRow key={l.id} entry={l} />
             ))}
           </div>
