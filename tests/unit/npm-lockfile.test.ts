@@ -137,6 +137,38 @@ describe('parseNpmLockfileContentsList', () => {
     expect(map.get('minimatch')).toBe('9.0.4');
   });
 
+  it('extracts the name after the LAST node_modules segment for deeply-nested keys (regression: greedy-regex fix)', () => {
+    const map = parseNpmLockfileContentsList([
+      json({
+        lockfileVersion: 3,
+        packages: {
+          '': {},
+          'node_modules/foo/node_modules/glob': { version: '10.4.5' },
+          'node_modules/bar/node_modules/@scope/pkg': { version: '2.1.0' },
+        },
+      }),
+    ]);
+    // The pre-fix greedy regex yielded junk keys ('foo/node_modules/glob',
+    // 'bar/node_modules/@scope/pkg') so these names were never matched.
+    expect(map.get('glob')).toBe('10.4.5');
+    expect(map.get('@scope/pkg')).toBe('2.1.0');
+  });
+
+  it('skips workspace self-entries (no node_modules segment) rather than treating them as deps', () => {
+    const map = parseNpmLockfileContentsList([
+      json({
+        lockfileVersion: 3,
+        packages: {
+          '': {},
+          'packages/a': { version: '1.0.0' }, // the workspace package itself, not a dependency
+          'node_modules/glob': { version: '10.5.0' },
+        },
+      }),
+    ]);
+    expect(map.has('packages/a')).toBe(false);
+    expect(map.get('glob')).toBe('10.5.0');
+  });
+
   it('keeps the LOWEST resolved version when the same package appears in multiple entries (security-conservative)', () => {
     // Mirrors unionNpmDeps policy: a vulnerable resolved version in one
     // workspace must not be hidden by a newer resolution elsewhere.

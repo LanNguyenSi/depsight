@@ -166,4 +166,21 @@ describe('collectDeps / fetchOsvAdvisories — lockfile version selection (end-t
     // Resolved from root lockfile → 4.17.21, NOT the manifest floor (4.0.0).
     expect(body.queries[0].version).toBe('4.17.21');
   });
+
+  it('FAIL-SAFE: a lockfile-resolver rejection degrades to the manifest floor, never aborts the whole scan', async () => {
+    // If fetchNpmLockfileResolutions rejects, the `.catch(() => new Map())`
+    // wrapper must make collectDeps degrade to the floor — NOT let the rejection
+    // bubble up and return zero advisories for the entire repo (hiding every
+    // real vuln). Without the wrapper, OSV is never queried and this test fails.
+    mockFetchNpmLockfileResolutions.mockRejectedValue(new Error('lockfile fetch exploded'));
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('glob');
+    // Degraded to the manifest floor (10.3.0); the scan still runs.
+    expect(body.queries[0].version).toBe('10.3.0');
+  });
 });

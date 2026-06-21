@@ -263,7 +263,11 @@ async function collectDeps(
       const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
       const [manifests, lockfileResolutions] = await Promise.all([
         fetchNpmManifests(octokit, owner, repo, paths),
-        fetchNpmLockfileResolutions(octokit, owner, repo, paths),
+        // Best-effort: a lockfile-resolution failure must only ever degrade to
+        // the manifest floor (per-dep fallback below), never reject and abort the
+        // whole npm scan, which would return zero advisories and hide every
+        // vuln for the repo.
+        fetchNpmLockfileResolutions(octokit, owner, repo, paths).catch(() => new Map<string, string>()),
       ]);
       return unionNpmDeps(manifests)
         .map(({ name, versionSpec }) => {

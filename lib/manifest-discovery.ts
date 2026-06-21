@@ -315,6 +315,15 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * workspace has a vulnerable resolved version, it must not be hidden by a
  * newer resolution elsewhere.
  *
+ * Known residual (full per-workspace provenance is task cac1b6fb): the map is
+ * keyed by package name across all fetched lockfiles, not per manifest path. If
+ * two workspaces pin the same dep to different version lines AND only the
+ * higher-version workspace's lockfile is fetched (partial coverage), the query
+ * uses that higher (safe) version and could hide the lower workspace's real
+ * vuln. Complete coverage (the common npm-workspaces case with one root
+ * lockfile) captures the lowest version and is safe; a total fetch failure
+ * degrades to the manifest floor (also safe).
+ *
  * Malformed JSON entries are skipped gracefully.
  *
  * Pure function — exported for testing.
@@ -346,12 +355,16 @@ export function parseNpmLockfileContentsList(contents: string[]): Map<string, st
       //   "node_modules/@babel/core"      → scoped dep
       //   "packages/a/node_modules/glob"  → workspace-nested dep
       for (const [key, entry] of Object.entries(lock.packages)) {
-        if (!key || !entry?.version) continue; // skip root ("") and versionless entries
-        // Match the last `node_modules/<name>` segment; handles scoped packages
-        // like `@babel/core` because the regex captures everything after `node_modules/`.
-        const match = key.match(/(?:^|.*\/)node_modules\/(.+)$/);
-        if (!match) continue;
-        updateIfLower(match[1], entry.version);
+        if (!entry?.version) continue; // skip versionless entries
+        // Take the package name after the LAST `node_modules/` segment. Handles
+        // scoped (`@babel/core`) and deeply-nested
+        // (`node_modules/a/node_modules/glob` → `glob`) keys. The root ("") and
+        // workspace self-entries (e.g. `packages/a`) have no `node_modules/`
+        // segment and are skipped.
+        if (!key.includes('node_modules/')) continue;
+        const name = key.split('node_modules/').pop();
+        if (!name) continue;
+        updateIfLower(name, entry.version);
       }
     } else if (lock.dependencies && typeof lock.dependencies === 'object') {
       // lockfileVersion 1: flat `dependencies` map (best-effort, top-level only).
