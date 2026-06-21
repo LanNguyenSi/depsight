@@ -1,6 +1,7 @@
 import { createGitHubClient } from '@/lib/github';
 import {
   detectEcosystem,
+  fetchNpmLockfileResolutions,
   fetchNpmManifests,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
@@ -242,12 +243,13 @@ interface DepEntry {
 /**
  * Collect the raw dep list for the given ecosystem. Returns name/version
  * pairs suitable for OSV querybatch. Deps with no usable concrete version
- * (no digit) are skipped. npm version specs have their leading range
- * operators stripped (mirrors age-checker's cleanInstalled).
+ * (no digit) are skipped.
  *
- * NOTE: manifest-floor versions (range specs stripped to their minimum) can
- * produce false positives vs lockfile-resolved versions; resolving installed
- * versions is a follow-up (needs lockfile parsing).
+ * For npm: the resolved version from `package-lock.json` is used when
+ * available (eliminating false positives where the lockfile has upgraded past
+ * the advisory range). Falls back to stripping the leading range operator
+ * from the manifest spec (the previous floor behaviour) when no lockfile or
+ * entry is found, so existing repos without lockfiles do not regress.
  */
 async function collectDeps(
   eco: string,
@@ -259,12 +261,18 @@ async function collectDeps(
   switch (eco) {
     case 'npm': {
       const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
-      const manifests = await fetchNpmManifests(octokit, owner, repo, paths);
+      const [manifests, lockfileResolutions] = await Promise.all([
+        fetchNpmManifests(octokit, owner, repo, paths),
+        fetchNpmLockfileResolutions(octokit, owner, repo, paths),
+      ]);
       return unionNpmDeps(manifests)
-        .map(({ name, versionSpec }) => ({
-          name,
-          version: versionSpec.replace(/^[^0-9]*/, ''),
-        }))
+        .map(({ name, versionSpec }) => {
+          // Prefer the lockfile-resolved version (exact installed version) to
+          // avoid false positives from the manifest floor. Fall back to the
+          // floor-strip when the lockfile is absent or doesn't list this dep.
+          const version = lockfileResolutions.get(name) ?? versionSpec.replace(/^[^0-9]*/, '');
+          return { name, version };
+        })
         .filter(({ version }) => /\d/.test(version));
     }
 

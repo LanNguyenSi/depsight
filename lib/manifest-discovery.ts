@@ -256,6 +256,137 @@ export async function fetchManifestContents(
   return results.filter((r): r is FetchedManifest => r !== null);
 }
 
+// ---- npm lockfile resolver -------------------------------------------------
+
+interface NpmLockfileEntry {
+  version?: string;
+}
+
+interface ParsedNpmLockfile {
+  lockfileVersion?: number;
+  /** lockfileVersion 2/3: map of install-path → entry */
+  packages?: Record<string, NpmLockfileEntry>;
+  /** lockfileVersion 1: flat dependency tree */
+  dependencies?: Record<string, NpmLockfileEntry>;
+}
+
+// Simple numeric version comparison (no semver library; lockfile versions are
+// exact, never range-prefixed, so triple-integer comparison is correct).
+function lockfileVersionIsLower(a: string, b: string): boolean {
+  const parse = (s: string): [number, number, number] => {
+    const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    if (!m) return [0, 0, 0];
+    return [Number(m[1] ?? 0), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i];
+  }
+  return false;
+}
+
+/**
+ * Discover the `package-lock.json` paths that should be fetched for a given
+ * set of `package.json` paths. Always includes the repo root lockfile; also
+ * includes a co-located lockfile next to each discovered manifest.
+ *
+ * Pure function — exported for testing.
+ */
+export function discoverLockfilePaths(manifestPaths: string[]): string[] {
+  const lockPathSet = new Set<string>();
+  lockPathSet.add('package-lock.json'); // always probe repo root
+  for (const p of manifestPaths) {
+    const dir = p.split('/').slice(0, -1).join('/');
+    // dir === '' means the package.json IS at the root → same file as above
+    const lockPath = dir ? `${dir}/package-lock.json` : 'package-lock.json';
+    lockPathSet.add(lockPath);
+  }
+  return [...lockPathSet];
+}
+
+/**
+ * Parse a list of raw `package-lock.json` content strings (lockfileVersion
+ * 1/2/3) and return a flat `packageName → resolvedVersion` map.
+ *
+ * For a package that appears in multiple lockfile entries (e.g. a workspace
+ * root lockfile AND a per-package lockfile), the **lowest** resolved version
+ * is kept, consistent with `unionNpmDeps`'s lowest-spec policy: if one
+ * workspace has a vulnerable resolved version, it must not be hidden by a
+ * newer resolution elsewhere.
+ *
+ * Malformed JSON entries are skipped gracefully.
+ *
+ * Pure function — exported for testing.
+ */
+export function parseNpmLockfileContentsList(contents: string[]): Map<string, string> {
+  const resolved = new Map<string, string>();
+
+  const updateIfLower = (name: string, version: string): void => {
+    if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    const existing = resolved.get(name);
+    if (!existing || lockfileVersionIsLower(version, existing)) {
+      resolved.set(name, version);
+    }
+  };
+
+  for (const content of contents) {
+    let lock: ParsedNpmLockfile;
+    try {
+      lock = JSON.parse(content) as ParsedNpmLockfile;
+    } catch {
+      continue; // malformed JSON — skip
+    }
+
+    if (lock.packages && typeof lock.packages === 'object') {
+      // lockfileVersion 2/3: `packages` map.
+      // Keys look like:
+      //   ""                              → root package itself (skip)
+      //   "node_modules/glob"             → top-level hoisted dep
+      //   "node_modules/@babel/core"      → scoped dep
+      //   "packages/a/node_modules/glob"  → workspace-nested dep
+      for (const [key, entry] of Object.entries(lock.packages)) {
+        if (!key || !entry?.version) continue; // skip root ("") and versionless entries
+        // Match the last `node_modules/<name>` segment; handles scoped packages
+        // like `@babel/core` because the regex captures everything after `node_modules/`.
+        const match = key.match(/(?:^|.*\/)node_modules\/(.+)$/);
+        if (!match) continue;
+        updateIfLower(match[1], entry.version);
+      }
+    } else if (lock.dependencies && typeof lock.dependencies === 'object') {
+      // lockfileVersion 1: flat `dependencies` map (best-effort, top-level only).
+      for (const [name, entry] of Object.entries(lock.dependencies)) {
+        if (!entry?.version) continue;
+        updateIfLower(name, entry.version);
+      }
+    }
+  }
+
+  return resolved;
+}
+
+/**
+ * Given a list of package.json manifest paths, discover and fetch the
+ * co-located `package-lock.json` files plus the repo root lockfile. Parse
+ * them and return a flat `packageName → resolvedVersion` map.
+ *
+ * See `discoverLockfilePaths` and `parseNpmLockfileContentsList` for the
+ * underlying pure logic. Missing or unreadable lockfiles are silently skipped
+ * (404-safe). Returns an empty map when no lockfiles are found or all fail to
+ * parse; the caller must fall back to the manifest-floor behaviour in that case.
+ */
+export async function fetchNpmLockfileResolutions(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+): Promise<Map<string, string>> {
+  const lockPaths = discoverLockfilePaths(manifestPaths);
+  const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
+  if (fetched.length === 0) return new Map<string, string>();
+  return parseNpmLockfileContentsList(fetched.map((f) => f.content));
+}
+
 /**
  * Fetch and JSON-parse the given package.json paths. Unreadable or malformed
  * manifests are skipped, so one bad file can't sink the whole scan.
