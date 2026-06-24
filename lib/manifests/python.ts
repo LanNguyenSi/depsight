@@ -115,15 +115,23 @@ export function parsePythonLockfileContents(contentsList: string[]): Map<string,
 
       if (!inBlock) continue;
 
+      // First-match-wins within a block. The main [[package]] table always lists
+      // `name` and `version` BEFORE any sub-table ([package.dependencies],
+      // [package.source], [metadata], ...). poetry.lock sub-tables can contain a
+      // constraint keyed literally `name` or `version` (e.g. a transitive dep
+      // `version = ">=2.0"`); a last-match-wins parse would overwrite the block
+      // with that garbage and silently hide the package's real vulns. uv.lock
+      // inline-table arrays (`{ name = "x" }`) are already protected by the `^`
+      // anchor (they start with `{`).
       const nameMatch = /^name\s*=\s*"([^"]+)"/.exec(line);
       if (nameMatch) {
-        blockName = nameMatch[1];
+        if (blockName === null) blockName = nameMatch[1];
         continue;
       }
 
       const versionMatch = /^version\s*=\s*"([^"]+)"/.exec(line);
       if (versionMatch) {
-        blockVersion = versionMatch[1];
+        if (blockVersion === null) blockVersion = versionMatch[1];
       }
     }
 

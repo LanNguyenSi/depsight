@@ -263,4 +263,52 @@ describe('parsePythonLockfileContents', () => {
     const map = parsePythonLockfileContents([content]);
     expect(map.size).toBe(0);
   });
+
+  it('ignores poetry.lock sub-table keys literally named "name"/"version" (no block corruption)', () => {
+    // poetry.lock emits sub-tables AFTER the main [[package]] table. A transitive
+    // dependency can be keyed literally `name` or `version`; a last-match-wins
+    // parser would mistake it for the package's own field and silently hide the
+    // package's real vulns (false negative — exactly what this resolver prevents).
+    const content = [
+      '[[package]]',
+      'name = "myapp"',
+      'version = "1.0.0"',
+      'description = "An app"',
+      'optional = false',
+      '',
+      '[package.dependencies]',
+      'requests = ">=2.0"',
+      'version = ">=2.0"', // a transitive dep literally named "version"
+      'name = ">=1.0"', // a transitive dep literally named "name"
+      '',
+      '[package.source]',
+      'type = "legacy"',
+      'url = "https://pypi.org/simple"',
+      '',
+      '[metadata]',
+      'lock-version = "2.0"',
+    ].join('\n');
+    const map = parsePythonLockfileContents([content]);
+    expect(map.get('myapp')).toBe('1.0.0');
+    expect(map.size).toBe(1);
+  });
+
+  it('ignores uv.lock inline-table dependency entries ({ name = "x" }) inside a block', () => {
+    const content = [
+      '[[package]]',
+      'name = "myapp"',
+      'version = "1.0.0"',
+      'source = { registry = "https://pypi.org/simple" }',
+      'dependencies = [',
+      '    { name = "jinja2" },',
+      '    { name = "requests" },',
+      ']',
+    ].join('\n');
+    const map = parsePythonLockfileContents([content]);
+    expect(map.get('myapp')).toBe('1.0.0');
+    // The inner { name = ... } array entries are NOT standalone packages.
+    expect(map.has('jinja2')).toBe(false);
+    expect(map.has('requests')).toBe(false);
+    expect(map.size).toBe(1);
+  });
 });
