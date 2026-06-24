@@ -5,7 +5,11 @@ import {
   fetchNpmManifests,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
-import { collectPythonDeps } from '@/lib/manifests/python';
+import {
+  collectPythonDeps,
+  fetchPythonLockfileResolutions,
+  normalizePythonPackageName,
+} from '@/lib/manifests/python';
 import { collectGoDeps } from '@/lib/manifests/go';
 import { collectJavaDeps } from '@/lib/manifests/java';
 import { collectRustDeps } from '@/lib/manifests/rust';
@@ -281,8 +285,26 @@ async function collectDeps(
     }
 
     case 'python': {
-      const pyDeps = await collectPythonDeps(octokit, owner, repo, manifestPaths);
-      return pyDeps.filter((d) => /\d/.test(d.version));
+      const [pyDeps, lockfileResolutions] = await Promise.all([
+        collectPythonDeps(octokit, owner, repo, manifestPaths),
+        // Best-effort: a lockfile-resolution failure must only ever degrade to
+        // the manifest floor (per-dep fallback below), never reject and abort
+        // the whole python scan, which would return zero advisories and hide
+        // every vuln for the repo.
+        fetchPythonLockfileResolutions(octokit, owner, repo, manifestPaths).catch(
+          () => new Map<string, string>(),
+        ),
+      ]);
+      return pyDeps
+        .map(({ name, version }) => {
+          const canonicalName = normalizePythonPackageName(name);
+          // Prefer the lockfile-resolved version (exact installed version) to
+          // avoid false positives from the pyproject floor. Fall back to the
+          // manifest floor when the lockfile is absent or doesn't list this dep.
+          const resolvedVersion = lockfileResolutions.get(canonicalName) ?? version;
+          return { name: canonicalName, version: resolvedVersion };
+        })
+        .filter(({ version }) => /\d/.test(version));
     }
 
     case 'go': {
