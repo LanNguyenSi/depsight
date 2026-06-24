@@ -5,6 +5,166 @@ export interface ParsedPyDep {
   version: string;
 }
 
+// ---- Python name normalization (PEP 503) ------------------------------------
+
+/**
+ * Normalize a Python package name to its PEP 503 canonical form: lowercase with
+ * runs of `_`, `.`, or `-` collapsed to a single `-`. Applied when building and
+ * looking up lockfile resolution keys so that `my_package` and `my-package`
+ * resolve to the same entry.
+ *
+ * Pure function — exported for testing.
+ */
+export function normalizePythonPackageName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/g, '-');
+}
+
+// ---- Python lockfile version comparison -------------------------------------
+
+// Simple numeric version comparison. Lockfile versions are exact (no range
+// operators), so a triple-integer comparison is correct.
+function pyVersionIsLower(a: string, b: string): boolean {
+  const parse = (s: string): [number, number, number] => {
+    const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+    if (!m) return [0, 0, 0];
+    return [Number(m[1] ?? 0), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] < pb[i];
+  }
+  return false;
+}
+
+// ---- Python lockfile resolver -----------------------------------------------
+
+/**
+ * Discover the `uv.lock` and `poetry.lock` paths that should be fetched for a
+ * given set of Python manifest paths. Always probes the repo-root lockfiles;
+ * also probes co-located lockfiles next to each discovered manifest.
+ *
+ * Pure function — exported for testing.
+ */
+export function discoverPythonLockfilePaths(manifestPaths: string[]): string[] {
+  const lockPathSet = new Set<string>();
+  // Always probe repo root
+  lockPathSet.add('uv.lock');
+  lockPathSet.add('poetry.lock');
+  for (const p of manifestPaths) {
+    const dir = p.split('/').slice(0, -1).join('/');
+    if (dir) {
+      // Co-located lockfiles for non-root manifests
+      lockPathSet.add(`${dir}/uv.lock`);
+      lockPathSet.add(`${dir}/poetry.lock`);
+    }
+    // dir === '' means the manifest is at the root — already probed above
+  }
+  return [...lockPathSet];
+}
+
+/**
+ * Parse a list of `uv.lock` or `poetry.lock` content strings (both share the
+ * same `[[package]]` TOML block structure) and return a flat
+ * `normalizedPackageName → resolvedVersion` map.
+ *
+ * Each `[[package]]` block must contain both `name = "..."` and
+ * `version = "..."` fields to be included; partial or malformed blocks are
+ * silently skipped. Names are stored in PEP 503 canonical form (see
+ * `normalizePythonPackageName`) so `my_package` and `my-package` resolve to
+ * the same entry.
+ *
+ * For a package that appears in multiple entries (e.g. across two lockfiles),
+ * the LOWEST resolved version is kept — security-conservative, mirroring the
+ * npm `lockfileVersionIsLower` policy.
+ *
+ * Pure function — exported for testing.
+ */
+export function parsePythonLockfileContents(contentsList: string[]): Map<string, string> {
+  const resolved = new Map<string, string>();
+
+  const updateIfLower = (name: string, version: string): void => {
+    if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    const normalized = normalizePythonPackageName(name);
+    const existing = resolved.get(normalized);
+    if (!existing || pyVersionIsLower(version, existing)) {
+      resolved.set(normalized, version);
+    }
+  };
+
+  for (const content of contentsList) {
+    const lines = content.split('\n');
+    let inBlock = false;
+    let blockName: string | null = null;
+    let blockVersion: string | null = null;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+
+      if (line === '[[package]]') {
+        // Commit the previous block if it has both required fields
+        if (inBlock && blockName !== null && blockVersion !== null) {
+          updateIfLower(blockName, blockVersion);
+        }
+        // Start a new block
+        inBlock = true;
+        blockName = null;
+        blockVersion = null;
+        continue;
+      }
+
+      if (!inBlock) continue;
+
+      // First-match-wins within a block. The main [[package]] table always lists
+      // `name` and `version` BEFORE any sub-table ([package.dependencies],
+      // [package.source], [metadata], ...). poetry.lock sub-tables can contain a
+      // constraint keyed literally `name` or `version` (e.g. a transitive dep
+      // `version = ">=2.0"`); a last-match-wins parse would overwrite the block
+      // with that garbage and silently hide the package's real vulns. uv.lock
+      // inline-table arrays (`{ name = "x" }`) are already protected by the `^`
+      // anchor (they start with `{`).
+      const nameMatch = /^name\s*=\s*"([^"]+)"/.exec(line);
+      if (nameMatch) {
+        if (blockName === null) blockName = nameMatch[1];
+        continue;
+      }
+
+      const versionMatch = /^version\s*=\s*"([^"]+)"/.exec(line);
+      if (versionMatch) {
+        if (blockVersion === null) blockVersion = versionMatch[1];
+      }
+    }
+
+    // Commit the final block in this content string
+    if (inBlock && blockName !== null && blockVersion !== null) {
+      updateIfLower(blockName, blockVersion);
+    }
+  }
+
+  return resolved;
+}
+
+/**
+ * Given a list of Python manifest paths, discover and fetch the co-located
+ * `uv.lock` / `poetry.lock` files plus the repo root lockfiles. Parse them and
+ * return a flat `normalizedPackageName → resolvedVersion` map.
+ *
+ * Missing or unreadable lockfiles are silently skipped (404-safe). Returns an
+ * empty map when no lockfiles are found; the caller must fall back to the
+ * manifest-floor behaviour in that case.
+ */
+export async function fetchPythonLockfileResolutions(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+): Promise<Map<string, string>> {
+  const lockPaths = discoverPythonLockfilePaths(manifestPaths);
+  const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
+  if (fetched.length === 0) return new Map<string, string>();
+  return parsePythonLockfileContents(fetched.map((f) => f.content));
+}
+
 // Conventional root manifests, used when no discovered paths are supplied so a
 // direct/defensive call still behaves like the legacy single-root probe.
 const DEFAULT_PATHS = ['pyproject.toml', 'requirements.txt'];
