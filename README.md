@@ -4,7 +4,7 @@ GitHub-connected security dashboard: CVEs, licenses, and dep health, self-hosted
 
 **Live demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/). Dev Login is on the login page; no credentials needed to look around.
 
-<!-- TODO(hero): replace this comment with a hero screenshot of the dashboard, e.g. ![](docs/img/dashboard.png). The "tiny demo output" requirement currently leans on the Live Demo link instead. -->
+![depsight dashboard: a repository CVE summary with risk score, severity breakdown, and an advisory list of CVE IDs, affected ranges, and fix versions](docs/img/dashboard.png)
 
 ## Try it in 60 seconds
 
