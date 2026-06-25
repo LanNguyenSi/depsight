@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-06-25
+
+**Headline: CVEs are now matched against the resolved lockfile version, not the manifest floor.** A scanner-correctness pass closes the gap between the version a manifest declares as a lower bound and the version actually locked, for both npm and Python projects. depsight is deployed from `master`; this tag is deploy provenance.
+
+### Fixed
+
+- **CVEs matched against the resolved lockfile version, not the manifest floor** (PR #79): npm/Node advisories are now evaluated against the version actually resolved in the lockfile rather than the lower bound declared in the manifest, removing false positives and negatives caused by the floor-vs-resolved gap.
+- **Python CVEs resolved against `uv.lock`/`poetry.lock`, not the `pyproject` floor** (PR #80): the same resolved-version correctness for Python, reading the locked version from `uv.lock` or `poetry.lock` instead of the `pyproject.toml` floor.
+
+### Docs
+
+- **Dashboard hero screenshot added to the README** (PR #81).
+
 ## [0.5.0] - 2026-06-20
 
 **Headline: OSV.dev added as a second CVE source, plus a UI hardening pass and the notification/policy pipeline wired end to end.** depsight is deployed from `master`; this tag is deploy provenance.
