@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { scanRepository } from '@/lib/cve/scanner';
+import { scanRepository, ScanAccessError } from '@/lib/cve/scanner';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,10 +24,14 @@ export async function POST(req: NextRequest) {
     const result = await scanRepository(user.id, repoId, user.githubToken);
     return NextResponse.json({
       scanId: result.scanId,
-      status: 'completed',
+      status: result.alreadyRunning ? 'running' : 'completed',
+      alreadyRunning: result.alreadyRunning ?? false,
       dependabotDisabled: result.dependabotDisabled ?? false,
     });
   } catch (error) {
+    if (error instanceof ScanAccessError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : 'Scan failed';
     return NextResponse.json({ error: message }, { status: 500 });
   }
