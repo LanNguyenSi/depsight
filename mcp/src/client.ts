@@ -109,4 +109,15 @@ export class DepsightClient {
       query: { period },
     });
   }
+
+  // ── Write tools ──────────────────────────────────────────────
+
+  /**
+   * Trigger a CVE scan for a single repository.
+   * The scan runs synchronously; the response includes the resulting scanId
+   * which can be passed to depsight_get_cves / depsight_evaluate_policy.
+   */
+  rescan(repoId: string): Promise<unknown> {
+    return this.request("POST", "/api/scan", { body: { repoId } });
+  }
 }
