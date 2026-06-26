@@ -7,9 +7,20 @@ import { notifyForScan } from '@/lib/alerts/notifier';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
 
+export class ScanAccessError extends Error {
+  constructor(
+    public readonly status: 403 | 404,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ScanAccessError';
+  }
+}
+
 export interface ScanRepositoryResult {
   scanId: string;
   dependabotDisabled?: boolean;
+  alreadyRunning?: boolean;
 }
 
 export async function scanRepository(
@@ -17,13 +28,30 @@ export async function scanRepository(
   repoId: string,
   accessToken: string,
 ): Promise<ScanRepositoryResult> {
-  // Get repo info from DB
-  const repo = await prisma.repo.findFirst({
-    where: { id: repoId, userId, tracked: true },
-  });
+  // Get repo info from DB — distinguish not-found, not-owned, and not-tracked
+  const repo = await prisma.repo.findUnique({ where: { id: repoId } });
 
   if (!repo) {
-    throw new Error('Repository not found or access denied');
+    throw new ScanAccessError(404, 'Repository not found');
+  }
+  if (repo.userId !== userId) {
+    throw new ScanAccessError(403, 'Access denied');
+  }
+  if (!repo.tracked) {
+    throw new ScanAccessError(404, 'Repository is not tracked');
+  }
+
+  // Short-circuit if a RUNNING scan already exists within the recent window.
+  // Only a positive, finite override is honored; unset/empty/invalid/0/negative
+  // fall back to the 5-minute default so the guard can never be silently disabled.
+  const rawWindow = Number(process.env.SCAN_RUNNING_WINDOW_MS);
+  const windowMs = Number.isFinite(rawWindow) && rawWindow > 0 ? rawWindow : 5 * 60 * 1000;
+  const existingRunning = await prisma.scan.findFirst({
+    where: { repoId, status: 'RUNNING', scannedAt: { gte: new Date(Date.now() - windowMs) } },
+    orderBy: { scannedAt: 'desc' },
+  });
+  if (existingRunning) {
+    return { scanId: existingRunning.id, alreadyRunning: true };
   }
 
   // Create a pending scan
