@@ -10,6 +10,7 @@ import { registerHistoryTools } from "./tools/history.js";
 import { registerPolicyTools } from "./tools/policy.js";
 import { registerCiTools } from "./tools/ci.js";
 import { registerSbomTools } from "./tools/sbom.js";
+import { registerRescanTools } from "./tools/rescan.js";
 
 export function createServer(config: Config): McpServer {
   const server = new McpServer({
@@ -27,6 +28,7 @@ export function createServer(config: Config): McpServer {
   registerPolicyTools(server, client);
   registerCiTools(server, client);
   registerSbomTools(server, client);
+  registerRescanTools(server, client);
 
   return server;
 }
