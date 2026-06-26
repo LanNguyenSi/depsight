@@ -4,6 +4,7 @@ import {
   cvssV3BaseScore,
   mapOsvSeverity,
   extractAliases,
+  extractVulnRangeInfo,
   type OsvVuln,
 } from '@/lib/cve/osv';
 
@@ -195,5 +196,131 @@ describe('extractAliases', () => {
     const { ghsaId, cveId } = extractAliases({ id: 'GO-2023-1234' });
     expect(ghsaId).toBe('GO-2023-1234');
     expect(cveId).toBeNull();
+  });
+});
+
+// ---- extractVulnRangeInfo ---------------------------------------------------
+
+describe('extractVulnRangeInfo', () => {
+  // Helpers to build minimal OsvVuln fixtures inline.
+  function makeRange(introduced: string, fixed: string) {
+    return {
+      type: 'SEMVER',
+      events: [{ introduced }, { fixed }],
+    };
+  }
+
+  function makeVuln(
+    id: string,
+    packageName: string,
+    ecosystem: string,
+    ranges: ReturnType<typeof makeRange>[],
+  ): OsvVuln {
+    return {
+      id,
+      affected: [
+        {
+          package: { ecosystem, name: packageName },
+          ranges,
+        },
+      ],
+    };
+  }
+
+  // Core acceptance eval: multi-range advisory, version in the SECOND range.
+  // glob GHSA-5j98-mcp5-4vw2: ranges [11.0.0,11.1.0) and [10.2.0,10.5.0).
+  // Version 10.3.0 must match the SECOND range, not the first.
+  it('multi-range: version in second range returns the second range string (core acceptance)', () => {
+    const vuln = makeVuln('GHSA-5j98-mcp5-4vw2', 'glob', 'npm', [
+      makeRange('11.0.0', '11.1.0'),
+      makeRange('10.2.0', '10.5.0'),
+    ]);
+    const result = extractVulnRangeInfo(vuln, 'glob', 'npm', '10.3.0');
+    expect(result.vulnerableRange).toBe('>=10.2.0 <10.5.0');
+    expect(result.fixedVersion).toBe('10.5.0');
+  });
+
+  // Guard: version in the FIRST range of a multi-range advisory.
+  it('multi-range: version in first range returns the first range string', () => {
+    const vuln = makeVuln('GHSA-5j98-mcp5-4vw2', 'glob', 'npm', [
+      makeRange('11.0.0', '11.1.0'),
+      makeRange('10.2.0', '10.5.0'),
+    ]);
+    const result = extractVulnRangeInfo(vuln, 'glob', 'npm', '11.0.5');
+    expect(result.vulnerableRange).toBe('>=11.0.0 <11.1.0');
+    expect(result.fixedVersion).toBe('11.1.0');
+  });
+
+  // Real-shape regression: advisory splits ranges across TWO separate affected entries
+  // (each with one range), which is the actual OSV shape for GHSA-5j98-mcp5-4vw2.
+  // The old first-entry-only (.find) code would return '>=11.0.0 <11.1.0' for
+  // version 10.3.0; the fixed code must return '>=10.2.0 <10.5.0'.
+  it('real-shape: two affected entries each with one range — version in second entry returns second range', () => {
+    const vuln: OsvVuln = {
+      id: 'GHSA-5j98-mcp5-4vw2',
+      affected: [
+        {
+          package: { ecosystem: 'npm', name: 'glob' },
+          ranges: [makeRange('11.0.0', '11.1.0')],
+        },
+        {
+          package: { ecosystem: 'npm', name: 'glob' },
+          ranges: [makeRange('10.2.0', '10.5.0')],
+        },
+      ],
+    };
+    const result = extractVulnRangeInfo(vuln, 'glob', 'npm', '10.3.0');
+    expect(result.vulnerableRange).toBe('>=10.2.0 <10.5.0');
+    expect(result.fixedVersion).toBe('10.5.0');
+  });
+
+  // Single-range advisory: behavior must be unchanged vs old code.
+  it('single-range: returns the one range string unchanged', () => {
+    const vuln = makeVuln('GHSA-single', 'lodash', 'npm', [makeRange('4.0.0', '4.17.21')]);
+    const result = extractVulnRangeInfo(vuln, 'lodash', 'npm', '4.5.0');
+    expect(result.vulnerableRange).toBe('>=4.0.0 <4.17.21');
+    expect(result.fixedVersion).toBe('4.17.21');
+  });
+
+  // Single-range advisory, version outside range: still returns that range (fallback).
+  it('single-range: version outside range returns range string via fallback', () => {
+    const vuln = makeVuln('GHSA-single', 'lodash', 'npm', [makeRange('4.0.0', '4.17.21')]);
+    const result = extractVulnRangeInfo(vuln, 'lodash', 'npm', '5.0.0');
+    expect(result.vulnerableRange).toBe('>=4.0.0 <4.17.21');
+    expect(result.fixedVersion).toBe('4.17.21');
+  });
+
+  // Ambiguous / non-coercible fallback: version "???-invalid" cannot be coerced,
+  // so both ranges are returned comma-separated.
+  it('non-coercible version: returns all candidate ranges joined by ", "', () => {
+    const vuln = makeVuln('GHSA-ambig', 'pkg', 'npm', [
+      makeRange('1.0.0', '1.5.0'),
+      makeRange('2.0.0', '2.5.0'),
+    ]);
+    const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', 'not-a-semver');
+    expect(result.vulnerableRange).toBe('>=1.0.0 <1.5.0, >=2.0.0 <2.5.0');
+    // different fixed versions -> sharedFixed is null
+    expect(result.fixedVersion).toBeNull();
+  });
+
+  // No affected entries: returns null/null.
+  it('no affected entries returns null/null', () => {
+    const vuln: OsvVuln = { id: 'GHSA-empty', affected: [] };
+    expect(extractVulnRangeInfo(vuln, 'pkg', 'npm', '1.0.0')).toEqual({
+      vulnerableRange: null,
+      fixedVersion: null,
+    });
+  });
+
+  // No ranges on matched entry: returns null/null.
+  it('matched entry with no ranges returns null/null', () => {
+    const vuln: OsvVuln = {
+      id: 'GHSA-noranges',
+      affected: [{ package: { ecosystem: 'npm', name: 'pkg' }, ranges: [] }],
+    };
+    expect(extractVulnRangeInfo(vuln, 'pkg', 'npm', '1.0.0')).toEqual({
+      vulnerableRange: null,
+      fixedVersion: null,
+    });
   });
 });

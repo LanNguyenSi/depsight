@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { createGitHubClient } from '@/lib/github';
 import {
   detectEcosystem,
@@ -179,44 +180,103 @@ export function extractAliases(vuln: Pick<OsvVuln, 'id' | 'aliases'>): {
 
 // ---- Vulnerable range extraction -------------------------------------------
 
-function extractVulnRangeInfo(
+export function extractVulnRangeInfo(
   vuln: OsvVuln,
   depName: string,
   osvEco: string,
+  version: string,
 ): { vulnerableRange: string | null; fixedVersion: string | null } {
   if (!vuln.affected?.length) return { vulnerableRange: null, fixedVersion: null };
 
-  // Find the affected entry matching both name and ecosystem.
-  // If no exact match, prefer the first entry whose ecosystem matches.
-  // Do NOT fall back to affected[0] (that could be a different ecosystem entirely).
-  const byNameAndEco = vuln.affected.find(
+  // Collect ALL affected entries matching name+ecosystem; fall back to all
+  // ecosystem-only matches.  Using filter (not find) is critical: real advisories
+  // (e.g. GHSA-5j98-mcp5-4vw2) split their version ranges across multiple separate
+  // affected entries, each with a single range, rather than one entry with multiple
+  // ranges[].  A single .find() would silently discard every entry after the first.
+  // Do NOT fall back to the full affected list (that could include other ecosystems).
+  const entriesByNameAndEco = vuln.affected.filter(
     (a) => a.package?.name === depName && a.package?.ecosystem === osvEco,
   );
-  const byEco = vuln.affected.find((a) => a.package?.ecosystem === osvEco);
-  const matched = byNameAndEco ?? byEco ?? null;
-  if (!matched) return { vulnerableRange: null, fixedVersion: null };
+  const matchedEntries =
+    entriesByNameAndEco.length > 0
+      ? entriesByNameAndEco
+      : vuln.affected.filter((a) => a.package?.ecosystem === osvEco);
 
-  if (!matched?.ranges?.length) return { vulnerableRange: null, fixedVersion: null };
+  if (matchedEntries.length === 0) return { vulnerableRange: null, fixedVersion: null };
 
-  for (const range of matched.ranges) {
-    const events = range.events ?? [];
-    const introducedEvt = events.find((e) => e.introduced !== undefined);
-    const fixedEvt = events.find((e) => e.fixed !== undefined);
-    const introduced = introducedEvt?.introduced ?? null;
-    const fixed = fixedEvt?.fixed ?? null;
+  // Build candidate list: all ranges across EVERY matched entry that yield a
+  // representable range string.
+  type Candidate = { rangeStr: string; introduced: string | null; fixed: string | null };
+  const candidates: Candidate[] = [];
 
-    if (introduced !== null || fixed !== null) {
-      const parts: string[] = [];
-      if (introduced) parts.push(`>=${introduced}`);
-      if (fixed) parts.push(`<${fixed}`);
-      return {
-        vulnerableRange: parts.length > 0 ? parts.join(' ') : null,
-        fixedVersion: fixed,
-      };
+  for (const entry of matchedEntries) {
+    for (const range of (entry.ranges ?? [])) {
+      const events = range.events ?? [];
+      const introducedEvt = events.find((e) => e.introduced !== undefined);
+      const fixedEvt = events.find((e) => e.fixed !== undefined);
+      const introduced = introducedEvt?.introduced ?? null;
+      const fixed = fixedEvt?.fixed ?? null;
+
+      if (introduced !== null || fixed !== null) {
+        const parts: string[] = [];
+        if (introduced) parts.push(`>=${introduced}`);
+        if (fixed) parts.push(`<${fixed}`);
+        const rangeStr = parts.length > 0 ? parts.join(' ') : null;
+        if (rangeStr) {
+          candidates.push({ rangeStr, introduced, fixed });
+        }
+      }
     }
   }
 
-  return { vulnerableRange: null, fixedVersion: null };
+  if (candidates.length === 0) return { vulnerableRange: null, fixedVersion: null };
+
+  // Try to find exactly one candidate whose [introduced, fixed) interval contains
+  // the queried version. semver.coerce() is used for robustness with version strings
+  // that include extra labels (e.g. "1.2.3.4" or "v1.2.3").
+  const coercedVersion = semver.coerce(version);
+
+  const matching: Candidate[] = [];
+  if (coercedVersion !== null) {
+    for (const candidate of candidates) {
+      const coercedIntroduced = candidate.introduced
+        ? semver.coerce(candidate.introduced)
+        : null;
+      const coercedFixed = candidate.fixed ? semver.coerce(candidate.fixed) : null;
+
+      // Skip candidate if a required boundary cannot be coerced — treat as "not determinable".
+      if (candidate.introduced && coercedIntroduced === null) continue;
+      if (candidate.fixed && coercedFixed === null) continue;
+
+      const afterIntroduced =
+        !candidate.introduced || semver.gte(coercedVersion, coercedIntroduced!);
+      const beforeFixed = !candidate.fixed || semver.lt(coercedVersion, coercedFixed!);
+
+      if (afterIntroduced && beforeFixed) {
+        matching.push(candidate);
+      }
+    }
+  }
+
+  // Exactly one candidate contains the version: return it.
+  if (matching.length === 1) {
+    return {
+      vulnerableRange: matching[0].rangeStr,
+      fixedVersion: matching[0].fixed,
+    };
+  }
+
+  // Fallback (version not coercible, no candidate matches, or ambiguous 2+):
+  // return all candidate range strings joined by ", " and a single fixedVersion
+  // only when all candidates share the same fixed value.
+  const allRanges = candidates.map((c) => c.rangeStr).join(', ');
+  const fixedValues = [...new Set(candidates.map((c) => c.fixed))];
+  const sharedFixed = fixedValues.length === 1 ? fixedValues[0] : null;
+
+  return {
+    vulnerableRange: allRanges,
+    fixedVersion: sharedFixed,
+  };
 }
 
 // ---- Bounded concurrency helper --------------------------------------------
@@ -471,6 +531,7 @@ export async function fetchOsvAdvisories(
           vuln,
           dep.name,
           osvEco,
+          dep.version,
         );
         advisories.push({
           ghsaId,
