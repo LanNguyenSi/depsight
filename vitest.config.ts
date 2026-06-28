@@ -9,8 +9,47 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      include: ['lib/**/*.ts'],
+      include: ['lib/**/*.ts', 'app/api/**/*.ts'],
       exclude: ['lib/**/*.d.ts'],
+      thresholds: {
+        // Global floor — ~2 points below the measured baseline (39.27/34.83/42.07/39.5)
+        // so the current suite passes but any significant regression fails CI.
+        statements: 37,
+        branches: 32,
+        functions: 40,
+        lines: 37,
+        // Per-file high floors for the newly-covered security files.
+        'lib/net/safe-fetch.ts': {
+          statements: 90,
+          branches: 83,
+          functions: 90,
+          lines: 90,
+        },
+        'app/api/tokens/route.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/tokens/[id]/route.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/webhooks/route.ts': {
+          statements: 90,
+          branches: 85,
+          functions: 95,
+          lines: 90,
+        },
+        'app/api/policies/route.ts': {
+          statements: 95,
+          branches: 88,
+          functions: 95,
+          lines: 95,
+        },
+      },
     },
   },
   resolve: {

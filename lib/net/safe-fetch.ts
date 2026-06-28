@@ -133,7 +133,7 @@ export async function assertPublicUrl(input: string): Promise<{ url: URL; addres
  * As defence in depth, the dialed address is re-checked against isBlockedIp
  * so even a poisoned `validated` set fails closed.
  */
-function pinnedLookup(validated: string[]): LookupFunction {
+export function pinnedLookup(validated: string[]): LookupFunction {
   return ((hostname, options, callback) => {
     // The (hostname, callback) overload passes the callback as `options`.
     const opts = (typeof options === 'function' ? {} : options) ?? {};
