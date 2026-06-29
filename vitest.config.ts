@@ -49,6 +49,46 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Per-file floors added by the coverage-residual batch (2026-06-29).
+        // Measured then set 3-5 points below to absorb noise.
+        // Negative-control verified: each floor was temporarily raised above measured;
+        // all 6 triggered ERROR before being restored.
+        'app/api/slack/route.ts': {
+          statements: 95,
+          branches: 88,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/policies/[id]/route.ts': {
+          statements: 90,
+          branches: 88,
+          functions: 95,
+          lines: 90,
+        },
+        'app/api/webhooks/[id]/route.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/scan/route.ts': {
+          statements: 95,
+          branches: 85,
+          functions: 95,
+          lines: 95,
+        },
+        'lib/export/repo-bundle.ts': {
+          statements: 55,
+          branches: 33,
+          functions: 65,
+          lines: 55,
+        },
+        'lib/policy/service.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
       },
     },
   },
