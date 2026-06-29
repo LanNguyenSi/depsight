@@ -7,9 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { resolveRequestUserMock, scanRepositoryMock } = vi.hoisted(() => ({
+const { resolveRequestUserMock, scanRepositoryMock, scanFindFirst } = vi.hoisted(() => ({
   resolveRequestUserMock: vi.fn(),
   scanRepositoryMock: vi.fn(),
+  scanFindFirst: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,14 @@ const { resolveRequestUserMock, scanRepositoryMock } = vi.hoisted(() => ({
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth-api', () => ({
   resolveRequestUser: resolveRequestUserMock,
+}));
+
+vi.mock('@/lib/prisma', () => ({
+  prisma: {
+    scan: {
+      findFirst: scanFindFirst,
+    },
+  },
 }));
 
 // Preserve the real ScanAccessError export so route handler instanceof checks work
@@ -31,7 +40,7 @@ vi.mock('@/lib/cve/scanner', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 // Imports AFTER mocks
 // ---------------------------------------------------------------------------
-import { POST } from '@/app/api/scan/route';
+import { POST, GET } from '@/app/api/scan/route';
 import { NextRequest } from 'next/server';
 import { ScanAccessError } from '@/lib/cve/scanner';
 
@@ -130,5 +139,112 @@ describe('POST /api/scan — route status codes', () => {
     const res = await POST(makeRequest({}));
 
     expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — GET /api/scan
+// ---------------------------------------------------------------------------
+describe('GET /api/scan — route status codes', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    scanRepositoryMock.mockReset();
+    scanFindFirst.mockReset();
+    resolveRequestUserMock.mockResolvedValue({
+      id: 'me',
+      githubLogin: 'octocat',
+      githubToken: 'gh_tok',
+    });
+  });
+
+  it('returns 401 when user is not authenticated', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+
+    const req = new NextRequest('http://localhost/api/scan?repoId=repo-1');
+    const res = await GET(req);
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+  });
+
+  it('returns 400 when repoId query param is missing', async () => {
+    const req = new NextRequest('http://localhost/api/scan');
+    const res = await GET(req);
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('repoId is required');
+  });
+
+  it('returns 200 with scan:null when no completed scan exists for the repo', async () => {
+    scanFindFirst.mockResolvedValue(null);
+
+    const req = new NextRequest('http://localhost/api/scan?repoId=repo-1');
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { scan: null };
+    expect(body.scan).toBeNull();
+    expect(scanFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ repoId: 'repo-1' }),
+      }),
+    );
+  });
+
+  it('returns 200 with mapped scan and advisories when a completed scan exists', async () => {
+    const now = new Date('2026-01-01T00:00:00Z');
+    const pubAt = new Date('2025-06-01T00:00:00Z');
+    const mockScan = {
+      id: 'scan-1',
+      scannedAt: now,
+      status: 'COMPLETED',
+      riskScore: 7.5,
+      cveCount: 1,
+      criticalCount: 1,
+      highCount: 0,
+      mediumCount: 0,
+      lowCount: 0,
+      advisories: [
+        {
+          id: 'adv-1',
+          ghsaId: 'GHSA-xxxx-yyyy-zzzz',
+          cveId: 'CVE-2025-0001',
+          severity: 'CRITICAL',
+          summary: 'A critical issue',
+          packageName: 'lodash',
+          ecosystem: 'npm',
+          vulnerableRange: '< 4.17.21',
+          fixedVersion: '4.17.21',
+          publishedAt: pubAt,
+          url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+        },
+      ],
+    };
+    scanFindFirst.mockResolvedValue(mockScan);
+
+    const req = new NextRequest('http://localhost/api/scan?repoId=repo-1');
+    const res = await GET(req);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      scan: {
+        id: string;
+        status: string;
+        riskScore: number;
+        counts: { total: number; critical: number };
+        advisories: Array<{ id: string; severity: string }>;
+      };
+    };
+    expect(body.scan).not.toBeNull();
+    expect(body.scan.id).toBe('scan-1');
+    expect(body.scan.status).toBe('COMPLETED');
+    expect(body.scan.riskScore).toBe(7.5);
+    expect(body.scan.counts.total).toBe(1);
+    expect(body.scan.counts.critical).toBe(1);
+    expect(body.scan.advisories).toHaveLength(1);
+    expect(body.scan.advisories[0].id).toBe('adv-1');
+    expect(body.scan.advisories[0].severity).toBe('CRITICAL');
   });
 });
