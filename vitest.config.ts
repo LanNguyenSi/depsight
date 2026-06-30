@@ -89,6 +89,118 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Per-file floors added by the route-coverage batch (2026-06-30):
+        // the remaining 18 untested route handlers. Measured S/F/L=100 across
+        // the board (floor 95); branch floors set ~5-8 points below measured.
+        // Negative-control verified before PR (raise a floor above measured -> ERROR).
+        'app/api/dependabot/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/dependabot/check/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/dependabot/enable-all/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/ci/sync/route.ts': {
+          statements: 95,
+          branches: 80,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/repos/sync/route.ts': {
+          statements: 95,
+          branches: 68,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/pr-scan/route.ts': {
+          statements: 95,
+          branches: 85,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/export/route.ts': {
+          statements: 95,
+          branches: 78,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/sbom/route.ts': {
+          statements: 95,
+          branches: 82,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/me/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/health/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/deps/route.ts': {
+          statements: 95,
+          branches: 88,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/license/route.ts': {
+          statements: 95,
+          branches: 85,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/ci/analytics/[repoId]/route.ts': {
+          statements: 95,
+          branches: 80,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/ci/analytics/cross-repo/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/history/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/overview/route.ts': {
+          statements: 95,
+          branches: 68,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/policies/evaluate/route.ts': {
+          statements: 95,
+          branches: 80,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/repos/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
       },
     },
   },
