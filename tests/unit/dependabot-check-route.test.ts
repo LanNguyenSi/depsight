@@ -95,6 +95,12 @@ describe('GET /api/dependabot/check', () => {
     expect(body.total).toBe(2);
     expect(body.disabledCount).toBe(0);
     expect(body.disabled).toEqual([]);
+    // IDOR guard: repos MUST be scoped to the caller (userId) and tracked-only.
+    // Removing userId from the route's where clause is a cross-tenant leak.
+    expect(repoFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', tracked: true },
+      select: { id: true, owner: true, name: true, fullName: true },
+    });
   });
 
   it('(4) repos where request throws → appear in disabled list with exact shape', async () => {

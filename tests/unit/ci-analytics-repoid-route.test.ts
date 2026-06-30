@@ -111,8 +111,11 @@ describe('GET /api/ci/analytics/[repoId]', () => {
     expect(body.error).toContain('unknown-type');
   });
 
-  it('returns 200 for type=fail-rate with period=7 and verifies call args', async () => {
-    repoFindFirst.mockResolvedValue({ id: 'repo-1' });
+  it('returns 200 for type=fail-rate with period=7 and uses the OWNERSHIP-VERIFIED repo id', async () => {
+    // The owned repo.id deliberately differs from the path param so this test
+    // distinguishes the security hardening (analytics keyed on repo.id, the
+    // ownership-verified id) from the raw, attacker-controlled path param.
+    repoFindFirst.mockResolvedValue({ id: 'owned-99' });
     getWorkflowFailRatesMock.mockResolvedValue([{ workflow: 'CI', failRate: 0.1 }]);
     const req = new NextRequest('http://localhost/api/ci/analytics/repo-1?type=fail-rate&period=7');
     const res = await GET(req, makeParams('repo-1'));
@@ -121,7 +124,8 @@ describe('GET /api/ci/analytics/[repoId]', () => {
     expect(body.type).toBe('fail-rate');
     expect(body.period).toBe(7);
     expect(body.data).toEqual([{ workflow: 'CI', failRate: 0.1 }]);
-    expect(getWorkflowFailRatesMock).toHaveBeenCalledWith('repo-1', 7);
+    // Must be the owned id 'owned-99', NOT the path param 'repo-1'.
+    expect(getWorkflowFailRatesMock).toHaveBeenCalledWith('owned-99', 7);
   });
 
   it('coerces an invalid period value (99) to 30', async () => {

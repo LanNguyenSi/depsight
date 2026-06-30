@@ -175,6 +175,9 @@ describe('POST /api/export', () => {
     const bodyBytes = new Uint8Array(await res.arrayBuffer());
     expect(bodyBytes).toEqual(archiveBytes);
     expect(buildRepoExportArchiveMock).toHaveBeenCalledWith(fakeExportData);
+    // Primary ownership boundary: the initial load MUST be scoped to the caller.
+    // Substituting session.user.id with a constant here must fail this test.
+    expect(loadRepoExportDataMock).toHaveBeenNthCalledWith(1, 'user-1', 'repo-1');
     // No scanners triggered when no missing scans
     expect(scanRepositoryMock).not.toHaveBeenCalled();
   });
