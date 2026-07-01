@@ -201,6 +201,42 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Per-file floors for the CI-analytics lib modules (2026-07-01).
+        // Measured S/B/F/L: bottleneck 97.22/86.66/100/100, build-times
+        // 93.61/84.21/100/100, cross-repo 100/95.83/100/100, fail-rate
+        // 100/100/100/100, flaky 92.59/85.36/100/97.82. Floors set 3-5 points
+        // below measured. Negative-control verified (raise a floor above
+        // measured -> ERROR) before setting the final values.
+        'lib/ci/analytics/bottleneck.ts': {
+          statements: 93,
+          branches: 82,
+          functions: 96,
+          lines: 96,
+        },
+        'lib/ci/analytics/build-times.ts': {
+          statements: 89,
+          branches: 80,
+          functions: 96,
+          lines: 96,
+        },
+        'lib/ci/analytics/cross-repo.ts': {
+          statements: 96,
+          branches: 91,
+          functions: 96,
+          lines: 96,
+        },
+        'lib/ci/analytics/fail-rate.ts': {
+          statements: 96,
+          branches: 96,
+          functions: 96,
+          lines: 96,
+        },
+        'lib/ci/analytics/flaky.ts': {
+          statements: 88,
+          branches: 81,
+          functions: 96,
+          lines: 93,
+        },
       },
     },
   },
