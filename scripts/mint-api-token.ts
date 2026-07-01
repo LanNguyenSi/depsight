@@ -15,7 +15,7 @@
 import crypto from "node:crypto";
 import { prisma } from "../lib/prisma";
 
-function parseArgs(): { userId?: string; name?: string } {
+export function parseArgs(): { userId?: string; name?: string } {
   const out: { userId?: string; name?: string } = {};
   for (let i = 2; i < process.argv.length; i++) {
     const arg = process.argv[i];
@@ -25,7 +25,7 @@ function parseArgs(): { userId?: string; name?: string } {
   return out;
 }
 
-async function main() {
+export async function main() {
   const { userId, name } = parseArgs();
   if (!userId) {
     console.error(
@@ -63,14 +63,21 @@ async function main() {
   console.log(rawToken);
 }
 
-main()
-  .catch((err) => {
-    // Print only the message — the full Prisma error object can leak
-    // the DATABASE_URL in its meta fields.
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("mint-api-token failed:", message);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+// Only auto-run when this file is the process entry point (`npx tsx
+// scripts/mint-api-token.ts ...`), not when imported (e.g. by tests). The
+// package has no "type": "module" in package.json, so it runs under the
+// default CommonJS module system — `require.main === module` is the correct
+// entry-point guard here (rather than the ESM `import.meta.url` idiom).
+if (require.main === module) {
+  main()
+    .catch((err) => {
+      // Print only the message — the full Prisma error object can leak
+      // the DATABASE_URL in its meta fields.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("mint-api-token failed:", message);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}
