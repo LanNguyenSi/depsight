@@ -193,9 +193,17 @@ describe('getAllFailRates', () => {
 });
 
 describe('getWorkflowFailRateMultiPeriod', () => {
+  const FIXED_NOW = new Date('2026-07-01T12:00:00.000Z');
+
   beforeEach(() => {
     workflowFindFirst.mockReset();
     workflowRunFindMany.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('(7) throws when the workflow is not found, or does not belong to userId (fail-closed)', async () => {
@@ -263,8 +271,23 @@ describe('getWorkflowFailRateMultiPeriod', () => {
       failRatePct: 50,
     });
     expect(workflowRunFindMany).toHaveBeenCalledTimes(3);
+    // Each period must query its OWN exact since-window (1/7/30 days back), not
+    // just "some Date" — pins the per-period day math on the multiperiod path.
+    const sinceFor = (days: number) => {
+      const d = new Date(FIXED_NOW);
+      d.setDate(d.getDate() - days);
+      return d;
+    };
     expect(workflowRunFindMany).toHaveBeenNthCalledWith(1, {
-      where: { workflowId: 'wf-1', runCreatedAt: { gte: expect.any(Date) } },
+      where: { workflowId: 'wf-1', runCreatedAt: { gte: sinceFor(1) } },
+      select: { conclusion: true },
+    });
+    expect(workflowRunFindMany).toHaveBeenNthCalledWith(2, {
+      where: { workflowId: 'wf-1', runCreatedAt: { gte: sinceFor(7) } },
+      select: { conclusion: true },
+    });
+    expect(workflowRunFindMany).toHaveBeenNthCalledWith(3, {
+      where: { workflowId: 'wf-1', runCreatedAt: { gte: sinceFor(30) } },
       select: { conclusion: true },
     });
   });

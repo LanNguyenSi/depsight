@@ -235,4 +235,50 @@ describe('detectFlakyJobs', () => {
     expect(result[0].failRatePct).toBe(50);
     expect(result[0].signal).toBe('high-fail-rate');
   });
+
+  it('(8) sorts "both" ahead of higher-rate single-signal jobs, then tiebreaks single-signal jobs by failRatePct desc', async () => {
+    // jobMap (hence the pre-sort array) is built in first-appearance order:
+    // high-80, high-60, then flaky-both. With the "both" job NOT first pre-sort,
+    // the comparator's "both"-first branch runs with the "both" job as its FIRST
+    // argument (v8 inserts it against the earlier highs) — covering that branch —
+    // and the two high-fail-rate jobs exercise the failRatePct-desc tiebreak.
+    repoFindUnique.mockResolvedValue({
+      fullName: 'acme/widgets',
+      workflows: [
+        {
+          id: 'wf-1',
+          name: 'CI',
+          runs: [
+            // high-80: 4/5 failed = 80%, all distinct SHAs -> high-fail-rate only
+            { headSha: 'h80a', jobs: [{ name: 'high-80', conclusion: 'failure' }] },
+            { headSha: 'h80b', jobs: [{ name: 'high-80', conclusion: 'failure' }] },
+            { headSha: 'h80c', jobs: [{ name: 'high-80', conclusion: 'failure' }] },
+            { headSha: 'h80d', jobs: [{ name: 'high-80', conclusion: 'failure' }] },
+            { headSha: 'h80e', jobs: [{ name: 'high-80', conclusion: 'success' }] },
+            // high-60: 3/5 failed = 60%, all distinct SHAs -> high-fail-rate only
+            { headSha: 'h60a', jobs: [{ name: 'high-60', conclusion: 'failure' }] },
+            { headSha: 'h60b', jobs: [{ name: 'high-60', conclusion: 'failure' }] },
+            { headSha: 'h60c', jobs: [{ name: 'high-60', conclusion: 'failure' }] },
+            { headSha: 'h60d', jobs: [{ name: 'high-60', conclusion: 'success' }] },
+            { headSha: 'h60e', jobs: [{ name: 'high-60', conclusion: 'success' }] },
+            // flaky-both: 2/5 failed = 40% (still > 0.2 threshold), and bthX has
+            // both success+failure -> high-fail-rate AND sha-retry -> "both".
+            { headSha: 'bthX', jobs: [{ name: 'flaky-both', conclusion: 'failure' }] },
+            { headSha: 'bthX', jobs: [{ name: 'flaky-both', conclusion: 'success' }] },
+            { headSha: 'bthB', jobs: [{ name: 'flaky-both', conclusion: 'failure' }] },
+            { headSha: 'bthC', jobs: [{ name: 'flaky-both', conclusion: 'success' }] },
+            { headSha: 'bthD', jobs: [{ name: 'flaky-both', conclusion: 'success' }] },
+          ],
+        },
+      ],
+    });
+
+    const result = await detectFlakyJobs('repo-1');
+
+    // "both" sorts first despite the LOWEST failRatePct (40 < 60 < 80); the two
+    // high-fail-rate jobs then tiebreak by failRatePct desc (80 before 60).
+    expect(result.map((j) => j.jobName)).toEqual(['flaky-both', 'high-80', 'high-60']);
+    expect(result.map((j) => j.signal)).toEqual(['both', 'high-fail-rate', 'high-fail-rate']);
+    expect(result.map((j) => j.failRatePct)).toEqual([40, 80, 60]);
+  });
 });
