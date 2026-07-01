@@ -9,7 +9,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      include: ['lib/**/*.ts', 'app/api/**/*.ts'],
+      include: ['lib/**/*.ts', 'app/api/**/*.ts', 'scripts/**/*.ts'],
       exclude: ['lib/**/*.d.ts'],
       thresholds: {
         // Global floor — ~2 points below the measured baseline (39.27/34.83/42.07/39.5)
@@ -77,11 +77,16 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Raised (2026-07-01, server-side lib slice 2/3): the DB-loading half
+        // of repo-bundle.ts (loadRepoExportData + private loaders) is now
+        // covered by tests/unit/repo-bundle-loaders.test.ts. Measured
+        // S/B/F/L: 100/93.75/100/100. Floor set 3-5 points below measured.
+        // Negative-control verified (raise above measured -> ERROR).
         'lib/export/repo-bundle.ts': {
-          statements: 55,
-          branches: 33,
-          functions: 65,
-          lines: 55,
+          statements: 95,
+          branches: 89,
+          functions: 95,
+          lines: 95,
         },
         'lib/policy/service.ts': {
           statements: 95,
@@ -236,6 +241,57 @@ export default defineConfig({
           branches: 81,
           functions: 96,
           lines: 93,
+        },
+        // Per-file floors for the server-side lib layer (2026-07-01,
+        // server-side lib slice 2/3): CI ingestion, the auto-scan worker,
+        // PR scanning, and the Octokit wrapper. Measured S/B/F/L: sync
+        // 100/100/100/100, ingest 97.5/67.74/100/100, auto-scan
+        // 88.23/81.81/83.33/90.47, pr-scanner 100/87.5/100/100, github
+        // 100/100/100/100. Floors set 3-5 points below measured.
+        // Negative-control verified (raise a floor above measured -> ERROR)
+        // before setting the final values.
+        'lib/ci/sync.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        'lib/ci/ingest.ts': {
+          statements: 93,
+          branches: 63,
+          functions: 95,
+          lines: 95,
+        },
+        'lib/cron/auto-scan.ts': {
+          statements: 84,
+          branches: 77,
+          functions: 79,
+          lines: 86,
+        },
+        'lib/pr/pr-scanner.ts': {
+          statements: 95,
+          branches: 83,
+          functions: 95,
+          lines: 95,
+        },
+        'lib/github.ts': {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        // scripts/mint-api-token.ts: measured S/B/F/L 83.33/75/50/81.48.
+        // Function coverage caps at 50% because the `require.main === module`
+        // entry-point guard's .catch()/.finally() callbacks only run when the
+        // script is the process entry point (`npx tsx scripts/mint-api-token.ts`),
+        // never when imported by a test — that path is intentionally not
+        // exercised here (it would require spawning a real subprocess against
+        // a real database). Floor set 3-5 points below measured.
+        'scripts/mint-api-token.ts': {
+          statements: 79,
+          branches: 70,
+          functions: 45,
+          lines: 77,
         },
       },
     },
