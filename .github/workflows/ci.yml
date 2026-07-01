@@ -58,3 +58,20 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npm run build
+
+  mcp-test:
+    name: MCP Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mcp/package-lock.json
+      - run: npm ci
+        working-directory: mcp
+      - run: npx tsc --noEmit
+        working-directory: mcp
+      - run: npm test
+        working-directory: mcp
