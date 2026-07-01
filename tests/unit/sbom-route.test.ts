@@ -117,7 +117,7 @@ describe('GET /api/sbom', () => {
     expect(JSON.parse(text)).toMatchObject({ metadata: { component: { name: 'owner/my-repo' } } });
   });
 
-  it('(5) uses fallback filename sbom when bom.metadata.component is absent', async () => {
+  it('(5) uses plain fallback filename sbom.cdx.json when bom.metadata.component is absent', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     scanFindFirst.mockResolvedValue({ id: 'scan-1' });
     generateSBOMMock.mockResolvedValue({ metadata: {}, components: [] });
@@ -125,7 +125,8 @@ describe('GET /api/sbom', () => {
     const res = await GET(makeGetRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(200);
-    expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="sbom-sbom.cdx.json"');
+    // No component name -> plain 'sbom.cdx.json', not the doubled 'sbom-sbom.cdx.json'.
+    expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="sbom.cdx.json"');
   });
 
   it('(6) returns 500 when generateSBOM throws', async () => {

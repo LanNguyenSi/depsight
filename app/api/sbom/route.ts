@@ -41,8 +41,10 @@ export async function GET(req: NextRequest) {
     const bom = await generateSBOM(session.user.id, repoId);
 
     const json = JSON.stringify(bom, null, 2);
-    const repoName = bom.metadata.component?.name?.replace(/\//g, '-') ?? 'sbom';
-    const filename = `${repoName}-sbom.cdx.json`;
+    // Only prefix the component name when one is present; otherwise fall back to
+    // a plain 'sbom.cdx.json' instead of the doubled 'sbom-sbom.cdx.json'.
+    const componentName = bom.metadata.component?.name?.replace(/\//g, '-');
+    const filename = componentName ? `${componentName}-sbom.cdx.json` : 'sbom.cdx.json';
 
     return new NextResponse(json, {
       status: 200,
