@@ -151,6 +151,12 @@ describe('scanPRAndComment — success path', () => {
 
     const result = await scanPRAndComment('tok-123', 'acme', 'api', 1, 'user-1');
 
+    // Ownership scoping (IDOR): the repo lookup MUST carry the caller's userId
+    // and tracked:true so a PR scan cannot read another user's repo row.
+    expect(repoFindFirst).toHaveBeenCalledWith({
+      where: { owner: 'acme', name: 'api', userId: 'user-1', tracked: true },
+    });
+
     expect(scanFindFirst).toHaveBeenCalledWith({
       where: { repoId: 'db-repo-1', status: 'COMPLETED' },
       orderBy: { scannedAt: 'desc' },
