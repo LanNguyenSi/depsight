@@ -28,7 +28,8 @@ export default defineConfig({
         // cves 100/93.1/100/100, repos 100/100/100/100, deps 100/100/100/100,
         // license 100/100/100/100, history 100/100/100/100,
         // policy 100/100/100/100, ci 100/100/100/100, sbom 100/100/100/100,
-        // server 100/100/100/100. Floors set 3-5 points below measured.
+        // server 100/100/100/100, rescan 100/100/100/100. Floors set 3-5
+        // points below measured.
         // Negative-control verified: one floor was temporarily raised above
         // measured, confirmed ERROR, then restored.
         "src/tools/shared.ts": {
@@ -80,6 +81,12 @@ export default defineConfig({
           lines: 95,
         },
         "src/tools/sbom.ts": {
+          statements: 95,
+          branches: 95,
+          functions: 95,
+          lines: 95,
+        },
+        "src/tools/rescan.ts": {
           statements: 95,
           branches: 95,
           functions: 95,
