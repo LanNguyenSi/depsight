@@ -323,4 +323,108 @@ describe('extractVulnRangeInfo', () => {
       fixedVersion: null,
     });
   });
+
+  // Interleaved intervals within a SINGLE range's events array: a range can carry
+  // MULTIPLE [introduced, fixed) pairs, not just one. The queried version sits in
+  // the SECOND interval; the old code (first .find() per range) would have used
+  // the FIRST introduced (1.0.0) paired with the FIRST fixed (1.2.0), silently
+  // discarding the second pair.
+  it('interleaved: single range with two interleaved intervals — version in second interval', () => {
+    const vuln: OsvVuln = {
+      id: 'GHSA-interleaved',
+      affected: [
+        {
+          package: { ecosystem: 'npm', name: 'pkg' },
+          ranges: [
+            {
+              type: 'SEMVER',
+              events: [
+                { introduced: '1.0.0' },
+                { fixed: '1.2.0' },
+                { introduced: '2.0.0' },
+                { fixed: '2.3.0' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', '2.1.0');
+    expect(result.vulnerableRange).toBe('>=2.0.0 <2.3.0');
+    expect(result.fixedVersion).toBe('2.3.0');
+  });
+
+  // Same interleaved fixture, but the queried version sits in the FIRST
+  // interval: guards against a regression that drops the first [introduced,
+  // fixed) pair or only emits the last interval per range.
+  it('interleaved: version in first interval selects the first pair', () => {
+    const vuln: OsvVuln = {
+      id: 'GHSA-interleaved',
+      affected: [
+        {
+          package: { ecosystem: 'npm', name: 'pkg' },
+          ranges: [
+            {
+              type: 'SEMVER',
+              events: [
+                { introduced: '1.0.0' },
+                { fixed: '1.2.0' },
+                { introduced: '2.0.0' },
+                { fixed: '2.3.0' },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', '1.1.0');
+    expect(result.vulnerableRange).toBe('>=1.0.0 <1.2.0');
+    expect(result.fixedVersion).toBe('1.2.0');
+  });
+
+  // last_affected: an inclusive upper bound used when `fixed` is absent. A
+  // version above last_affected must NOT be treated as a unique match (the old
+  // code ignored last_affected entirely, producing an unbounded ">=2.0.0"
+  // candidate that incorrectly matched versions above the true upper bound).
+  describe('last_affected bound', () => {
+    const vuln: OsvVuln = {
+      id: 'GHSA-lastaffected',
+      affected: [
+        {
+          package: { ecosystem: 'npm', name: 'pkg' },
+          ranges: [
+            makeRange('1.0.0', '1.2.0'),
+            {
+              type: 'SEMVER',
+              events: [{ introduced: '2.0.0' }, { last_affected: '2.5.0' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    it('version at/below last_affected matches with inclusive upper bound and no fixedVersion', () => {
+      const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', '2.3.0');
+      expect(result.vulnerableRange).toBe('>=2.0.0 <=2.5.0');
+      expect(result.fixedVersion).toBeNull();
+    });
+
+    // Boundary that distinguishes last_affected (inclusive, <=) from fixed
+    // (exclusive, <): the version EQUAL to last_affected must still match. A
+    // lte->lt mutation of the containment check would make this case fail.
+    it('version exactly at last_affected still matches (inclusive bound)', () => {
+      const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', '2.5.0');
+      expect(result.vulnerableRange).toBe('>=2.0.0 <=2.5.0');
+      expect(result.fixedVersion).toBeNull();
+    });
+
+    it('version above last_affected is not reported as a unique match', () => {
+      const result = extractVulnRangeInfo(vuln, 'pkg', 'npm', '2.6.0');
+      // Not uniquely matched: falls back to all candidate ranges joined, with
+      // no shared fixedVersion (differs by design from the buggy old output
+      // of a bare unbounded ">=2.0.0" match).
+      expect(result.vulnerableRange).toBe('>=1.0.0 <1.2.0, >=2.0.0 <=2.5.0');
+      expect(result.fixedVersion).toBeNull();
+    });
+  });
 });
