@@ -11,17 +11,19 @@ export default defineConfig({
       exclude: ["**/__tests__/**", "dist/**", "src/index.ts"],
       thresholds: {
         // Global floor — set a few points below the measured baseline
-        // (statements 96.32 / branches 94.82 / functions 88.09 / lines 96.26)
-        // so the current suite passes but a significant regression fails CI.
-        // The functions floor sits lower because src/client.ts (pre-existing,
-        // out of scope for this slice) has several methods (getOverview,
-        // getScan, getDeps, getLicense, getCiAnalyticsCrossRepo) that are
-        // not directly exercised — the new tool tests mock DepsightClient
-        // rather than hitting the real client, per the "do not hit the
-        // network" pattern in rescan.test.ts / cves.test.ts etc.
+        // (statements 100 / branches 95 / functions 100 / lines 100, after
+        // the client.test.ts additions below) so the current suite passes
+        // but a significant regression fails CI.
+        // The functions floor was previously slack at 83 because
+        // src/client.ts had several methods (getOverview, getScan, getDeps,
+        // getLicense, getCiAnalyticsCrossRepo) that were only exercised
+        // indirectly (via mocked DepsightClient in the tool-surface tests).
+        // client.test.ts now directly covers each of those methods'
+        // request + HttpError branches, so the floor is raised toward the
+        // measured 100%.
         statements: 92,
         branches: 90,
-        functions: 83,
+        functions: 95,
         lines: 92,
         // Per-file floors for the tool-handler + server-wiring slice
         // (2026-07-01, slice 3/3). Measured S/B/F/L: shared 100/100/100/100,
@@ -32,6 +34,16 @@ export default defineConfig({
         // points below measured.
         // Negative-control verified: one floor was temporarily raised above
         // measured, confirmed ERROR, then restored.
+        // client.ts added 2026-07-04 (direct coverage of getOverview,
+        // getScan, getDeps, getLicense, getCiAnalyticsCrossRepo request +
+        // error branches). Measured S/B/F/L: 100/92.3/100/100. Floors set
+        // 3-5 points below measured. Negative-control verified separately.
+        "src/client.ts": {
+          statements: 96,
+          branches: 88,
+          functions: 96,
+          lines: 96,
+        },
         "src/tools/shared.ts": {
           statements: 95,
           branches: 95,
