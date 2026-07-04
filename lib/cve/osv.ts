@@ -204,36 +204,74 @@ export function extractVulnRangeInfo(
 
   if (matchedEntries.length === 0) return { vulnerableRange: null, fixedVersion: null };
 
-  // Build candidate list: all ranges across EVERY matched entry that yield a
-  // representable range string.
-  type Candidate = { rangeStr: string; introduced: string | null; fixed: string | null };
+  // Build candidate list: all [introduced, upperBound) intervals across EVERY
+  // matched entry / range that yield a representable range string. A single
+  // range's `events` array can carry MULTIPLE introduced/fixed (or
+  // introduced/last_affected) pairs — e.g. a package vulnerable again in a
+  // later interval within the SAME range object — so events are walked IN
+  // ORDER, pairing each `introduced` with the next terminating event, rather
+  // than picking only the first `introduced` and first `fixed` overall.
+  // `last_affected` is an INCLUSIVE upper bound (<=X), unlike `fixed` which is
+  // EXCLUSIVE (<X); when present (and `fixed` is absent for that interval) it
+  // is used for containment but never surfaced as fixedVersion, since there is
+  // no known fixed version for a last_affected-bounded interval.
+  type Candidate = {
+    rangeStr: string;
+    introduced: string | null;
+    fixed: string | null;
+    lastAffected: string | null;
+  };
   const candidates: Candidate[] = [];
+
+  const pushCandidate = (
+    introduced: string | null,
+    fixed: string | null,
+    lastAffected: string | null,
+  ) => {
+    const parts: string[] = [];
+    if (introduced) parts.push(`>=${introduced}`);
+    if (fixed) parts.push(`<${fixed}`);
+    else if (lastAffected) parts.push(`<=${lastAffected}`);
+    const rangeStr = parts.length > 0 ? parts.join(' ') : null;
+    if (rangeStr) {
+      candidates.push({ rangeStr, introduced, fixed, lastAffected: fixed ? null : lastAffected });
+    }
+  };
 
   for (const entry of matchedEntries) {
     for (const range of (entry.ranges ?? [])) {
       const events = range.events ?? [];
-      const introducedEvt = events.find((e) => e.introduced !== undefined);
-      const fixedEvt = events.find((e) => e.fixed !== undefined);
-      const introduced = introducedEvt?.introduced ?? null;
-      const fixed = fixedEvt?.fixed ?? null;
+      let pendingIntroduced: string | null = null;
+      let inInterval = false;
 
-      if (introduced !== null || fixed !== null) {
-        const parts: string[] = [];
-        if (introduced) parts.push(`>=${introduced}`);
-        if (fixed) parts.push(`<${fixed}`);
-        const rangeStr = parts.length > 0 ? parts.join(' ') : null;
-        if (rangeStr) {
-          candidates.push({ rangeStr, introduced, fixed });
+      for (const evt of events) {
+        if (evt.introduced !== undefined) {
+          // A new `introduced` while one is already open means the previous
+          // interval had no terminating event: emit it as open-ended.
+          if (inInterval) pushCandidate(pendingIntroduced, null, null);
+          pendingIntroduced = evt.introduced;
+          inInterval = true;
+        } else if (evt.fixed !== undefined) {
+          pushCandidate(pendingIntroduced, evt.fixed, null);
+          pendingIntroduced = null;
+          inInterval = false;
+        } else if (evt.last_affected !== undefined) {
+          pushCandidate(pendingIntroduced, null, evt.last_affected);
+          pendingIntroduced = null;
+          inInterval = false;
         }
       }
+      // Trailing `introduced` with no terminating event: open-ended range.
+      if (inInterval) pushCandidate(pendingIntroduced, null, null);
     }
   }
 
   if (candidates.length === 0) return { vulnerableRange: null, fixedVersion: null };
 
-  // Try to find exactly one candidate whose [introduced, fixed) interval contains
-  // the queried version. semver.coerce() is used for robustness with version strings
-  // that include extra labels (e.g. "1.2.3.4" or "v1.2.3").
+  // Try to find exactly one candidate whose interval contains the queried
+  // version. semver.coerce() is used for robustness with version strings
+  // that include extra labels (e.g. "1.2.3.4" or "v1.2.3"). `fixed` bounds are
+  // exclusive (<X); `lastAffected` bounds are inclusive (<=X).
   const coercedVersion = semver.coerce(version);
 
   const matching: Candidate[] = [];
@@ -243,16 +281,22 @@ export function extractVulnRangeInfo(
         ? semver.coerce(candidate.introduced)
         : null;
       const coercedFixed = candidate.fixed ? semver.coerce(candidate.fixed) : null;
+      const coercedLastAffected = candidate.lastAffected
+        ? semver.coerce(candidate.lastAffected)
+        : null;
 
       // Skip candidate if a required boundary cannot be coerced — treat as "not determinable".
       if (candidate.introduced && coercedIntroduced === null) continue;
       if (candidate.fixed && coercedFixed === null) continue;
+      if (candidate.lastAffected && coercedLastAffected === null) continue;
 
       const afterIntroduced =
         !candidate.introduced || semver.gte(coercedVersion, coercedIntroduced!);
       const beforeFixed = !candidate.fixed || semver.lt(coercedVersion, coercedFixed!);
+      const atOrBeforeLastAffected =
+        !candidate.lastAffected || semver.lte(coercedVersion, coercedLastAffected!);
 
-      if (afterIntroduced && beforeFixed) {
+      if (afterIntroduced && beforeFixed && atOrBeforeLastAffected) {
         matching.push(candidate);
       }
     }
