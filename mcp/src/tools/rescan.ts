@@ -26,14 +26,19 @@ export function registerRescanTools(
           dependabotDisabled?: boolean;
         } | null;
 
+        const status = data?.status ?? "completed";
+        const message =
+          status === "running"
+            ? "A scan is already in progress for this repository. Call depsight_get_cves with this repoId once it completes to read updated CVE results."
+            : "Scan completed. Call depsight_get_cves with this repoId to read updated CVE results.";
+
         return ok({
           success: true,
           repoId,
           scanId: data?.scanId,
-          status: data?.status ?? "completed",
+          status,
           dependabotDisabled: data?.dependabotDisabled ?? false,
-          message:
-            "Scan completed. Call depsight_get_cves with this repoId to read updated CVE results.",
+          message,
         });
       } catch (e) {
         return errResult(e);
