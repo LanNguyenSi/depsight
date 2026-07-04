@@ -45,6 +45,22 @@ export async function POST(req: NextRequest) {
 
       if (missingScans.includes('cve')) {
         const result = await scanRepository(session.user.id, repoId, session.user.githubToken);
+        // The scanner may hand back an in-flight RUNNING scan instead of a
+        // freshly-completed one. Surface that clearly instead of letting it
+        // fall through to the generic "not all scans could be prepared" 409
+        // below (that scan will still show as missing since it isn't
+        // COMPLETED yet). Same pattern applies to license/deps below once
+        // those scanners grow an equivalent already-running guard.
+        if (result.alreadyRunning) {
+          return NextResponse.json(
+            {
+              error: 'scan_in_progress',
+              inProgressScans: ['cve'],
+              message: 'A scan is already in progress for this repository; retry shortly.',
+            },
+            { status: 409 },
+          );
+        }
         overrides.cveScanId = result.scanId;
       }
       if (missingScans.includes('license')) {

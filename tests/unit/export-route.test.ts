@@ -158,6 +158,27 @@ describe('POST /api/export', () => {
     );
   });
 
+  it('(4b) returns a clear 409 scan_in_progress signal (not the generic missing_scans one) when the cve scan is already running, without reloading export data', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1', githubToken: 'tok-abc' } });
+    loadRepoExportDataMock.mockResolvedValue(fakeExportData);
+    getMissingExportScansMock.mockReturnValueOnce(['cve']); // triggers auto-run
+    scanRepositoryMock.mockResolvedValue({ scanId: 'scan-cve-running', alreadyRunning: true });
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(res.status).toBe(409);
+    const responseBody = await res.json() as { error: string; inProgressScans: string[]; message: string };
+    expect(responseBody.error).toBe('scan_in_progress');
+    expect(responseBody.inProgressScans).toEqual(['cve']);
+    expect(responseBody.message).toBe('A scan is already in progress for this repository; retry shortly.');
+
+    // Must not proceed to license/deps scans, nor reload export data, nor
+    // fall through to the generic "missing_scans" 409.
+    expect(scanLicensesMock).not.toHaveBeenCalled();
+    expect(scanDependenciesMock).not.toHaveBeenCalled();
+    expect(loadRepoExportDataMock).toHaveBeenCalledTimes(1);
+  });
+
   it('(5) returns 200 with application/zip content-type and archive bytes when all scans present', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     loadRepoExportDataMock.mockResolvedValue(fakeExportData);

@@ -170,6 +170,36 @@ describe("depsight_rescan tool wrapper", () => {
     });
   });
 
+  it("says a scan is already in progress (not 'Scan completed') when the backend reports status running", async () => {
+    const handler = captureRescanHandler(async () => ({
+      scanId: "scan-123",
+      status: "running",
+      dependabotDisabled: false,
+    }));
+
+    const result = await handler({ repoId: "repo-abc" });
+
+    expect(result.isError).toBeUndefined();
+    const body = parseToolText(result);
+    expect(body.status).toBe("running");
+    expect(body.message).toEqual(expect.stringContaining("already in progress"));
+    expect(body.message).not.toEqual(expect.stringContaining("Scan completed"));
+  });
+
+  it("still says 'Scan completed' when the backend reports status completed", async () => {
+    const handler = captureRescanHandler(async () => ({
+      scanId: "scan-456",
+      status: "completed",
+      dependabotDisabled: false,
+    }));
+
+    const result = await handler({ repoId: "repo-def" });
+
+    const body = parseToolText(result);
+    expect(body.status).toBe("completed");
+    expect(body.message).toEqual(expect.stringContaining("Scan completed"));
+  });
+
   it("defaults status/dependabotDisabled when the backend omits them", async () => {
     const handler = captureRescanHandler(async () => ({ scanId: "scan-9" }));
 
