@@ -6,6 +6,11 @@ services:
     volumes:
       - ./:/app
       - /app/node_modules
+      # Keep Next.js build output in a named volume so the root dev container
+      # never writes a root-owned .next/ into the host working tree. That also
+      # stops a stale .next/types (left over after a host branch switch) from
+      # poisoning host-side `tsc`/`harness preflight` with phantom TS2307s.
+      - next_cache:/app/.next
     ports:
       - "3000:3000"
     environment:
@@ -38,3 +43,4 @@ services:
 
 volumes:
   postgres_data:
+  next_cache:
