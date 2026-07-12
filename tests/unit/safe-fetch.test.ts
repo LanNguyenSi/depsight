@@ -2,10 +2,11 @@
 // Tests the REAL function; no vi.mock of safe-fetch itself.
 // DNS mocking covers hostname-resolution paths; literal-IP paths need no mocks.
 // HTTP/HTTPS module mocking covers the safeFetch transport layer and pinnedLookup.
-// NOTE: literal bracketed IPv6 hosts (e.g. http://[::1]) are not exercised end-to-end here.
-// net.isIP('[::1]') returns 0 (brackets), so assertPublicUrl skips the literal-IP branch and
-// production blocks such hosts via the DNS-failure path. A synchronous bracket-stripping
-// hardening is tracked as a depsight follow-up; these tests cover isPrivateIPv6 via the DNS path.
+// NOTE: `new URL('http://[::1]').hostname` returns '[::1]' WITH brackets, and
+// net.isIP('[::1]') returns 0, so assertPublicUrl strips a single leading '['
+// and trailing ']' before the literal-IP check. The "literal bracketed IPv6"
+// describe block below exercises that synchronous branch directly, with no
+// DNS mock involved — a DNS lookup there would indicate the strip regressed.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
@@ -154,6 +155,56 @@ describe('assertPublicUrl — literal-IPv4 paths (no DNS)', () => {
     await expect(assertPublicUrl('http://169.254.169.254')).rejects.toThrow(
       'URL resolves to a non-public address',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — literal bracketed IPv6 (no DNS needed; exercises the bracket-strip)
+// ---------------------------------------------------------------------------
+describe('assertPublicUrl — literal bracketed-IPv6 paths (no DNS)', () => {
+  beforeEach(() => {
+    dnsLookupMock.mockReset();
+  });
+
+  it('rejects bracketed loopback http://[::1] via the synchronous literal branch', async () => {
+    await expect(assertPublicUrl('http://[::1]')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(assertPublicUrl('http://[::1]')).rejects.toThrow(
+      'URL resolves to a non-public address',
+    );
+    expect(dnsLookupMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects bracketed unique-local http://[fd00::1] via the synchronous literal branch', async () => {
+    await expect(assertPublicUrl('http://[fd00::1]')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(assertPublicUrl('http://[fd00::1]')).rejects.toThrow(
+      'URL resolves to a non-public address',
+    );
+    expect(dnsLookupMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects bracketed link-local http://[fe80::1] via the synchronous literal branch', async () => {
+    await expect(assertPublicUrl('http://[fe80::1]')).rejects.toBeInstanceOf(SsrfBlockedError);
+    await expect(assertPublicUrl('http://[fe80::1]')).rejects.toThrow(
+      'URL resolves to a non-public address',
+    );
+    expect(dnsLookupMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects bracketed IPv4-mapped private http://[::ffff:10.0.0.1] via the synchronous literal branch', async () => {
+    await expect(assertPublicUrl('http://[::ffff:10.0.0.1]')).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+    await expect(assertPublicUrl('http://[::ffff:10.0.0.1]')).rejects.toThrow(
+      'URL resolves to a non-public address',
+    );
+    expect(dnsLookupMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a public bracketed IPv6 literal http://[2001:4860:4860::8888]', async () => {
+    const result = await assertPublicUrl('http://[2001:4860:4860::8888]');
+    expect(result.addresses).toContain('2001:4860:4860::8888');
+    expect(result.url.hostname).toBe('[2001:4860:4860::8888]');
+    expect(dnsLookupMock).not.toHaveBeenCalled();
   });
 });
 
