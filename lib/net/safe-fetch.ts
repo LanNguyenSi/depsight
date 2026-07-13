@@ -52,11 +52,39 @@ function isPrivateIPv4(ip: string): boolean {
   );
 }
 
+/**
+ * Extract the embedded IPv4 address from an IPv4-mapped IPv6 literal
+ * (::ffff:0:0/96), in either the dotted-quad form (::ffff:10.0.0.1) or the
+ * compressed-hex form (::ffff:a00:1). The latter is what `new URL(...)`
+ * canonicalizes bracketed IPv4-mapped literals to, so both must be handled
+ * for the synchronous literal-IP branch to catch them.
+ */
+function mappedIPv4FromIPv6(addr: string): string | null {
+  const dotted = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+
+  const hex = addr.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    if (hi > 0xffff || lo > 0xffff) return null;
+    const combined = (hi << 16) | lo;
+    return [
+      (combined >>> 24) & 0xff,
+      (combined >>> 16) & 0xff,
+      (combined >>> 8) & 0xff,
+      combined & 0xff,
+    ].join('.');
+  }
+
+  return null;
+}
+
 function isPrivateIPv6(ip: string): boolean {
   const addr = ip.toLowerCase();
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d) — evaluate the embedded IPv4.
-  const mapped = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isPrivateIPv4(mapped[1]);
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:a00:1) — evaluate the embedded IPv4.
+  const mapped = mappedIPv4FromIPv6(addr);
+  if (mapped) return isPrivateIPv4(mapped);
   return (
     addr === '::' ||
     addr === '::1' || // loopback
@@ -93,7 +121,17 @@ export async function assertPublicUrl(input: string): Promise<{ url: URL; addres
     throw new SsrfBlockedError('Only http(s) URLs are allowed');
   }
 
-  const hostname = url.hostname;
+  // `new URL('http://[::1]').hostname` returns '[::1]' WITH brackets, but
+  // net.isIP('[::1]') returns 0 (unrecognised), so a bracketed IPv6 literal
+  // would otherwise skip this synchronous branch and fall through to the
+  // DNS-lookup fallback below. Strip one leading '[' and trailing ']' (only
+  // when both are present) before the literal-IP check so bracketed IPv6
+  // hosts are blocked synchronously, without a DNS lookup, just like any
+  // other literal IP.
+  const hostname =
+    url.hostname.startsWith('[') && url.hostname.endsWith(']')
+      ? url.hostname.slice(1, -1)
+      : url.hostname;
 
   // Literal IP host: validate directly, no DNS needed.
   if (net.isIP(hostname)) {
