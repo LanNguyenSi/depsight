@@ -211,6 +211,7 @@ describe('GET /api/scan — route status codes', () => {
           id: 'adv-1',
           ghsaId: 'GHSA-xxxx-yyyy-zzzz',
           cveId: 'CVE-2025-0001',
+          source: 'dependabot',
           severity: 'CRITICAL',
           summary: 'A critical issue',
           packageName: 'lodash',
@@ -219,6 +220,20 @@ describe('GET /api/scan — route status codes', () => {
           fixedVersion: '4.17.21',
           publishedAt: pubAt,
           url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+        },
+        {
+          id: 'adv-2',
+          ghsaId: 'PYSEC-2025-0002',
+          cveId: null,
+          source: 'osv',
+          severity: 'HIGH',
+          summary: 'An OSV-sourced issue',
+          packageName: 'requests',
+          ecosystem: 'pip',
+          vulnerableRange: null,
+          fixedVersion: null,
+          publishedAt: null,
+          url: null,
         },
       ],
     };
@@ -234,7 +249,7 @@ describe('GET /api/scan — route status codes', () => {
         status: string;
         riskScore: number;
         counts: { total: number; critical: number };
-        advisories: Array<{ id: string; severity: string }>;
+        advisories: Array<{ id: string; severity: string; source: string }>;
       };
     };
     expect(body.scan).not.toBeNull();
@@ -243,8 +258,13 @@ describe('GET /api/scan — route status codes', () => {
     expect(body.scan.riskScore).toBe(7.5);
     expect(body.scan.counts.total).toBe(1);
     expect(body.scan.counts.critical).toBe(1);
-    expect(body.scan.advisories).toHaveLength(1);
+    expect(body.scan.advisories).toHaveLength(2);
     expect(body.scan.advisories[0].id).toBe('adv-1');
     expect(body.scan.advisories[0].severity).toBe('CRITICAL');
+    // Advisory.source (PR #76) must be serialized so the AdvisoryList UI and
+    // the depsight MCP (which passes this response through unchanged) can
+    // surface where each CVE came from.
+    expect(body.scan.advisories[0].source).toBe('dependabot');
+    expect(body.scan.advisories[1].source).toBe('osv');
   });
 });
