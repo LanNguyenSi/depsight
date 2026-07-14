@@ -5,11 +5,13 @@ import { useLocale } from '@/lib/i18n';
 import { SeverityBadge } from './SeverityBadge';
 
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+type Source = 'dependabot' | 'osv';
 
 interface Advisory {
   id: string;
   ghsaId: string;
   cveId: string | null;
+  source: Source;
   severity: Severity;
   summary: string;
   packageName: string;
@@ -33,6 +35,10 @@ const SEVERITY_CHIP_STYLES: Record<FilterSeverity, string> = {
   MEDIUM: 'text-yellow-400 bg-yellow-950/50 border-yellow-900/50',
   LOW: 'text-emerald-400 bg-emerald-950/50 border-emerald-900/50',
 };
+
+// Neutral badge, matching the existing UNKNOWN/status tag styling elsewhere
+// (SeverityBadge, DependencyTable) — source is informational, not a risk axis.
+const SOURCE_BADGE_STYLE = 'text-gray-500 bg-gray-800 border-gray-700';
 
 export function AdvisoryList({ advisories }: AdvisoryListProps) {
   const { t } = useLocale();
@@ -72,6 +78,13 @@ export function AdvisoryList({ advisories }: AdvisoryListProps) {
       case 'HIGH': return t['severity.high'];
       case 'MEDIUM': return t['severity.medium'];
       case 'LOW': return t['severity.low'];
+    }
+  };
+
+  const sourceLabel = (s: Source): string => {
+    switch (s) {
+      case 'dependabot': return t['advisory.source.dependabot'];
+      case 'osv': return t['advisory.source.osv'];
     }
   };
 
@@ -123,6 +136,11 @@ export function AdvisoryList({ advisories }: AdvisoryListProps) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <SeverityBadge severity={advisory.severity} />
+                    <span
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium ${SOURCE_BADGE_STYLE}`}
+                    >
+                      {sourceLabel(advisory.source)}
+                    </span>
                     <span className="font-mono text-sm text-gray-300">{advisory.packageName}</span>
                     <span className="text-xs text-gray-600">{advisory.ecosystem}</span>
                   </div>

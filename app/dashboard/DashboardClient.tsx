@@ -49,6 +49,7 @@ interface ScanDetail {
     id: string;
     ghsaId: string;
     cveId: string | null;
+    source: 'dependabot' | 'osv';
     severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
     summary: string;
     packageName: string;

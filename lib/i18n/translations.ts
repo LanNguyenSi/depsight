@@ -186,6 +186,8 @@ const de = {
   'advisory.affected': 'Betroffen:',
   'advisory.fix': 'Fix:',
   'advisory.details': 'Details →',
+  'advisory.source.dependabot': 'Dependabot',
+  'advisory.source.osv': 'OSV',
 
   // Severity
   'severity.title': 'CVE Zusammenfassung',
@@ -533,6 +535,8 @@ const en = {
   'advisory.affected': 'Affected:',
   'advisory.fix': 'Fix:',
   'advisory.details': 'Details →',
+  'advisory.source.dependabot': 'Dependabot',
+  'advisory.source.osv': 'OSV',
 
   // Severity
   'severity.title': 'CVE Summary',

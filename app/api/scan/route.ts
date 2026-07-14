@@ -91,6 +91,7 @@ export async function GET(req: NextRequest) {
         id: a.id,
         ghsaId: a.ghsaId,
         cveId: a.cveId,
+        source: a.source,
         severity: a.severity,
         summary: a.summary,
         packageName: a.packageName,
