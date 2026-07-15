@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { createGitHubClient } from '@/lib/github';
 import {
   type Ecosystem,
@@ -98,12 +99,27 @@ export interface UnionedDep {
  * manifests' own `name`). Deduped by package name; a prod occurrence outranks a
  * dev one.
  *
- * Version collapse: if two workspaces pin the same dep at different specs, the
- * lowest (oldest) concrete spec is kept so an old, vulnerable pin in one workspace
- * is not hidden by a newer pin elsewhere (relevant for CVE / dependency-age reporting).
- * The isDev flag is decided independently: a prod occurrence anywhere clears it,
- * regardless of which spec wins. Per-workspace version reporting needs manifest
- * provenance and is a deliberate follow-up.
+ * Version collapse (worst-case heuristic; no schema migration — see the
+ * per-workspace-provenance follow-up below): if two workspaces pin the same
+ * dep at different specs, the spec with the LOWEST minimum version admitted
+ * by its semver range is kept, via `semver.minVersion` (already a project
+ * dependency, see `lib/cve/osv.ts`), so an old, vulnerable pin in one
+ * workspace is never hidden by a newer pin elsewhere (relevant for CVE /
+ * dependency-age reporting).
+ *
+ * Non-semver specs (`workspace:`, `file:`, `link:`, a git/url spec, an `npm:`
+ * alias, a dist-tag like `latest`) and the universal wildcard (`*`, `x`, `''`,
+ * anything `semver.validRange` normalizes to `'*'`) are "non-comparable": their
+ * minimum would trivially be `0.0.0`, which would otherwise make them "win"
+ * every comparison despite pinning nothing real. The rule: a comparable spec
+ * always beats a non-comparable one; when both are non-comparable the
+ * incumbent (first-seen, root-first) is kept — the safe default when nothing
+ * meaningful can be compared.
+ *
+ * The isDev flag is decided independently: a prod occurrence anywhere clears
+ * it, regardless of which spec wins. Per-workspace version reporting needs
+ * manifest provenance (a schema migration adding a workspace/manifestPath
+ * dimension to Dependency) and is a deliberate follow-up, see task cac1b6fb.
  */
 export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
   const localNames = new Set(
@@ -111,27 +127,30 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
   );
   const byName = new Map<string, UnionedDep>();
 
-  // Should `candidate` replace `incumbent` as the kept (lowest/oldest) spec?
-  // Dependency-free (no `semver`): strip a leading range operator, then read the
-  // version triple ANCHORED at the start. A spec with no numeric core (`*`,
-  // `latest`, `workspace:*`, a git/url/alias spec) is "non-comparable": a concrete
-  // spec always beats a non-comparable one, and two non-comparable specs keep the
-  // incumbent (first-seen), so the lowest concrete pin always surfaces.
-  const specIsLower = (candidate: string, incumbent: string): boolean => {
-    const parse = (s: string): [number, number, number] | null => {
-      const m = s.trim().replace(/^[\sv=<>~^]+/, '').match(/^\d+(?:\.\d+)?(?:\.\d+)?/);
-      if (!m) return null;
-      const [major = 0, minor = 0, patch = 0] = m[0].split('.').map(Number);
-      return [major, minor, patch];
-    };
-    const pc = parse(candidate);
-    if (!pc) return false; // candidate non-comparable: never displaces the incumbent
-    const pi = parse(incumbent);
-    if (!pi) return true; // concrete candidate beats a non-comparable incumbent
-    for (let i = 0; i < 3; i++) {
-      if (pc[i] !== pi[i]) return pc[i] < pi[i];
+  // The lowest version a spec's semver range admits, or null when the spec is
+  // "non-comparable": not a parseable semver range at all (`latest`,
+  // `workspace:*`, `file:`, a git/url spec, an `npm:` alias — semver.validRange
+  // returns null), or the universal wildcard (`*`, `x`, `''` — semver.validRange
+  // normalizes all of these to `'*'`). The wildcard is excluded on purpose: its
+  // minVersion is `0.0.0`, which would otherwise beat every concrete pin.
+  const minComparableVersion = (spec: string): semver.SemVer | null => {
+    const trimmed = spec.trim();
+    const range = semver.validRange(trimmed);
+    if (!range || range === '*') return null;
+    try {
+      return semver.minVersion(trimmed);
+    } catch {
+      return null;
     }
-    return false;
+  };
+
+  // Should `candidate` replace `incumbent` as the kept (lowest/oldest) spec?
+  const specIsLower = (candidate: string, incumbent: string): boolean => {
+    const mc = minComparableVersion(candidate);
+    if (!mc) return false; // candidate non-comparable: never displaces the incumbent
+    const mi = minComparableVersion(incumbent);
+    if (!mi) return true; // comparable candidate beats a non-comparable incumbent
+    return semver.lt(mc, mi);
   };
 
   const add = (name: string, spec: string, isDev: boolean) => {
