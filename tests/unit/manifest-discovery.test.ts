@@ -161,7 +161,7 @@ describe('unionNpmDeps', () => {
     ]);
     const names = deps.map((d) => d.name).sort();
     expect(names).toEqual(['react', 'vitest', 'zod']);
-    // First occurrence wins for the version spec.
+    // ^18.0.0 has the lower minimum version, so it survives the worst-case merge.
     expect(deps.find((d) => d.name === 'react')?.versionSpec).toBe('^18.0.0');
   });
 
@@ -292,6 +292,81 @@ describe('unionNpmDeps', () => {
     ]);
     expect(devThenLowerProd[0].isDev).toBe(false);
     expect(devThenLowerProd[0].versionSpec).toBe('^5.0.0');
+  });
+
+  it('uses real semver-range comparison, not just the leading digits', () => {
+    // x-range: `1.x` admits a minimum of 1.0.0, lower than the concrete 1.1.0.
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '1.1.0' } },
+        { name: 'pkg', dependencies: { lodash: '1.x' } },
+      ])[0].versionSpec,
+    ).toBe('1.x');
+
+    // Hyphen range: `1.2.3 - 2.3.4` admits a minimum of 1.2.3, lower than 1.5.0.
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '1.5.0' } },
+        { name: 'pkg', dependencies: { lodash: '1.2.3 - 2.3.4' } },
+      ])[0].versionSpec,
+    ).toBe('1.2.3 - 2.3.4');
+
+    // OR range: `^1.0.0 || ^3.0.0` admits a minimum of 1.0.0, lower than ^2.0.0.
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '^2.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '^1.0.0 || ^3.0.0' } },
+      ])[0].versionSpec,
+    ).toBe('^1.0.0 || ^3.0.0');
+
+    // Pre-release: `^1.0.0-beta.1` sorts below the plain release `1.0.0`.
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '1.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '^1.0.0-beta.1' } },
+      ])[0].versionSpec,
+    ).toBe('^1.0.0-beta.1');
+  });
+
+  it('treats the bare wildcard forms (`x`, empty string) as non-comparable like `*`', () => {
+    // These all normalize to semver's universal range and must not "win" via a
+    // trivial 0.0.0 minimum — a concrete pin always surfaces over them.
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: 'x' } },
+        { name: 'pkg', dependencies: { lodash: '^2.0.0' } },
+      ])[0].versionSpec,
+    ).toBe('^2.0.0');
+
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: '' } },
+        { name: 'pkg', dependencies: { lodash: '^2.0.0' } },
+      ])[0].versionSpec,
+    ).toBe('^2.0.0');
+  });
+
+  it('treats other non-semver spec forms (workspace:, link:, npm alias) as non-comparable', () => {
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: 'workspace:^1.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '1.2.3' } },
+      ])[0].versionSpec,
+    ).toBe('1.2.3');
+
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: 'link:../lodash' } },
+        { name: 'pkg', dependencies: { lodash: '1.2.3' } },
+      ])[0].versionSpec,
+    ).toBe('1.2.3');
+
+    expect(
+      unionNpmDeps([
+        { name: 'root', dependencies: { lodash: 'npm:lodash-es@^4.0.0' } },
+        { name: 'pkg', dependencies: { lodash: '1.2.3' } },
+      ])[0].versionSpec,
+    ).toBe('1.2.3');
   });
 });
 
