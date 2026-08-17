@@ -345,6 +345,14 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  *
  * Malformed JSON entries are skipped gracefully.
  *
+ * NOTE (D-006 scope): the lowest-wins rule above predates D-006 and is a
+ * knowingly deferred exception to it — a nested lower-major duplicate
+ * (`node_modules/a/node_modules/glob`) collapses onto the same bare name and
+ * can still shadow a direct dep's real resolution here, the same ambiguity
+ * class the yarn parser now drops to the floor. Aligning this path is
+ * deliberately left to the per-workspace provenance follow-up (task
+ * cac1b6fb) rather than changed silently in a yarn-scoped PR.
+ *
  * Pure function — exported for testing.
  */
 export function parseNpmLockfileContentsList(contents: string[]): Map<string, string> {
@@ -559,11 +567,15 @@ function parseYarnDescriptors(header: string): string[] {
  * resolution) or semver-range intersection (explicitly deferred, not
  * implemented here). The caller (`collectDeps` in `lib/cve/osv.ts`) then
  * falls back to the manifest-floor version for that dep, matching
- * pre-lockfile-resolution behaviour. This is conservative in the
- * false-negative direction: it never trusts a resolution that can't be tied
- * unambiguously to one version, at the cost of occasionally under-using a
- * genuinely-available exact resolution when two unrelated blocks happen to
- * share a bare name.
+ * pre-lockfile-resolution behaviour — unless another lockfile format
+ * independently resolves that name, in which case `mergeLockfileResolutions`'
+ * one-sided rule uses that resolution (the drop is not propagated as a
+ * cross-format poison set; per-format ambiguity provenance is part of the
+ * cac1b6fb follow-up). This is conservative against false negatives — it may
+ * over-report via the floor, never silence: it never trusts a resolution that
+ * can't be tied unambiguously to one version, at the cost of occasionally
+ * under-using a genuinely-available exact resolution when two unrelated
+ * blocks happen to share a bare name.
  *
  * Pure function, exported for testing.
  */

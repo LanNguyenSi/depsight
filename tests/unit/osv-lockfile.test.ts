@@ -304,6 +304,36 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
     expect(body.queries[0].version).toBe('10.4.0');
   });
 
+  it('D-006 END-TO-END: real parser output for a two-block conflicted yarn.lock degrades to the manifest floor in the OSV query', async () => {
+    // Composes the REAL parseYarnLockfileContentsList (the vi.mock factory
+    // spreads the actual module, so this import is the genuine parser) with
+    // the real collectDeps: the round-1 HIGH fixture (direct glob@^10.3.0
+    // resolved 10.4.0 plus an unrelated transitive glob@^7.1.6 resolved
+    // 7.2.3) must reach OSV as the manifest floor 10.3.0 — neither 7.2.3
+    // (the false-negative lowest-wins pick) nor 10.4.0.
+    const { parseYarnLockfileContentsList } = await import('@/lib/manifest-discovery');
+    const conflictedLock = [
+      'glob@^7.1.6:',
+      '  version "7.2.3"',
+      '  resolved "x"',
+      '',
+      'glob@^10.3.0:',
+      '  version "10.4.0"',
+      '  resolved "x"',
+      '',
+    ].join('\n');
+    mockFetchYarnLockfileResolutions.mockResolvedValue(
+      parseYarnLockfileContentsList([conflictedLock]),
+    );
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries[0].package.name).toBe('glob');
+    expect(body.queries[0].version).toBe('10.3.0');
+  });
+
   it('NO-LOCKFILE FALLBACK: falls back to manifest floor when neither lockfile is present', async () => {
     // Neither package-lock.json nor yarn.lock → both resolution maps empty →
     // collectDeps falls back to stripping the leading range operator from the

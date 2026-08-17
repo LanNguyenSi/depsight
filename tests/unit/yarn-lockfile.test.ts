@@ -200,6 +200,56 @@ describe('parseYarnLockfileContentsList', () => {
     expect(map.has('lodash')).toBe(false);
   });
 
+  it('D-006: a conflicted name STAYS dropped even when a third block re-agrees with the first value ([A,B,A] and [B,A,B])', () => {
+    // Real yarn.lock files routinely carry three or more blocks for one bare
+    // name. Without the sticky `conflicted` set, the third block would
+    // re-insert the name after the delete, resurrecting exactly the ambiguous
+    // resolution D-006 forbids.
+    const block = (range: string, version: string): string =>
+      [`glob@${range}:`, `  version "${version}"`, '  resolved "x"', ''].join('\n');
+    const aba = [block('^10.3.0', '10.4.0'), block('^7.1.6', '7.2.3'), block('^10.4.0', '10.4.0')].join('\n');
+    const bab = [block('^7.1.6', '7.2.3'), block('^10.3.0', '10.4.0'), block('^7.2.0', '7.2.3')].join('\n');
+    expect(parseYarnLockfileContentsList([aba]).has('glob')).toBe(false);
+    expect(parseYarnLockfileContentsList([bab]).has('glob')).toBe(false);
+  });
+
+  it('berry marker check is load-bearing: a __metadata: lockfile is skipped even when a block uses v1-shaped version lines', () => {
+    // The marker-less berry test relies on berry's `version: x` syntax being
+    // unparseable by the v1 regex. Here the block deliberately uses the
+    // v1-shaped quoted form, so ONLY the __metadata: skip keeps this at zero.
+    const content = [
+      '__metadata:',
+      '  version: 8',
+      '  cacheKey: 10',
+      '',
+      'lodash@^4.0.0:',
+      '  version "4.17.21"',
+      '  resolved "x"',
+      '',
+    ].join('\n');
+    expect(parseYarnLockfileContentsList([content]).size).toBe(0);
+  });
+
+  it('does not treat a non-indented line WITHOUT a trailing colon as a block header', () => {
+    const content = [
+      'garbage-line-without-colon',
+      '  version "9.9.9"',
+      '',
+    ].join('\n');
+    expect(parseYarnLockfileContentsList([content]).size).toBe(0);
+  });
+
+  it('does not silently unquote a descriptor token with an unbalanced quote', () => {
+    const content = [
+      '"lodash@^4.0.0:',
+      '  version "4.17.21"',
+      '  resolved "x"',
+      '',
+    ].join('\n');
+    const map = parseYarnLockfileContentsList([content]);
+    expect(map.has('lodash')).toBe(false);
+  });
+
   it('ignores comments and blank lines', () => {
     const content = [
       '# yarn lockfile v1',
@@ -343,6 +393,17 @@ describe('mergeLockfileResolutions', () => {
     const merged = mergeLockfileResolutions([npmMap, yarnMap]);
     expect(merged.get('glob')).toBe('10.5.0');
     expect(merged.get('lodash')).toBe('4.17.21');
+  });
+
+  it('D-006 STICKY across maps: a name that conflicted between two maps is NOT resurrected by a third map agreeing with the first', () => {
+    // Only two maps are passed in production today (npm + yarn), so this
+    // pins the sticky-conflict guard directly at the unit level.
+    const merged = mergeLockfileResolutions([
+      new Map([['glob', '10.4.0']]),
+      new Map([['glob', '7.2.3']]),
+      new Map([['glob', '10.4.0']]),
+    ]);
+    expect(merged.has('glob')).toBe(false);
   });
 
   it('returns an empty map when all inputs are empty', () => {

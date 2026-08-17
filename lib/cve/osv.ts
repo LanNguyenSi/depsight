@@ -357,8 +357,11 @@ interface DepEntry {
  *
  * For npm: the resolved version from `package-lock.json` or `yarn.lock` (v1
  * classic) is used when available (eliminating false positives where the
- * lockfile has upgraded past the advisory range); when both are present the
- * lower resolved version wins (see `mergeLockfileResolutions`). Falls back to
+ * lockfile has upgraded past the advisory range); the two formats are merged
+ * agreement-or-floor per D-006 (see `mergeLockfileResolutions`): a name in
+ * only one lockfile uses that version, a name in both is kept only when they
+ * agree, and on disagreement the name is dropped so the manifest floor is
+ * used for it. Falls back to
  * stripping the leading range operator from the manifest spec (the previous
  * floor behaviour) when no lockfile or entry is found, so existing repos
  * without lockfiles do not regress. pnpm-lock.yaml is not resolved (deferred,
