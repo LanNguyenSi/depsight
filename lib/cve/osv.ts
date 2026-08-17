@@ -4,6 +4,8 @@ import {
   detectEcosystem,
   fetchNpmLockfileResolutions,
   fetchNpmManifests,
+  fetchYarnLockfileResolutions,
+  mergeLockfileResolutions,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
 import {
@@ -353,11 +355,18 @@ interface DepEntry {
  * pairs suitable for OSV querybatch. Deps with no usable concrete version
  * (no digit) are skipped.
  *
- * For npm: the resolved version from `package-lock.json` is used when
- * available (eliminating false positives where the lockfile has upgraded past
- * the advisory range). Falls back to stripping the leading range operator
- * from the manifest spec (the previous floor behaviour) when no lockfile or
- * entry is found, so existing repos without lockfiles do not regress.
+ * For npm: the resolved version from `package-lock.json` or `yarn.lock` (v1
+ * classic) is used when available (eliminating false positives where the
+ * lockfile has upgraded past the advisory range); the two formats are merged
+ * agreement-or-floor per D-006 (see `mergeLockfileResolutions`): a name in
+ * only one lockfile uses that version, a name in both is kept only when they
+ * agree, and on disagreement the name is dropped so the manifest floor is
+ * used for it. Falls back to
+ * stripping the leading range operator from the manifest spec (the previous
+ * floor behaviour) when no lockfile or entry is found, so existing repos
+ * without lockfiles do not regress. pnpm-lock.yaml is not resolved (deferred,
+ * see the comment above `discoverYarnLockfilePaths` in manifest-discovery.ts)
+ * so pnpm repos still get the manifest floor.
  */
 async function collectDeps(
   eco: string,
@@ -369,19 +378,24 @@ async function collectDeps(
   switch (eco) {
     case 'npm': {
       const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
-      const [manifests, lockfileResolutions] = await Promise.all([
+      const [manifests, npmLockfileResolutions, yarnLockfileResolutions] = await Promise.all([
         fetchNpmManifests(octokit, owner, repo, paths),
         // Best-effort: a lockfile-resolution failure must only ever degrade to
         // the manifest floor (per-dep fallback below), never reject and abort the
         // whole npm scan, which would return zero advisories and hide every
         // vuln for the repo.
         fetchNpmLockfileResolutions(octokit, owner, repo, paths).catch(() => new Map<string, string>()),
+        fetchYarnLockfileResolutions(octokit, owner, repo, paths).catch(() => new Map<string, string>()),
+      ]);
+      const lockfileResolutions = mergeLockfileResolutions([
+        npmLockfileResolutions,
+        yarnLockfileResolutions,
       ]);
       return unionNpmDeps(manifests)
         .map(({ name, versionSpec }) => {
           // Prefer the lockfile-resolved version (exact installed version) to
           // avoid false positives from the manifest floor. Fall back to the
-          // floor-strip when the lockfile is absent or doesn't list this dep.
+          // floor-strip when neither lockfile is present or lists this dep.
           const version = lockfileResolutions.get(name) ?? versionSpec.replace(/^[^0-9]*/, '');
           return { name, version };
         })
