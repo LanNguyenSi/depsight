@@ -291,8 +291,7 @@ interface ParsedNpmLockfile {
 
 // Simple numeric version comparison (no semver library; lockfile versions are
 // exact, never range-prefixed, so triple-integer comparison is correct).
-// Exported: also used by the yarn.lock resolver and by `mergeLockfileResolutions`.
-export function lockfileVersionIsLower(a: string, b: string): boolean {
+function lockfileVersionIsLower(a: string, b: string): boolean {
   const parse = (s: string): [number, number, number] => {
     const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
     if (!m) return [0, 0, 0];
@@ -431,8 +430,9 @@ export async function fetchNpmLockfileResolutions(
 // with NO YAML/TOML library dependency (see the uv.lock/poetry.lock TOML
 // parser in lib/manifests/python.ts, which is regex-based for the same
 // reason). Introducing a YAML dependency just for this one lockfile was
-// judged not worth it, especially since no repo in the current corpus uses
-// pnpm. Deferred; the manifest-floor fallback still applies for pnpm repos
+// judged not worth it. As of 2026-08, no repo in the scanned corpus was
+// observed using pnpm — an observation at that date, not a guarantee for the
+// future. Deferred; the manifest-floor fallback still applies for pnpm repos
 // (same behaviour as before this task).
 
 /**
@@ -470,15 +470,45 @@ function yarnDescriptorName(descriptor: string): string | null {
 }
 
 /**
+ * Split a yarn.lock header's descriptor list on top-level commas, i.e. commas
+ * OUTSIDE a double-quoted descriptor. A single descriptor's version range can
+ * itself contain a comma (e.g. `"lodash@>=1.0.0, <2.0.0"`); splitting on
+ * every comma unconditionally would tear that one quoted descriptor into two
+ * corrupt tokens BEFORE quote-stripping ever runs (e.g. a dangling `"lodash`
+ * key). Quotes are tracked one character at a time; yarn.lock descriptors
+ * never contain an escaped quote, so no escape handling is needed.
+ */
+function splitDescriptorsRespectingQuotes(header: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (const ch of header) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (ch === ',' && !inQuotes) {
+      tokens.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  tokens.push(current);
+  return tokens;
+}
+
+/**
  * Parse a yarn.lock header line's descriptor list (comma-separated, each
  * optionally double-quoted) into the set of package names it declares, e.g.
  * `"@babel/code-frame@^7.0.0", "@babel/code-frame@^7.12.13"` → the single
  * name `@babel/code-frame` (deduped: every descriptor in one block resolves
- * to the same `version` field).
+ * to the same `version` field). Splits on commas OUTSIDE quotes first (see
+ * `splitDescriptorsRespectingQuotes`) so a quoted descriptor whose own range
+ * contains a comma isn't torn apart before its quotes are stripped.
  */
 function parseYarnDescriptors(header: string): string[] {
   const names = new Set<string>();
-  for (const rawToken of header.split(',')) {
+  for (const rawToken of splitDescriptorsRespectingQuotes(header)) {
     let token = rawToken.trim();
     if (token.length >= 2 && token.startsWith('"') && token.endsWith('"')) {
       token = token.slice(1, -1);
@@ -507,23 +537,56 @@ function parseYarnDescriptors(header: string): string[] {
  * A berry lockfile is detected via that `__metadata:` marker and skipped
  * whole for that content string, so it degrades to the manifest floor rather
  * than being mis-parsed as v1. This is a deliberate, documented deferral:
- * berry adoption is comparatively rare and out of scope for this task.
+ * berry adoption is comparatively rare and out of scope for this task. As a
+ * second, independent line of defense, berry's own `version: x.y.z` field
+ * syntax (colon, unquoted) never matches this parser's v1 `version "x.y.z"`
+ * regex anyway, so even a missed/bypassed marker check degrades to an empty
+ * map for that content string rather than mis-parsing berry fields.
  *
- * For a package that appears in multiple entries (e.g. root lockfile +
- * multiple content strings), the LOWEST resolved version is kept, consistent
- * with `parseNpmLockfileContentsList`'s policy.
+ * The map is keyed by bare package name across ALL blocks and ALL content
+ * strings in `contentsList`, not per manifest/workspace (same simplification
+ * as `parseNpmLockfileContentsList`; see task cac1b6fb for the per-workspace
+ * provenance follow-up). Two unrelated blocks can legitimately resolve the
+ * same bare name to different versions (e.g. a `glob@^7.x` transitive pin
+ * from one package's tree alongside a `glob@^10.x` direct pin declared by the
+ * manifest) — there is no per-manifest scoping here to disambiguate which
+ * block is "the" resolution for the declared dep.
+ *
+ * Per orchestrator decision D-006 (ambiguity degrades to the manifest floor,
+ * everywhere): when a bare name resolves to more than one DISTINCT version
+ * across blocks/content strings, that name is dropped from the map entirely,
+ * rather than guessing via lowest-wins (which can pick an unrelated, wrong
+ * resolution) or semver-range intersection (explicitly deferred, not
+ * implemented here). The caller (`collectDeps` in `lib/cve/osv.ts`) then
+ * falls back to the manifest-floor version for that dep, matching
+ * pre-lockfile-resolution behaviour. This is conservative in the
+ * false-negative direction: it never trusts a resolution that can't be tied
+ * unambiguously to one version, at the cost of occasionally under-using a
+ * genuinely-available exact resolution when two unrelated blocks happen to
+ * share a bare name.
  *
  * Pure function, exported for testing.
  */
 export function parseYarnLockfileContentsList(contentsList: string[]): Map<string, string> {
   const resolved = new Map<string, string>();
+  // Names seen at more than one DISTINCT version across blocks/content
+  // strings: permanently excluded from `resolved` per D-006 (see doc comment
+  // above). Once conflicted, a name stays dropped even if a later block
+  // happens to agree with an earlier value — the true resolution is
+  // ambiguous given the blocks seen so far.
+  const conflicted = new Set<string>();
 
-  const updateIfLower = (name: string, version: string): void => {
+  const recordVersion = (name: string, version: string): void => {
     if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    if (conflicted.has(name)) return; // already dropped, stays dropped
     const existing = resolved.get(name);
-    if (!existing || lockfileVersionIsLower(version, existing)) {
+    if (existing === undefined) {
       resolved.set(name, version);
+    } else if (existing !== version) {
+      resolved.delete(name);
+      conflicted.add(name);
     }
+    // existing === version: same resolution seen again, no-op.
   };
 
   for (const content of contentsList) {
@@ -536,7 +599,7 @@ export function parseYarnLockfileContentsList(contentsList: string[]): Map<strin
 
     const commitBlock = (): void => {
       if (blockVersion !== null) {
-        for (const name of blockNames) updateIfLower(name, blockVersion);
+        for (const name of blockNames) recordVersion(name, blockVersion);
       }
     };
 
@@ -587,24 +650,48 @@ export async function fetchYarnLockfileResolutions(
 
 /**
  * Merge multiple `packageName → resolvedVersion` maps (e.g. package-lock.json
- * and yarn.lock resolutions fetched for the same repo) into one, keeping the
- * LOWEST version per name across all inputs: the same security-conservative
- * policy each individual parser already applies internally. In practice a
- * repo ships exactly one JS lockfile format, so the maps rarely overlap; this
- * exists so a polyglot/transitional repo (e.g. a stray committed lockfile
- * from a package-manager migration) still can't have a vulnerable resolution
- * hidden behind a newer one from the other format.
+ * and yarn.lock resolutions fetched for the same repo) into one. In practice
+ * a repo ships exactly one JS lockfile format, so the maps rarely overlap;
+ * this exists so a polyglot/transitional repo (e.g. a stray committed
+ * lockfile left over from a package-manager migration) is still handled
+ * deterministically.
+ *
+ * Per orchestrator decision D-006 (ambiguity degrades to the manifest floor,
+ * everywhere): a name present in only ONE input map uses that map's version
+ * as-is. A name present in MORE THAN ONE input map is kept ONLY when all the
+ * versions AGREE; when they DISAGREE, the name is dropped from the merged map
+ * entirely so the caller (`collectDeps` in `lib/cve/osv.ts`) falls back to
+ * the manifest floor for that dep, rather than trusting either lockfile's
+ * resolution over the other.
+ *
+ * This deliberately does NOT give npm's package-lock.json precedence over
+ * yarn.lock (or vice versa) on disagreement, and does NOT keep the lower of
+ * the two versions: either fixed policy can point the wrong way. A stale
+ * package-lock.json left behind by a package-manager migration can carry a
+ * HIGHER version than the yarn.lock that reflects the actual install, so
+ * "npm wins" (or "lower wins", which would agree with npm here) both mask
+ * the real, yarn-resolved vulnerable version behind a stale, safer-looking
+ * npm one. Dropping to the floor on disagreement is conservative in the
+ * false-negative direction regardless of which lockfile is actually stale.
  *
  * Pure function, exported for testing.
  */
 export function mergeLockfileResolutions(maps: Array<Map<string, string>>): Map<string, string> {
   const merged = new Map<string, string>();
+  // Names seen at more than one DISTINCT version across the input maps:
+  // permanently excluded from `merged` per D-006 (see doc comment above).
+  const conflicted = new Set<string>();
   for (const map of maps) {
     for (const [name, version] of map) {
+      if (conflicted.has(name)) continue; // already dropped, stays dropped
       const existing = merged.get(name);
-      if (!existing || lockfileVersionIsLower(version, existing)) {
+      if (existing === undefined) {
         merged.set(name, version);
+      } else if (existing !== version) {
+        merged.delete(name);
+        conflicted.add(name);
       }
+      // existing === version: agreement across maps, no-op.
     }
   }
   return merged;

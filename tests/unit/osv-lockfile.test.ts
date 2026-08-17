@@ -20,8 +20,12 @@
  *  - RESOLVED-VULNERABLE (negative control): yarn.lock resolves to a
  *    vulnerable version → real vuln NOT hidden
  *  - NO-LOCKFILE FALLBACK: neither lockfile present → manifest floor
- *  - MERGE: package-lock.json and yarn.lock both present with different
- *    resolutions → the lower (more conservative) version wins
+ *  - MERGE AGREE: package-lock.json and yarn.lock both present, agree on the
+ *    resolved version → that version is used
+ *  - MERGE DISAGREE (D-006): package-lock.json and yarn.lock both present,
+ *    disagree on the resolved version → the dep is dropped from the merged
+ *    map and the scan falls back to the manifest floor, not lowest-wins or
+ *    npm-precedence
  *  - FAIL-SAFE: yarn resolver rejects → degrades to floor/npm resolution,
  *    scan does not throw
  *
@@ -316,12 +320,29 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
     expect(body.queries[0].version).toBe('10.3.0');
   });
 
-  it('MERGE: package-lock.json and yarn.lock both present with different resolutions, the LOWER version wins', async () => {
+  it('MERGE AGREE: package-lock.json and yarn.lock both present and agree, the agreed version is used', async () => {
+    // A transitional/polyglot repo carrying both lockfiles that agree on the
+    // resolved version: mergeLockfileResolutions keeps it.
+    mockFetchNpmLockfileResolutions.mockResolvedValue(new Map([['glob', '10.4.0']]));
+    mockFetchYarnLockfileResolutions.mockResolvedValue(new Map([['glob', '10.4.0']]));
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries[0].package.name).toBe('glob');
+    expect(body.queries[0].version).toBe('10.4.0');
+  });
+
+  it('D-006 MERGE DISAGREE: package-lock.json and yarn.lock present with different resolutions, drops to the manifest floor (not lowest-wins or npm-precedence)', async () => {
     // A transitional/polyglot repo carrying both lockfiles: package-lock.json
-    // resolved glob to 10.5.0 (safe), yarn.lock resolved it to 10.3.1
-    // (vulnerable). mergeLockfileResolutions must keep the lower, more
-    // conservative version so the real vuln in the yarn.lock resolution is
-    // not hidden behind the safer npm one.
+    // resolved glob to 10.5.0, yarn.lock resolved it to 10.3.1. Neither
+    // "npm wins" nor "lower wins" is safe in general (a stale package-lock.json
+    // left over from a migration can carry a HIGHER version than the yarn.lock
+    // that reflects the real install, masking the real vuln behind a
+    // safer-looking npm resolution). mergeLockfileResolutions drops the name
+    // on disagreement, so collectDeps falls back to the manifest floor
+    // (^10.3.0 → 10.3.0), not either lockfile's resolution.
     mockFetchNpmLockfileResolutions.mockResolvedValue(new Map([['glob', '10.5.0']]));
     mockFetchYarnLockfileResolutions.mockResolvedValue(new Map([['glob', '10.3.1']]));
     mockFetch.mockResolvedValue(OSV_NO_VULNS);
@@ -330,7 +351,7 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
 
     const body = osvQueryBody(mockFetch);
     expect(body.queries[0].package.name).toBe('glob');
-    expect(body.queries[0].version).toBe('10.3.1');
+    expect(body.queries[0].version).toBe('10.3.0');
   });
 
   it('FAIL-SAFE: a yarn lockfile-resolver rejection degrades to the manifest floor, never aborts the whole scan', async () => {

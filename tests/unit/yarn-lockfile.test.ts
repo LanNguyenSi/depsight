@@ -14,15 +14,28 @@
  *   - single unscoped descriptor
  *   - scoped package (@scope/name)
  *   - multiple comma-separated descriptors in one block resolve to the same version
- *   - LOWEST resolved version kept across multiple entries (security-conservative)
+ *   - a name resolving to the SAME version across multiple entries is kept
+ *   - a name resolving to DISTINCT versions across blocks is dropped entirely
+ *     (D-006: ambiguity degrades to the manifest floor, not lowest-wins)
  *   - empty list → empty map
  *   - comments and blank lines ignored
+ *   - CRLF-terminated content parses the same as LF
  *   - berry (yarn v2+) lockfile detected via `__metadata:` and skipped entirely
+ *   - berry-format content WITHOUT the `__metadata:` marker still degrades to
+ *     an empty map (defense in depth: the v1 `version "x"` regex never
+ *     matches berry's `version: x` field syntax either)
  *   - block with no `version` field is skipped
+ *   - first-match-wins for `version` within a block, not a later field of the
+ *     same name nested under `dependencies:` (mirrors the poetry.lock
+ *     sub-table protection in python-lockfile.test.ts)
+ *   - a comma inside a quoted descriptor's own range does not corrupt the name
  *
  * mergeLockfileResolutions:
  *   - single map passthrough
- *   - lowest-wins across two maps (e.g. npm + yarn resolutions for the same repo)
+ *   - agreement across two maps for the same name is kept
+ *   - disagreement across two maps for the same name drops that name
+ *     (D-006: ambiguity degrades to the manifest floor, not lowest-wins)
+ *   - a name present in only one map is used as-is
  */
 
 import { describe, it, expect } from 'vitest';
@@ -117,7 +130,11 @@ describe('parseYarnLockfileContentsList', () => {
     expect(map.get('@babel/code-frame')).toBe('7.24.0');
   });
 
-  it('unscoped multi-descriptor header maps all listed names to the same version', () => {
+  it('unscoped multi-descriptor header (repeated ranges of the SAME package) resolves to that version', () => {
+    // Real yarn.lock headers only ever repeat ranges of the SAME package in
+    // one block (yarn dedupes distinct packages into distinct blocks), so
+    // this fixture intentionally has only one distinct name — it exercises
+    // the multi-descriptor header-parsing path, not a multi-name scenario.
     const content = [
       'lodash@^4.0.0, lodash@^4.17.0:',
       '  version "4.17.21"',
@@ -128,26 +145,59 @@ describe('parseYarnLockfileContentsList', () => {
     expect(map.get('lodash')).toBe('4.17.21');
   });
 
-  it('keeps the LOWEST resolved version when the same package appears in multiple blocks (security-conservative)', () => {
+  it('keeps a resolved version when the same package appears in multiple blocks agreeing on the same version', () => {
     const content = [
       'glob@^10.3.0:',
       '  version "10.5.0"',
       '  resolved "x"',
       '',
-      'glob@^9.0.0:',
-      '  version "9.3.5"',
+      'glob@^10.4.0:',
+      '  version "10.5.0"',
       '  resolved "x"',
       '',
     ].join('\n');
     const map = parseYarnLockfileContentsList([content]);
-    expect(map.get('glob')).toBe('9.3.5');
+    expect(map.get('glob')).toBe('10.5.0');
   });
 
-  it('keeps the lowest version across MULTIPLE lockfile content strings', () => {
+  it('keeps a resolved version that agrees across MULTIPLE lockfile content strings', () => {
+    const rootLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
+    const packageLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
+    const map = parseYarnLockfileContentsList([rootLock, packageLock]);
+    expect(map.get('lodash')).toBe('4.17.21');
+  });
+
+  it('D-006: drops a name entirely when it resolves to DISTINCT versions across blocks (floor fallback, not lowest-wins)', () => {
+    // A real scenario a keyed-by-bare-name map can't disambiguate: the
+    // manifest declares glob@^10.3.0 directly, but an unrelated transitive
+    // block also pins glob, at a lower major (^7.x), resolved to 7.2.3. A
+    // naive lowest-wins map would silently report glob as resolved to 7.2.3
+    // (an unrelated package's resolution), which is a FALSE NEGATIVE for any
+    // CVE affecting the real (10.x) installed glob. The fix: when a bare name
+    // has more than one distinct resolved version, drop it from the map so
+    // the caller falls back to the manifest floor (10.3.0) instead — the
+    // finding is NOT falsely cleared.
+    const content = [
+      'glob@^7.1.6:',
+      '  version "7.2.3"',
+      '  resolved "x"',
+      '  dependencies:',
+      '    inflight "^1.0.4"',
+      '',
+      'glob@^10.3.0:',
+      '  version "10.4.0"',
+      '  resolved "x"',
+      '',
+    ].join('\n');
+    const map = parseYarnLockfileContentsList([content]);
+    expect(map.has('glob')).toBe(false);
+  });
+
+  it('D-006: distinct-version drop also applies across MULTIPLE lockfile content strings', () => {
     const rootLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
     const packageLock = ['lodash@^4.0.0:', '  version "4.14.0"', '  resolved "x"', ''].join('\n');
     const map = parseYarnLockfileContentsList([rootLock, packageLock]);
-    expect(map.get('lodash')).toBe('4.14.0');
+    expect(map.has('lodash')).toBe(false);
   });
 
   it('ignores comments and blank lines', () => {
@@ -180,6 +230,33 @@ describe('parseYarnLockfileContentsList', () => {
     expect(map.size).toBe(0);
   });
 
+  it('degrades to an empty map for berry-format content even WITHOUT the __metadata: marker (defense in depth)', () => {
+    // Belt-and-suspenders: even if the __metadata: marker were missing or the
+    // detection check were bypassed, berry's `version: x.y.z` field syntax
+    // (colon, unquoted) never matches this parser's v1 `version "x.y.z"`
+    // regex, so the block is treated as header-only (no version found) rather
+    // than being mis-parsed as a v1 resolution.
+    const berryContentNoMarker = [
+      '"glob@npm:^10.3.0":',
+      '  version: 10.5.0',
+      '  resolution: "glob@npm:10.5.0"',
+      '',
+    ].join('\n');
+    const map = parseYarnLockfileContentsList([berryContentNoMarker]);
+    expect(map.size).toBe(0);
+  });
+
+  it('parses a CRLF-terminated yarn.lock content string the same as LF', () => {
+    const content = [
+      'glob@^10.3.0:',
+      '  version "10.5.0"',
+      '  resolved "x"',
+      '',
+    ].join('\r\n');
+    const map = parseYarnLockfileContentsList([content]);
+    expect(map.get('glob')).toBe('10.5.0');
+  });
+
   it('skips a block with no version field (malformed / truncated entry)', () => {
     const content = [
       'weird-package@^1.0.0:',
@@ -194,6 +271,41 @@ describe('parseYarnLockfileContentsList', () => {
     expect(map.has('weird-package')).toBe(false);
     expect(map.get('normal')).toBe('1.2.3');
   });
+
+  it('keeps the first version field in a block, not a later one nested under dependencies: (mirrors the poetry.lock sub-table protection)', () => {
+    // A transitive dependency in the `dependencies:` section literally named
+    // "version" (an unusual but valid npm package name) would, under a
+    // last-match-wins parser, overwrite the block's real `version` field and
+    // silently corrupt the resolved version — exactly what first-match-wins
+    // guards against (see python-lockfile.test.ts's analogous poetry.lock
+    // sub-table test).
+    const content = [
+      'foo@^1.0.0:',
+      '  version "1.2.3"',
+      '  resolved "x"',
+      '  dependencies:',
+      '    version "^3.0.0"',
+      '',
+    ].join('\n');
+    const map = parseYarnLockfileContentsList([content]);
+    expect(map.get('foo')).toBe('1.2.3');
+  });
+
+  it('does not corrupt a descriptor name when its quoted range contains a comma', () => {
+    // A version range like ">=1.0.0, <2.0.0" contains a comma inside the
+    // quoted descriptor itself. Splitting on every comma unconditionally
+    // (before quote-stripping) would tear this into a dangling `"lodash` key
+    // and a stray ` <2.0.0"` token instead of the single name `lodash`.
+    const content = [
+      '"lodash@>=1.0.0, <2.0.0":',
+      '  version "1.9.9"',
+      '  resolved "x"',
+      '',
+    ].join('\n');
+    const map = parseYarnLockfileContentsList([content]);
+    expect(map.get('lodash')).toBe('1.9.9');
+    expect(map.size).toBe(1); // no corrupt extra key from the torn-apart comma
+  });
 });
 
 // ============================================================================
@@ -206,14 +318,26 @@ describe('mergeLockfileResolutions', () => {
     expect(mergeLockfileResolutions([map])).toEqual(new Map([['glob', '10.5.0']]));
   });
 
-  it('keeps the LOWEST version across two maps for the same package (e.g. npm + yarn)', () => {
+  it('AGREE: keeps the version when both maps agree on it for the same package (e.g. npm + yarn)', () => {
+    const npmMap = new Map([['glob', '10.5.0']]);
+    const yarnMap = new Map([['glob', '10.5.0']]);
+    const merged = mergeLockfileResolutions([npmMap, yarnMap]);
+    expect(merged.get('glob')).toBe('10.5.0');
+  });
+
+  it('D-006 DISAGREE: drops a name entirely when the two maps disagree on its version (floor fallback, not lowest-wins or npm-precedence)', () => {
+    // A stale package-lock.json left over from a package-manager migration
+    // can carry a HIGHER version than the yarn.lock that reflects the real
+    // install, so neither "npm wins" nor "lower wins" is safe in general:
+    // both can mask the real, yarn-resolved vulnerable version behind a
+    // stale, safer-looking npm one. Drop to the floor instead.
     const npmMap = new Map([['glob', '10.5.0']]);
     const yarnMap = new Map([['glob', '10.3.1']]);
     const merged = mergeLockfileResolutions([npmMap, yarnMap]);
-    expect(merged.get('glob')).toBe('10.3.1');
+    expect(merged.has('glob')).toBe(false);
   });
 
-  it('unions disjoint entries from both maps', () => {
+  it('ONE-SIDED: unions disjoint entries from both maps, using the only map that has each name', () => {
     const npmMap = new Map([['glob', '10.5.0']]);
     const yarnMap = new Map([['lodash', '4.17.21']]);
     const merged = mergeLockfileResolutions([npmMap, yarnMap]);
