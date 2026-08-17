@@ -291,7 +291,8 @@ interface ParsedNpmLockfile {
 
 // Simple numeric version comparison (no semver library; lockfile versions are
 // exact, never range-prefixed, so triple-integer comparison is correct).
-function lockfileVersionIsLower(a: string, b: string): boolean {
+// Exported: also used by the yarn.lock resolver and by `mergeLockfileResolutions`.
+export function lockfileVersionIsLower(a: string, b: string): boolean {
   const parse = (s: string): [number, number, number] => {
     const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
     if (!m) return [0, 0, 0];
@@ -417,6 +418,196 @@ export async function fetchNpmLockfileResolutions(
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
   if (fetched.length === 0) return new Map<string, string>();
   return parseNpmLockfileContentsList(fetched.map((f) => f.content));
+}
+
+// ---- yarn.lock (v1 classic) resolver ---------------------------------------
+//
+// pnpm-lock.yaml is deliberately NOT covered here (task 3d20798a-0891-4dc6-
+// b47c-5f259acff37e, scope cut from 2e68c0ab). Rationale: pnpm-lock.yaml is
+// real YAML, and its shape changed materially across pnpm v7/v8/v9 (v9 split
+// the top-level `packages`/`snapshots` maps and reworked import structure).
+// A robust regex/indent parse across all three generations is not achievable
+// with reasonable effort, and this codebase's convention is regex parsing
+// with NO YAML/TOML library dependency (see the uv.lock/poetry.lock TOML
+// parser in lib/manifests/python.ts, which is regex-based for the same
+// reason). Introducing a YAML dependency just for this one lockfile was
+// judged not worth it, especially since no repo in the current corpus uses
+// pnpm. Deferred; the manifest-floor fallback still applies for pnpm repos
+// (same behaviour as before this task).
+
+/**
+ * Discover the `yarn.lock` paths that should be fetched for a given set of
+ * `package.json` paths. Mirrors `discoverLockfilePaths` (package-lock.json):
+ * always probes the repo root, plus a co-located lockfile next to each
+ * discovered manifest.
+ *
+ * Pure function, exported for testing.
+ */
+export function discoverYarnLockfilePaths(manifestPaths: string[]): string[] {
+  const lockPathSet = new Set<string>();
+  lockPathSet.add('yarn.lock'); // always probe repo root
+  for (const p of manifestPaths) {
+    const dir = p.split('/').slice(0, -1).join('/');
+    const lockPath = dir ? `${dir}/yarn.lock` : 'yarn.lock';
+    lockPathSet.add(lockPath);
+  }
+  return [...lockPathSet];
+}
+
+/**
+ * Extract the package name from a single yarn.lock descriptor (one
+ * already-unquoted entry of a header line's comma-separated list), e.g.
+ * `glob@^10.3.0` → `glob`, `@babel/code-frame@^7.0.0` → `@babel/code-frame`.
+ * A scoped name's own leading `@` is not the name/range separator, so the
+ * search starts after it. Returns null when no `@` separator is found
+ * (malformed descriptor).
+ */
+function yarnDescriptorName(descriptor: string): string | null {
+  if (descriptor === '') return null;
+  const searchFrom = descriptor.startsWith('@') ? 1 : 0;
+  const at = descriptor.indexOf('@', searchFrom);
+  return at === -1 ? null : descriptor.slice(0, at);
+}
+
+/**
+ * Parse a yarn.lock header line's descriptor list (comma-separated, each
+ * optionally double-quoted) into the set of package names it declares, e.g.
+ * `"@babel/code-frame@^7.0.0", "@babel/code-frame@^7.12.13"` → the single
+ * name `@babel/code-frame` (deduped: every descriptor in one block resolves
+ * to the same `version` field).
+ */
+function parseYarnDescriptors(header: string): string[] {
+  const names = new Set<string>();
+  for (const rawToken of header.split(',')) {
+    let token = rawToken.trim();
+    if (token.length >= 2 && token.startsWith('"') && token.endsWith('"')) {
+      token = token.slice(1, -1);
+    }
+    const name = yarnDescriptorName(token);
+    if (name) names.add(name);
+  }
+  return [...names];
+}
+
+/**
+ * Parse a list of raw `yarn.lock` content strings (v1 "classic" format only,
+ * see below) and return a flat `packageName → resolvedVersion` map.
+ *
+ * yarn.lock v1 is not YAML/JSON; it's yarn's own line-oriented format: a
+ * header line at column 0 listing one or more comma-separated descriptors
+ * (`name@range`, optionally double-quoted) terminated by `:`, followed by
+ * 2-space-indented fields. Every descriptor in a block resolves to the same
+ * `version "x.y.z"` field, so each of its names is mapped to that version.
+ * First-match-wins for `version` within a block, mirroring the TOML
+ * `[[package]]` block parser in `lib/manifests/python.ts` (protects against a
+ * later indented field that happens to also read like a version line).
+ *
+ * yarn v2+ ("berry") lockfiles are NOT parsed here: they use a different
+ * format (a top-level `__metadata:` header, different indentation/quoting).
+ * A berry lockfile is detected via that `__metadata:` marker and skipped
+ * whole for that content string, so it degrades to the manifest floor rather
+ * than being mis-parsed as v1. This is a deliberate, documented deferral:
+ * berry adoption is comparatively rare and out of scope for this task.
+ *
+ * For a package that appears in multiple entries (e.g. root lockfile +
+ * multiple content strings), the LOWEST resolved version is kept, consistent
+ * with `parseNpmLockfileContentsList`'s policy.
+ *
+ * Pure function, exported for testing.
+ */
+export function parseYarnLockfileContentsList(contentsList: string[]): Map<string, string> {
+  const resolved = new Map<string, string>();
+
+  const updateIfLower = (name: string, version: string): void => {
+    if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    const existing = resolved.get(name);
+    if (!existing || lockfileVersionIsLower(version, existing)) {
+      resolved.set(name, version);
+    }
+  };
+
+  for (const content of contentsList) {
+    // Berry ("yarn v2+") lockfiles declare a top-level `__metadata:` key; skip
+    // them rather than mis-parse them with the v1 line format.
+    if (/^__metadata:/m.test(content)) continue;
+
+    let blockNames: string[] = [];
+    let blockVersion: string | null = null;
+
+    const commitBlock = (): void => {
+      if (blockVersion !== null) {
+        for (const name of blockNames) updateIfLower(name, blockVersion);
+      }
+    };
+
+    for (const rawLine of content.split('\n')) {
+      if (rawLine.trim() === '' || rawLine.startsWith('#')) continue;
+
+      // Header line: no leading whitespace, ends with ':'.
+      if (!/^\s/.test(rawLine) && rawLine.trimEnd().endsWith(':')) {
+        commitBlock(); // commit the previous block before starting the new one
+        blockNames = parseYarnDescriptors(rawLine.trimEnd().slice(0, -1));
+        blockVersion = null;
+        continue;
+      }
+
+      if (blockVersion === null) {
+        const versionMatch = /^\s+version\s+"([^"]+)"/.exec(rawLine);
+        if (versionMatch) blockVersion = versionMatch[1];
+      }
+    }
+    commitBlock(); // commit the final block in this content string
+  }
+
+  return resolved;
+}
+
+/**
+ * Given a list of package.json manifest paths, discover and fetch the
+ * co-located `yarn.lock` files plus the repo root lockfile. Parse them and
+ * return a flat `packageName → resolvedVersion` map.
+ *
+ * See `discoverYarnLockfilePaths` and `parseYarnLockfileContentsList` for the
+ * underlying pure logic. Missing or unreadable lockfiles are silently skipped
+ * (404-safe). Returns an empty map when no lockfiles are found, every found
+ * lockfile is berry-format, or all fail to parse; the caller must fall back
+ * to the manifest-floor / npm-lockfile behaviour in that case.
+ */
+export async function fetchYarnLockfileResolutions(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+): Promise<Map<string, string>> {
+  const lockPaths = discoverYarnLockfilePaths(manifestPaths);
+  const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
+  if (fetched.length === 0) return new Map<string, string>();
+  return parseYarnLockfileContentsList(fetched.map((f) => f.content));
+}
+
+/**
+ * Merge multiple `packageName → resolvedVersion` maps (e.g. package-lock.json
+ * and yarn.lock resolutions fetched for the same repo) into one, keeping the
+ * LOWEST version per name across all inputs: the same security-conservative
+ * policy each individual parser already applies internally. In practice a
+ * repo ships exactly one JS lockfile format, so the maps rarely overlap; this
+ * exists so a polyglot/transitional repo (e.g. a stray committed lockfile
+ * from a package-manager migration) still can't have a vulnerable resolution
+ * hidden behind a newer one from the other format.
+ *
+ * Pure function, exported for testing.
+ */
+export function mergeLockfileResolutions(maps: Array<Map<string, string>>): Map<string, string> {
+  const merged = new Map<string, string>();
+  for (const map of maps) {
+    for (const [name, version] of map) {
+      const existing = merged.get(name);
+      if (!existing || lockfileVersionIsLower(version, existing)) {
+        merged.set(name, version);
+      }
+    }
+  }
+  return merged;
 }
 
 /**
