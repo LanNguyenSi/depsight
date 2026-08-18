@@ -546,6 +546,91 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     expect(byName.latestDep).toBe('1.0.0');
     expect(byName.wsDep).toBe('4.0.0');
   });
+
+  // --------------------------------------------------------------------------
+  // Fix-round 2 (task 7fc55e6f, R2 review on this branch's own guard fix
+  // above): raising the guard all the way to plain `semver.valid(floor) !==
+  // null` was TOO STRICT — it also rejects a floor derived from an ordinary
+  // RANGE spec (`^19`, `~1.2`, `2.x`, `>=1.2`, ...), which is common and
+  // legitimate (measured: 4.9% of manifest specs across the pandora corpus),
+  // silently diverting those deps to the ambiguous/drop path exactly like a
+  // git ref. The corrected guard: keep the `semver.valid(floor)` fast path;
+  // when it fails, try `semver.validRange(versionSpec)` (against the RAW
+  // spec) + `semver.minVersion` before falling back further.
+  // --------------------------------------------------------------------------
+
+  it('(j) RANGE FLOOR (task 7fc55e6f fix-round-2, F1): a `^19`-shaped range spec with no lockfile match anywhere queries the range minVersion, not a raw floor or a drop', async () => {
+    // `^19` strips to floor '19', which fails `semver.valid` (not a full
+    // x.y.z) — but the SPEC is a perfectly ordinary semver range. Both
+    // `resolved` and `ambiguous` are empty here (no lockfile at all), so the
+    // ONLY way this dep still produces a query is the range-floor path:
+    // `semver.validRange('^19')` succeeds and `semver.minVersion('^19')`
+    // gives '19.0.0'. THIS TEST IS RED against the unfixed
+    // `semver.valid(floor) !== null` guard alone (react would be dropped,
+    // zero queries) — see the fix-round-2 mutation probe.
+    mockFetchNpmManifests.mockResolvedValue([{ dependencies: { react: '^19' } }]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('react');
+    expect(body.queries[0].version).toBe('19.0.0');
+  });
+
+  it('(k) RANGE-CHECK STILL FAILS -> DROP: a digit-bearing git-ref spec with no ambiguous entry and no lockfile match is dropped, not sent as a meaningless version', async () => {
+    // `github:acme/widget2#main` fails BOTH the exact-floor check (floor
+    // '2#main' is not a real semver version) AND the new range check
+    // (`semver.validRange` on the raw spec is null — a git ref is not a
+    // semver range either), unlike `^19` in (j) above. With no `ambiguous`
+    // lockfile entry to fall back to, the dep must be DROPPED entirely, not
+    // sent to OSV under a garbage value. The companion `glob` dep (from the
+    // default manifest fixture) proves the scan still runs and only the
+    // git-ref dep is missing.
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { glob: '^10.3.0', widget: 'github:acme/widget2#main' } },
+    ]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    // Only glob is queried; widget was dropped (no query for it at all).
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('glob');
+  });
+
+  it('(l) OUT-OF-SCOPE ALIAS LIMITATION: a MALFORMED `npm:` alias with no `@range` suffix is diverted to ambiguous/drop (known limitation, no alias parsing added here)', async () => {
+    // `unionNpmDeps`'s own alias resolution (`parseNpmAlias`) cleanly
+    // resolves any WELL-FORMED `npm:realName@range` alias BEFORE
+    // `collectDeps` ever computes a floor — including one whose real name
+    // contains a digit, e.g. `npm:h3@^1.0.0` resolves to name `h3`, range
+    // `^1.0.0`, floor `1.0.0` (valid), and is therefore unaffected by this
+    // task (verified empirically; NOT what this test exercises). The
+    // genuine gap is a MALFORMED alias `parseNpmAlias` can't parse at all
+    // (no `@range` suffix, e.g. a bare `npm:h3`): `resolveAliasedEntry`
+    // leaves it as an unresolved raw spec under the LOCAL alias key, which
+    // then floors to '3' (fails `semver.valid`) and also fails the range
+    // check (`semver.validRange('npm:h3')` is null). With no lockfile entry,
+    // it is dropped — pinned here as a documented out-of-scope limitation of
+    // the alias handling, not fixed (no alias-parsing changes in this task).
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { glob: '^10.3.0', h3alias: 'npm:h3' } },
+    ]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    // Only glob is queried; the malformed alias was dropped, not queried
+    // under its meaningless local-key floor.
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('glob');
+  });
 });
 
 // ---- yarn Tests -----------------------------------------------------------------
@@ -706,7 +791,17 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
     expect(body.queries[0].version).toBe('10.3.0');
   });
 
-  it('(i) CROSS-FORMAT AMBIGUOUS UNION END-TO-END (task 7fc55e6f): a no-digit spec plus disagreeing npm/yarn resolutions queries the cross-format ambiguous lowest', async () => {
+  it('(i) CROSS-FORMAT AMBIGUOUS UNION MERGE (task 7fc55e6f): a no-digit spec plus disagreeing npm/yarn resolutions queries the cross-format ambiguous lowest', async () => {
+    // NOTE on naming (task 7fc55e6f fix-round-2, F6): this composes the REAL
+    // `mergeLockfileResolutions` with the real `collectDeps`, but the two
+    // per-format resolution maps below are synthesized directly via `lr(...)`
+    // rather than produced by feeding real package-lock.json/yarn.lock text
+    // through `parseNpmLockfileContentsList`/`parseYarnLockfileContentsList`
+    // (unlike the "(a)"/"D-006 END-TO-END" tests above, which do parse real
+    // lockfile text). So this is an end-to-end exercise of the MERGE step
+    // only, not of either format's parser — hence "MERGE", not "END-TO-END",
+    // in the title.
+    //
     // `latest` strips to '' (no digit) — the manifest floor is unusable
     // either way. package-lock.json resolves the dep to 10.5.0 alone (no
     // in-format conflict, so it lands in npm's own `resolved` map);
