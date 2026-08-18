@@ -105,13 +105,20 @@ export interface UnionedDep {
  * advisories for the wrong (and often nonexistent) package while hiding every
  * advisory that actually affects `realName`. Of the two options considered
  * (resolve to the real name, or drop the whole entry to a floor-only marker),
- * resolution is the one that can never hide an advisory: before dedup, every
- * `npm:` alias spec is parsed (`parseNpmAlias`) into its real name + range and
- * unioned under that real name instead of the manifest's local key, so both
- * the version comparison below and the final OSV query key are the real
- * package. A malformed alias (no parseable `@range` suffix) is left as an
- * unresolved raw spec and falls through to the non-comparable handling below,
- * same as any other unparseable spec — never silently dropped.
+ * resolution is the one that never queries the wrong package: before dedup,
+ * every `npm:` alias spec is parsed (`parseNpmAlias`) into its real name +
+ * range and unioned under that real name instead of the manifest's local
+ * key, so both the version comparison below and the final OSV query key are
+ * the real package. A malformed alias (no parseable `@range` suffix) is left
+ * as an unresolved raw spec and falls through to the non-comparable handling
+ * below, same as any other unparseable spec — never silently dropped.
+ * (Getting the query KEY right here is necessary but not sufficient for
+ * never hiding an advisory end-to-end: the lockfile-resolution side needs
+ * the matching real-name fix too — see the `NpmLockfileEntry.name`
+ * preference in `parseNpmLockfileContentsList`, task 18f6c239 Finding 2, and
+ * the floor-approximation caveat on the `ambiguous` fallback in
+ * `collectDeps`, Finding 1 — this function alone only guarantees the query
+ * is never mis-keyed.)
  *
  * Version collapse (worst-case heuristic; no schema migration — see the
  * per-workspace-provenance follow-up below): if two workspaces pin the same
@@ -328,10 +335,108 @@ export async function fetchManifestContents(
   return results.filter((r): r is FetchedManifest => r !== null);
 }
 
+// ---- lockfile resolution + ambiguous-fallback shared helpers ---------------
+//
+// Both the npm and yarn.lock parsers below (and their cross-format merge)
+// share the same D-006 conflict handling: a bare package name that resolves
+// to 2+ DISTINCT versions across entries/blocks/maps is dropped from the
+// primary `resolved` map (see the D-006 doc comments on each parser below).
+// Task 18f6c239 Finding 1 fix: on top of that drop, the LOWEST of the
+// conflicting versions is ALSO kept, in a separate `ambiguous` map, so
+// `collectDeps` (lib/cve/osv.ts) has a last-resort fallback for a dependency
+// whose manifest spec carries no usable version EITHER (e.g. `*`, `latest`,
+// `workspace:*`, an unversioned git spec). Without this, such a dependency
+// was silently dropped from the OSV scan entirely whenever its lockfile
+// resolution was ambiguous (measured: 0 OSV queries instead of 3 for a small
+// reproduction repo, where the pre-fix docstring's "may over-report via the
+// floor, never silence" claim did not actually hold). D-006 itself is
+// unchanged: a usable `resolved` entry, or a usable manifest floor, still
+// always wins over this fallback — see the `??`/floor/`ambiguous` chain in
+// `collectDeps`.
+
+export interface LockfileResolutions {
+  /** name -> single unambiguous resolved version (D-006 semantics, unchanged). */
+  resolved: Map<string, string>;
+  /**
+   * name -> LOWEST version observed among 2+ conflicting entries recorded
+   * for that name (task 18f6c239 Finding 1). Populated only for names
+   * dropped from `resolved` by the conflict rule; a name present in
+   * `resolved` may still carry a stale/unused `ambiguous` entry too (e.g.
+   * from a same-format conflict that a different format's agreement later
+   * settled) — harmless, since callers only consult `ambiguous` when
+   * `resolved` has no entry for the name.
+   */
+  ambiguous: Map<string, string>;
+}
+
+/**
+ * Given two DISTINCT version strings observed for the same package name,
+ * return whichever is lower — the more conservative (more likely
+ * still-vulnerable) candidate for the `ambiguous` fallback map. Compared via
+ * semver when both parse as valid versions; when either doesn't, the
+ * first-seen value (`a`) is kept (arbitrary but deterministic — an
+ * unparseable version string won't match an OSV advisory either way).
+ */
+function pickLowerVersion(a: string, b: string): string {
+  const va = semver.valid(a);
+  const vb = semver.valid(b);
+  if (va && vb) return semver.lt(va, vb) ? a : b;
+  return a;
+}
+
+/**
+ * Shared conflict tracker behind `parseNpmLockfileContentsList`,
+ * `parseYarnLockfileContentsList`, and the cross-format merge in
+ * `mergeLockfileResolutions`: record one (name, version) observation. A name
+ * seen at a single distinct version stays in `resolved`. A name seen at 2+
+ * DISTINCT versions is dropped from `resolved` and tracked in `ambiguous` at
+ * its LOWEST observed version instead — sticky, like the pre-existing
+ * per-parser `conflicted` sets this replaces, so it stays dropped even if a
+ * later observation happens to re-agree with an earlier value (the true
+ * resolution is genuinely ambiguous given everything seen so far). Ignores
+ * non-concrete (no-digit) version strings.
+ */
+function createResolutionTracker(): {
+  record: (name: string, version: string) => void;
+  result: () => LockfileResolutions;
+} {
+  const resolved = new Map<string, string>();
+  const ambiguous = new Map<string, string>();
+  const conflicted = new Set<string>();
+
+  const record = (name: string, version: string): void => {
+    if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    if (conflicted.has(name)) {
+      const lowest = ambiguous.get(name);
+      ambiguous.set(name, lowest === undefined ? version : pickLowerVersion(lowest, version));
+      return;
+    }
+    const existing = resolved.get(name);
+    if (existing === undefined) {
+      resolved.set(name, version);
+    } else if (existing !== version) {
+      resolved.delete(name);
+      conflicted.add(name);
+      ambiguous.set(name, pickLowerVersion(existing, version));
+    }
+    // existing === version: same resolution seen again, no-op.
+  };
+
+  return { record, result: () => ({ resolved, ambiguous }) };
+}
+
 // ---- npm lockfile resolver -------------------------------------------------
 
 interface NpmLockfileEntry {
   version?: string;
+  /**
+   * npm writes this on an ALIASED install, e.g.
+   * `"node_modules/myLodash": { "name": "lodash-es", "version": "4.17.21" }`
+   * — the key's last path segment is the LOCAL alias, not the installed
+   * package. See the `entry.name` preference in the lockfileVersion 2/3
+   * branch of `parseNpmLockfileContentsList` below (task 18f6c239 Finding 2).
+   */
+  name?: string;
 }
 
 interface ParsedNpmLockfile {
@@ -391,36 +496,37 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * pre-lockfile-resolution behaviour — unless `mergeLockfileResolutions`' one-
  * sided rule finds an unambiguous resolution from the OTHER lockfile format
  * (the drop is not propagated as a cross-format poison set; per-format
- * ambiguity provenance is part of the cac1b6fb follow-up). This is
- * conservative against false negatives — it may over-report via the floor,
- * never silence.
+ * ambiguity provenance is part of the cac1b6fb follow-up).
+ *
+ * The return value pairs that `resolved` map with an `ambiguous` one (task
+ * 18f6c239 Finding 1): `ambiguous` holds, for every name dropped from
+ * `resolved` by the conflict rule above, the LOWEST of the conflicting
+ * versions observed. `collectDeps` consults `ambiguous` ONLY as a last
+ * resort, when neither a `resolved` entry nor a usable manifest-spec floor
+ * exists for that name (e.g. the manifest pins it with `*`, `latest`,
+ * `workspace:*`, or an unversioned git spec) — without this, such a
+ * dependency was silently dropped from the OSV scan entirely whenever its
+ * lockfile resolution was ambiguous (measured: 0 OSV queries instead of 3
+ * for a small reproduction repo). The corrected invariant: a declared
+ * dependency for which ANY version information exists anywhere (lockfile or
+ * manifest) always produces an OSV query; a usable `resolved` entry or
+ * manifest floor still always wins over the `ambiguous` fallback.
+ *
+ * Also resolves npm's ALIASED installs (task 18f6c239 Finding 2): in the
+ * lockfileVersion 2/3 `packages` map, an aliased entry carries the real
+ * package's `name` field (e.g. `"node_modules/myLodash": { "name":
+ * "lodash-es", ... }`) — see the `NpmLockfileEntry.name` doc comment above.
+ * That real name is preferred over the key-derived one so an aliased install
+ * and a direct install of the same real package register (and, per D-006,
+ * conflict) under the SAME name, matching the manifest-side alias resolution
+ * in `unionNpmDeps`.
  *
  * Malformed JSON entries are skipped gracefully.
  *
  * Pure function — exported for testing.
  */
-export function parseNpmLockfileContentsList(contents: string[]): Map<string, string> {
-  const resolved = new Map<string, string>();
-  // Names seen at more than one DISTINCT version across entries/content
-  // strings: permanently excluded from `resolved` per D-006 (see doc comment
-  // above; mirrors parseYarnLockfileContentsList's sticky conflict set). Once
-  // conflicted, a name stays dropped even if a later entry happens to agree
-  // with an earlier value — the true resolution is ambiguous given the
-  // entries seen so far.
-  const conflicted = new Set<string>();
-
-  const recordVersion = (name: string, version: string): void => {
-    if (!/\d/.test(version)) return; // skip non-concrete placeholders
-    if (conflicted.has(name)) return; // already dropped, stays dropped
-    const existing = resolved.get(name);
-    if (existing === undefined) {
-      resolved.set(name, version);
-    } else if (existing !== version) {
-      resolved.delete(name);
-      conflicted.add(name);
-    }
-    // existing === version: same resolution seen again, no-op.
-  };
+export function parseNpmLockfileContentsList(contents: string[]): LockfileResolutions {
+  const tracker = createResolutionTracker();
 
   for (const content of contents) {
     let lock: ParsedNpmLockfile;
@@ -439,26 +545,33 @@ export function parseNpmLockfileContentsList(contents: string[]): Map<string, st
       //   "packages/a/node_modules/glob"  → workspace-nested dep
       for (const [key, entry] of Object.entries(lock.packages)) {
         if (!entry?.version) continue; // skip versionless entries
-        // Take the package name after the LAST `node_modules/` segment. Handles
-        // scoped (`@babel/core`) and deeply-nested
-        // (`node_modules/a/node_modules/glob` → `glob`) keys. The root ("") and
-        // workspace self-entries (e.g. `packages/a`) have no `node_modules/`
-        // segment and are skipped.
+        // The root ("") and workspace self-entries (e.g. `packages/a`) have
+        // no `node_modules/` segment and are skipped.
         if (!key.includes('node_modules/')) continue;
-        const name = key.split('node_modules/').pop();
+        // Prefer the entry's own `name` field when npm wrote one (an ALIASED
+        // install, see NpmLockfileEntry.name above); otherwise take the
+        // package name after the LAST `node_modules/` segment. That segment
+        // approach handles scoped (`@babel/core`) and deeply-nested
+        // (`node_modules/a/node_modules/glob` → `glob`) keys, but for an
+        // aliased entry it would yield the LOCAL alias instead of the real
+        // package — losing the resolution, and (the security-relevant case)
+        // letting a direct, safe install of the same real package silently
+        // absorb the OSV query while the vulnerable aliased install is never
+        // queried at all (task 18f6c239 Finding 2).
+        const name = entry.name ?? key.split('node_modules/').pop();
         if (!name) continue;
-        recordVersion(name, entry.version);
+        tracker.record(name, entry.version);
       }
     } else if (lock.dependencies && typeof lock.dependencies === 'object') {
       // lockfileVersion 1: flat `dependencies` map (best-effort, top-level only).
       for (const [name, entry] of Object.entries(lock.dependencies)) {
         if (!entry?.version) continue;
-        recordVersion(name, entry.version);
+        tracker.record(name, entry.version);
       }
     }
   }
 
-  return resolved;
+  return tracker.result();
 }
 
 /**
@@ -468,18 +581,19 @@ export function parseNpmLockfileContentsList(contents: string[]): Map<string, st
  *
  * See `discoverLockfilePaths` and `parseNpmLockfileContentsList` for the
  * underlying pure logic. Missing or unreadable lockfiles are silently skipped
- * (404-safe). Returns an empty map when no lockfiles are found or all fail to
- * parse; the caller must fall back to the manifest-floor behaviour in that case.
+ * (404-safe). Returns empty `resolved`/`ambiguous` maps when no lockfiles are
+ * found or all fail to parse; the caller must fall back to the manifest-floor
+ * behaviour in that case.
  */
 export async function fetchNpmLockfileResolutions(
   octokit: Octokit,
   owner: string,
   repo: string,
   manifestPaths: string[],
-): Promise<Map<string, string>> {
+): Promise<LockfileResolutions> {
   const lockPaths = discoverLockfilePaths(manifestPaths);
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
-  if (fetched.length === 0) return new Map<string, string>();
+  if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseNpmLockfileContentsList(fetched.map((f) => f.content));
 }
 
@@ -525,6 +639,9 @@ export function discoverYarnLockfilePaths(manifestPaths: string[]): string[] {
  * A scoped name's own leading `@` is not the name/range separator, so the
  * search starts after it. Returns null when no `@` separator is found
  * (malformed descriptor).
+ *
+ * Mirrors the scoped-name-aware `@`-search in `parseNpmAlias` (an `npm:`
+ * alias's own real name can also be scoped).
  */
 function yarnDescriptorName(descriptor: string): string | null {
   if (descriptor === '') return null;
@@ -627,35 +744,27 @@ function parseYarnDescriptors(header: string): string[] {
  * independently resolves that name, in which case `mergeLockfileResolutions`'
  * one-sided rule uses that resolution (the drop is not propagated as a
  * cross-format poison set; per-format ambiguity provenance is part of the
- * cac1b6fb follow-up). This is conservative against false negatives — it may
- * over-report via the floor, never silence: it never trusts a resolution that
- * can't be tied unambiguously to one version, at the cost of occasionally
- * under-using a genuinely-available exact resolution when two unrelated
- * blocks happen to share a bare name.
+ * cac1b6fb follow-up). It never trusts a resolution that can't be tied
+ * unambiguously to one version, at the cost of occasionally under-using a
+ * genuinely-available exact resolution when two unrelated blocks happen to
+ * share a bare name.
+ *
+ * The return value pairs that `resolved` map with an `ambiguous` one (task
+ * 18f6c239 Finding 1, same shared mechanism as
+ * `parseNpmLockfileContentsList` — see that function's doc comment for the
+ * full rationale): `ambiguous` holds, for every name dropped from `resolved`
+ * by the conflict rule above, the LOWEST of the conflicting versions
+ * observed. `collectDeps` (lib/cve/osv.ts) consults it only as a last
+ * resort, when neither a `resolved` entry nor a usable manifest-spec floor
+ * exists for that name — this closes the same "0 OSV queries instead of 3"
+ * silent-drop class that used to exist for a spec with no digit anywhere
+ * (`*`, `latest`, `workspace:*`, an unversioned git spec) plus an ambiguous
+ * yarn.lock resolution.
  *
  * Pure function, exported for testing.
  */
-export function parseYarnLockfileContentsList(contentsList: string[]): Map<string, string> {
-  const resolved = new Map<string, string>();
-  // Names seen at more than one DISTINCT version across blocks/content
-  // strings: permanently excluded from `resolved` per D-006 (see doc comment
-  // above). Once conflicted, a name stays dropped even if a later block
-  // happens to agree with an earlier value — the true resolution is
-  // ambiguous given the blocks seen so far.
-  const conflicted = new Set<string>();
-
-  const recordVersion = (name: string, version: string): void => {
-    if (!/\d/.test(version)) return; // skip non-concrete placeholders
-    if (conflicted.has(name)) return; // already dropped, stays dropped
-    const existing = resolved.get(name);
-    if (existing === undefined) {
-      resolved.set(name, version);
-    } else if (existing !== version) {
-      resolved.delete(name);
-      conflicted.add(name);
-    }
-    // existing === version: same resolution seen again, no-op.
-  };
+export function parseYarnLockfileContentsList(contentsList: string[]): LockfileResolutions {
+  const tracker = createResolutionTracker();
 
   for (const content of contentsList) {
     // Berry ("yarn v2+") lockfiles declare a top-level `__metadata:` key; skip
@@ -667,7 +776,7 @@ export function parseYarnLockfileContentsList(contentsList: string[]): Map<strin
 
     const commitBlock = (): void => {
       if (blockVersion !== null) {
-        for (const name of blockNames) recordVersion(name, blockVersion);
+        for (const name of blockNames) tracker.record(name, blockVersion);
       }
     };
 
@@ -690,7 +799,7 @@ export function parseYarnLockfileContentsList(contentsList: string[]): Map<strin
     commitBlock(); // commit the final block in this content string
   }
 
-  return resolved;
+  return tracker.result();
 }
 
 /**
@@ -700,37 +809,40 @@ export function parseYarnLockfileContentsList(contentsList: string[]): Map<strin
  *
  * See `discoverYarnLockfilePaths` and `parseYarnLockfileContentsList` for the
  * underlying pure logic. Missing or unreadable lockfiles are silently skipped
- * (404-safe). Returns an empty map when no lockfiles are found, every found
- * lockfile is berry-format, or all fail to parse; the caller must fall back
- * to the manifest-floor / npm-lockfile behaviour in that case.
+ * (404-safe). Returns empty `resolved`/`ambiguous` maps when no lockfiles are
+ * found, every found lockfile is berry-format, or all fail to parse; the
+ * caller must fall back to the manifest-floor / npm-lockfile behaviour in
+ * that case.
  */
 export async function fetchYarnLockfileResolutions(
   octokit: Octokit,
   owner: string,
   repo: string,
   manifestPaths: string[],
-): Promise<Map<string, string>> {
+): Promise<LockfileResolutions> {
   const lockPaths = discoverYarnLockfilePaths(manifestPaths);
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
-  if (fetched.length === 0) return new Map<string, string>();
+  if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseYarnLockfileContentsList(fetched.map((f) => f.content));
 }
 
 /**
- * Merge multiple `packageName → resolvedVersion` maps (e.g. package-lock.json
- * and yarn.lock resolutions fetched for the same repo) into one. In practice
- * a repo ships exactly one JS lockfile format, so the maps rarely overlap;
- * this exists so a polyglot/transitional repo (e.g. a stray committed
- * lockfile left over from a package-manager migration) is still handled
- * deterministically.
+ * Merge multiple `{ resolved, ambiguous }` lockfile-resolution results (e.g.
+ * package-lock.json and yarn.lock resolutions fetched for the same repo)
+ * into one. In practice a repo ships exactly one JS lockfile format, so the
+ * inputs rarely overlap; this exists so a polyglot/transitional repo (e.g. a
+ * stray committed lockfile left over from a package-manager migration) is
+ * still handled deterministically.
  *
- * Per orchestrator decision D-006 (ambiguity degrades to the manifest floor,
- * everywhere): a name present in only ONE input map uses that map's version
- * as-is. A name present in MORE THAN ONE input map is kept ONLY when all the
- * versions AGREE; when they DISAGREE, the name is dropped from the merged map
- * entirely so the caller (`collectDeps` in `lib/cve/osv.ts`) falls back to
- * the manifest floor for that dep, rather than trusting either lockfile's
- * resolution over the other.
+ * `resolved` semantics are UNCHANGED from before task 18f6c239's Finding 1
+ * (additive-only fix — see the `ambiguous` paragraph below): per orchestrator
+ * decision D-006 (ambiguity degrades to the manifest floor, everywhere), a
+ * name present in only ONE input's `resolved` map uses that map's version
+ * as-is. A name present in MORE THAN ONE input's `resolved` map is kept ONLY
+ * when all the versions AGREE; when they DISAGREE, the name is dropped from
+ * the merged `resolved` map entirely so the caller (`collectDeps` in
+ * `lib/cve/osv.ts`) falls back to the manifest floor for that dep, rather
+ * than trusting either lockfile's resolution over the other.
  *
  * This deliberately does NOT give npm's package-lock.json precedence over
  * yarn.lock (or vice versa) on disagreement, and does NOT keep the lower of
@@ -742,26 +854,41 @@ export async function fetchYarnLockfileResolutions(
  * npm one. Dropping to the floor on disagreement is conservative in the
  * false-negative direction regardless of which lockfile is actually stale.
  *
+ * `ambiguous` (task 18f6c239 Finding 1, additive): the merged `ambiguous` map
+ * unions every input's own `ambiguous` entries AND every name this merge
+ * itself drops from `resolved` on cross-format disagreement, keeping the
+ * LOWEST version recorded per name across all of those sources — the same
+ * last-resort fallback `collectDeps` reads when a dep has neither a
+ * `resolved` entry nor a usable manifest floor. See
+ * `parseNpmLockfileContentsList`'s doc comment for the full rationale.
+ *
  * Pure function, exported for testing.
  */
-export function mergeLockfileResolutions(maps: Array<Map<string, string>>): Map<string, string> {
-  const merged = new Map<string, string>();
-  // Names seen at more than one DISTINCT version across the input maps:
-  // permanently excluded from `merged` per D-006 (see doc comment above).
-  const conflicted = new Set<string>();
-  for (const map of maps) {
-    for (const [name, version] of map) {
-      if (conflicted.has(name)) continue; // already dropped, stays dropped
-      const existing = merged.get(name);
-      if (existing === undefined) {
-        merged.set(name, version);
-      } else if (existing !== version) {
-        merged.delete(name);
-        conflicted.add(name);
-      }
-      // existing === version: agreement across maps, no-op.
+export function mergeLockfileResolutions(
+  results: LockfileResolutions[],
+): LockfileResolutions {
+  const tracker = createResolutionTracker();
+  for (const { resolved } of results) {
+    for (const [name, version] of resolved) {
+      tracker.record(name, version);
     }
   }
+  const merged = tracker.result();
+
+  // Union each input's own `ambiguous` map into the merged one too, keeping
+  // the lowest version per name across every source (a same-format conflict
+  // that never touched `resolved`, AND a cross-format `resolved` disagreement
+  // just recorded above).
+  for (const { ambiguous } of results) {
+    for (const [name, version] of ambiguous) {
+      const existing = merged.ambiguous.get(name);
+      merged.ambiguous.set(
+        name,
+        existing === undefined ? version : pickLowerVersion(existing, version),
+      );
+    }
+  }
+
   return merged;
 }
 

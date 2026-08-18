@@ -414,6 +414,48 @@ describe('unionNpmDeps', () => {
     expect(deps[0].name).toBe('myLodash');
     expect(deps[0].versionSpec).toBe('1.2.3'); // comparable concrete spec beats the non-comparable raw alias
   });
+
+  // --------------------------------------------------------------------------
+  // parseNpmAlias edge cases (task 18f6c239 fix-round 2, review-requested):
+  // every one of these must fall through to the raw-spec/non-comparable
+  // handling gracefully (never throw, never silently drop the entry), same
+  // as the malformed-alias case above.
+  // --------------------------------------------------------------------------
+  it('npm: ALIAS EDGE CASE: bare "npm:" (nothing after the prefix) is left as a raw, non-comparable spec', () => {
+    const deps = unionNpmDeps([{ name: 'root', dependencies: { myPkg: 'npm:' } }]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('myPkg');
+    expect(deps[0].versionSpec).toBe('npm:');
+  });
+
+  it('npm: ALIAS EDGE CASE: "npm:@scope/pkg" with no @range suffix at all is left as a raw, non-comparable spec (the scoped name\'s own @ is not mistaken for one)', () => {
+    const deps = unionNpmDeps([{ name: 'root', dependencies: { myScoped: 'npm:@scope/pkg' } }]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('myScoped');
+    expect(deps[0].versionSpec).toBe('npm:@scope/pkg');
+  });
+
+  it('npm: ALIAS EDGE CASE: "npm:pkg@" (empty range after the @) is left as a raw, non-comparable spec rather than resolved with a blank range', () => {
+    const deps = unionNpmDeps([{ name: 'root', dependencies: { myPkg: 'npm:pkg@' } }]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('myPkg');
+    expect(deps[0].versionSpec).toBe('npm:pkg@');
+  });
+
+  it('npm: ALIAS EDGE CASE: "npm:pkg@latest" (dist-tag) resolves the REAL name, with the dist-tag itself staying non-comparable', () => {
+    // A dist-tag is a parseable "@range" suffix (parseNpmAlias only checks
+    // for an `@` separator, not that what follows is a semver range), so the
+    // real name IS resolved — but "latest" itself has no digit and no valid
+    // semver range, so it's non-comparable like any other dist-tag spec.
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { myPkg: 'npm:pkg@latest' } },
+      { name: 'pkg2', dependencies: { pkg: '1.0.0' } },
+    ]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('pkg'); // resolved to the real name, not "myPkg"
+    // The concrete 1.0.0 beats the non-comparable dist-tag "latest".
+    expect(deps[0].versionSpec).toBe('1.0.0');
+  });
 });
 
 describe('fetchNpmManifests', () => {
