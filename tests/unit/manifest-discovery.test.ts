@@ -628,6 +628,24 @@ describe('fetchNpmLockfileResolutions / fetchYarnLockfileResolutions — observe
     expect(result.resolved.get('glob')).toBe('10.5.0');
   });
 
+  it('CASE-ASYMMETRY: an observed path with unusual casing (Yarn.lock) still lets the lowercase candidate through', async () => {
+    // The observed set is matched case-insensitively so a case-variant
+    // lockfile becomes at worst a probe (404 like before), never a filtered
+    // data loss (R1 Finding 4).
+    getContent.mockRejectedValue(new Error('404'));
+
+    await fetchYarnLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['package.json'],
+      ['Yarn.lock'], // observed with unusual casing
+    );
+
+    expect(getContent).toHaveBeenCalledTimes(1);
+    expect(getContent).toHaveBeenCalledWith(expect.objectContaining({ path: 'yarn.lock' }));
+  });
+
   it('BACKWARD-COMPAT FALLBACK: omitting observedLockfilePaths blind-probes every candidate, unchanged from pre-task behaviour', async () => {
     getContent.mockRejectedValue(new Error('404'));
     const manifestPaths = ['package.json', 'packages/a/package.json'];
@@ -750,6 +768,25 @@ describe('detectEcosystem', () => {
     getContent.mockResolvedValue({ data: [{ name: 'package.json', type: 'file' }] });
 
     const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.observedLockfilePaths).toBeNull();
+  });
+
+  it('leaves observedLockfilePaths null when a complete walk yields ZERO manifest refs and the root probe patches in the manifests (R1 Finding 1)', async () => {
+    // The walk succeeded and was not truncated, but found nothing; the
+    // manifests then come from probeRootManifests - a tree the observed set
+    // does not describe. Trusting {npm: [], yarn: []} here would filter every
+    // candidate and silently lose the lockfile resolution.
+    getTree.mockResolvedValue({ data: { truncated: false, tree: [] } });
+    getContent.mockResolvedValue({
+      data: [
+        { name: 'package.json', type: 'file' },
+        { name: 'package-lock.json', type: 'file' },
+      ],
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.ecosystem).toBe('npm');
+    expect(info.manifestPaths).toEqual(['package.json']);
     expect(info.observedLockfilePaths).toBeNull();
   });
 

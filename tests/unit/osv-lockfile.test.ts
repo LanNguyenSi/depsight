@@ -704,3 +704,57 @@ describe('collectDeps / fetchOsvAdvisories — python lockfile version selection
     expect(body.queries[0].version).toBe('3.1');
   });
 });
+
+describe('collectDeps: observedLockfilePaths wiring into the lockfile fetchers (task c2ddfe93 R1)', () => {
+  // These pin the ONLY production call sites of the observed-path filter.
+  // R1 found two surviving mutants here: swapping the npm/yarn sets and
+  // reverting the wiring to null both left the whole suite green.
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockDetectEcosystem.mockReset();
+    mockFetchNpmManifests.mockReset();
+    mockFetchNpmLockfileResolutions.mockReset();
+    mockFetchYarnLockfileResolutions.mockReset();
+    mockFetchNpmManifests.mockResolvedValue([{ dependencies: { glob: '^10.3.0' } }]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetchYarnLockfileResolutions.mockResolvedValue(lr());
+    mockFetch = vi.fn();
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('passes .npm to the npm fetcher and .yarn to the yarn fetcher (no swap)', async () => {
+    mockDetectEcosystem.mockResolvedValue({
+      ...NPM_ECOSYSTEM_INFO,
+      observedLockfilePaths: { npm: ['package-lock.json'], yarn: ['sub/yarn.lock'] },
+    });
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    expect(mockFetchNpmLockfileResolutions.mock.calls[0][4]).toEqual(['package-lock.json']);
+    expect(mockFetchYarnLockfileResolutions.mock.calls[0][4]).toEqual(['sub/yarn.lock']);
+  });
+
+  it('passes null to BOTH fetchers when the observed set is null (blind-probe fallback)', async () => {
+    mockDetectEcosystem.mockResolvedValue({ ...NPM_ECOSYSTEM_INFO, observedLockfilePaths: null });
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    expect(mockFetchNpmLockfileResolutions.mock.calls[0][4]).toBeNull();
+    expect(mockFetchYarnLockfileResolutions.mock.calls[0][4]).toBeNull();
+  });
+
+  it('passes null to BOTH fetchers when EcosystemInfo carries no observed set at all (legacy shape)', async () => {
+    mockDetectEcosystem.mockResolvedValue({ ...NPM_ECOSYSTEM_INFO });
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    expect(mockFetchNpmLockfileResolutions.mock.calls[0][4]).toBeNull();
+    expect(mockFetchYarnLockfileResolutions.mock.calls[0][4]).toBeNull();
+  });
+});

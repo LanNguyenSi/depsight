@@ -27,6 +27,13 @@ export interface EcosystemInfo {
    * git-tree read failed or came back truncated) and the full path set is
    * therefore unknown — callers must blind-probe every candidate in that case,
    * same as before this task.
+   *
+   * Ref-coupling caveat: this set is observed at the tree-walk's ref (the
+   * repo's stored defaultBranch), while `fetchManifestContents` reads via
+   * getContent WITHOUT a ref (live default branch). The set is only valid
+   * against that same ref; if the two ever diverge (stale defaultBranch
+   * snapshot), a file present on the read ref could be filtered out. Known,
+   * accepted trade-off (R1 Finding 3, task c2ddfe93).
    */
   observedLockfilePaths: { npm: string[]; yarn: string[] } | null;
 }

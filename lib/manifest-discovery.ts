@@ -311,6 +311,11 @@ export async function detectEcosystem(
   // Fallback: probe the repo root for manifests (legacy behaviour). Merge so a
   // truncated tree that already surfaced some manifests doesn't lose the root.
   if (needFallback) {
+    // Any fallback (exception, truncated tree, or a walk that yielded zero
+    // manifest refs and is being patched up via the root probe) means the
+    // observed set does not describe the tree the fetched manifests came
+    // from - it must not be used to filter candidates (Finding 1, R1).
+    observedLockfilePaths = null;
     const rootRefs = await probeRootManifests(octokit, owner, repo);
     const seen = new Set(refs.map((r) => r.path));
     for (const r of rootRefs) if (!seen.has(r.path)) refs.push(r);
@@ -645,8 +650,9 @@ export async function fetchNpmLockfileResolutions(
   observedLockfilePaths?: string[] | null,
 ): Promise<LockfileResolutions> {
   const candidatePaths = discoverLockfilePaths(manifestPaths);
-  const observedSet = observedLockfilePaths == null ? null : new Set(observedLockfilePaths);
-  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p));
+  const observedSet =
+    observedLockfilePaths == null ? null : new Set(observedLockfilePaths.map((p) => p.toLowerCase()));
+  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p.toLowerCase()));
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
   if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseNpmLockfileContentsList(fetched.map((f) => f.content));
@@ -888,8 +894,9 @@ export async function fetchYarnLockfileResolutions(
   observedLockfilePaths?: string[] | null,
 ): Promise<LockfileResolutions> {
   const candidatePaths = discoverYarnLockfilePaths(manifestPaths);
-  const observedSet = observedLockfilePaths == null ? null : new Set(observedLockfilePaths);
-  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p));
+  const observedSet =
+    observedLockfilePaths == null ? null : new Set(observedLockfilePaths.map((p) => p.toLowerCase()));
+  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p.toLowerCase()));
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
   if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseYarnLockfileContentsList(fetched.map((f) => f.content));
