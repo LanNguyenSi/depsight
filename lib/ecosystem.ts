@@ -16,6 +16,19 @@ export interface EcosystemInfo {
   // Every manifest of the primary ecosystem found in the repo (root + workspaces /
   // monorepo packages), repo-relative. Empty for unknown/unsupported ecosystems.
   manifestPaths: string[];
+  /**
+   * JS lockfile paths (package-lock.json, yarn.lock) OBSERVED during the same
+   * full git-tree walk that produced manifestPaths — the actual existing
+   * paths, not guessed candidates (task c2ddfe93, dedup of the parallel
+   * npm+yarn lockfile-discovery blind-probe pass). `fetchNpmLockfileResolutions`
+   * / `fetchYarnLockfileResolutions` use this to fetch only paths known to
+   * exist instead of probing every co-located candidate over the network.
+   * `null` when the tree walk fell back to a root-only probe (the recursive
+   * git-tree read failed or came back truncated) and the full path set is
+   * therefore unknown — callers must blind-probe every candidate in that case,
+   * same as before this task.
+   */
+  observedLockfilePaths: { npm: string[]; yarn: string[] } | null;
 }
 
 export const SUPPORTED_ECOSYSTEMS = new Set<Ecosystem>([

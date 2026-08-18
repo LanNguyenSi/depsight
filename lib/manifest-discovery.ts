@@ -53,6 +53,32 @@ export function selectManifestPaths(entries: TreeEntry[]): ManifestRef[] {
 }
 
 /**
+ * Pure: pick the `package-lock.json` / `yarn.lock` paths out of a flat git
+ * tree, applying the same vendored/build/fixture exclusion as
+ * `selectManifestPaths`. This is the OBSERVED-existence counterpart to
+ * `discoverLockfilePaths`/`discoverYarnLockfilePaths`' candidate GUESSING:
+ * `detectEcosystem` already walks the full tree once to find manifestPaths,
+ * so the lockfile paths that same tree also contains are captured here at
+ * zero extra network cost, letting `fetchNpmLockfileResolutions` /
+ * `fetchYarnLockfileResolutions` filter their guessed candidate list down to
+ * paths already known to exist instead of probing every candidate over the
+ * network (task c2ddfe93 — before this, N package.json files meant ~N extra
+ * blind `getContent` probes per lockfile format, most of them 404s).
+ */
+export function selectLockfilePaths(entries: TreeEntry[]): { npm: string[]; yarn: string[] } {
+  const npm: string[] = [];
+  const yarn: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== 'blob' || !entry.path) continue;
+    if (EXCLUDED_DIR.test('/' + entry.path)) continue;
+    const base = entry.path.split('/').pop();
+    if (base === 'package-lock.json') npm.push(entry.path);
+    else if (base === 'yarn.lock') yarn.push(entry.path);
+  }
+  return { npm, yarn };
+}
+
+/**
  * Pure: choose the repo's primary ecosystem from its manifests. Prefers the
  * ecosystem of the shallowest manifest (root wins); on a tie at the same depth,
  * the one with the most manifests. Returns 'unknown' for an empty list.
@@ -252,6 +278,7 @@ export async function detectEcosystem(
   const octokit = createGitHubClient(accessToken);
 
   let refs: ManifestRef[] = [];
+  let observedLockfilePaths: { npm: string[]; yarn: string[] } | null = null;
   let needFallback = false;
   try {
     const ref = branch ?? (await resolveDefaultBranch(octokit, owner, repo));
@@ -261,11 +288,20 @@ export async function detectEcosystem(
       tree_sha: ref,
       recursive: 'true',
     });
-    refs = selectManifestPaths((data.tree ?? []) as TreeEntry[]);
+    const tree = (data.tree ?? []) as TreeEntry[];
+    refs = selectManifestPaths(tree);
     if (data.truncated) {
       // GitHub truncates trees above ~100k entries; the manifest set may be
       // incomplete. Rare, but log so an under-count isn't silent.
       console.warn(`[manifest-discovery] truncated git tree for ${owner}/${repo}; manifest set may be partial`);
+    } else {
+      // Only trust the observed lockfile set when the tree walk is COMPLETE:
+      // a truncated tree may be missing lockfiles that exist beyond the cut,
+      // and filtering candidates against a partial set could silently skip a
+      // real lockfile. A truncated/failed walk leaves this null so
+      // downstream fetchers fall back to blind-probing every candidate, same
+      // as before this task.
+      observedLockfilePaths = selectLockfilePaths(tree);
     }
     if (data.truncated || refs.length === 0) needFallback = true;
   } catch {
@@ -289,6 +325,7 @@ export async function detectEcosystem(
     manifestFile: manifestPaths[0] ?? null,
     supported: SUPPORTED_ECOSYSTEMS.has(primary),
     manifestPaths,
+    observedLockfilePaths,
   };
 }
 
@@ -589,14 +626,27 @@ export function parseNpmLockfileContentsList(contents: string[]): LockfileResolu
  * (404-safe). Returns empty `resolved`/`ambiguous` maps when no lockfiles are
  * found or all fail to parse; the caller must fall back to the manifest-floor
  * behaviour in that case.
+ *
+ * `observedLockfilePaths` (task c2ddfe93, dedup of blind probes): when the
+ * caller already knows (from `EcosystemInfo.observedLockfilePaths.npm`,
+ * itself derived from `detectEcosystem`'s single git-tree walk) exactly which
+ * `package-lock.json` paths exist in the repo, pass that list here so the
+ * candidate paths from `discoverLockfilePaths` are filtered down to only the
+ * ones known to exist before hitting the network — instead of probing every
+ * co-located candidate and eating a 404 for each one that doesn't exist.
+ * `undefined`/`null` (the default) preserves the pre-task blind-probe
+ * behaviour: every candidate is fetched, existence unknown ahead of time.
  */
 export async function fetchNpmLockfileResolutions(
   octokit: Octokit,
   owner: string,
   repo: string,
   manifestPaths: string[],
+  observedLockfilePaths?: string[] | null,
 ): Promise<LockfileResolutions> {
-  const lockPaths = discoverLockfilePaths(manifestPaths);
+  const candidatePaths = discoverLockfilePaths(manifestPaths);
+  const observedSet = observedLockfilePaths == null ? null : new Set(observedLockfilePaths);
+  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p));
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
   if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseNpmLockfileContentsList(fetched.map((f) => f.content));
@@ -818,14 +868,28 @@ export function parseYarnLockfileContentsList(contentsList: string[]): LockfileR
  * found, every found lockfile is berry-format, or all fail to parse; the
  * caller must fall back to the manifest-floor / npm-lockfile behaviour in
  * that case.
+ *
+ * `observedLockfilePaths` (task c2ddfe93, dedup of blind probes): mirrors the
+ * parameter of the same name on `fetchNpmLockfileResolutions` — when the
+ * caller already knows (from `EcosystemInfo.observedLockfilePaths.yarn`)
+ * exactly which `yarn.lock` paths exist, pass that list to fetch only those
+ * instead of blindly probing every co-located candidate. This is the common
+ * case where the reduction matters most: a repo using npm (or with no JS
+ * lockfile at all) has ZERO yarn.lock paths, so this drops the entire yarn
+ * discovery pass's network calls to zero instead of one 404 per candidate.
+ * `undefined`/`null` (the default) preserves the pre-task blind-probe
+ * behaviour.
  */
 export async function fetchYarnLockfileResolutions(
   octokit: Octokit,
   owner: string,
   repo: string,
   manifestPaths: string[],
+  observedLockfilePaths?: string[] | null,
 ): Promise<LockfileResolutions> {
-  const lockPaths = discoverYarnLockfilePaths(manifestPaths);
+  const candidatePaths = discoverYarnLockfilePaths(manifestPaths);
+  const observedSet = observedLockfilePaths == null ? null : new Set(observedLockfilePaths);
+  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p));
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
   if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseYarnLockfileContentsList(fetched.map((f) => f.content));

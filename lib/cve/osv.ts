@@ -386,6 +386,13 @@ async function collectDeps(
   owner: string,
   repo: string,
   manifestPaths: string[],
+  // Lockfile paths OBSERVED during detectEcosystem's git-tree walk (task
+  // c2ddfe93), threaded through from EcosystemInfo.observedLockfilePaths so
+  // the npm/yarn lockfile fetchers below probe only paths known to exist
+  // instead of blindly guessing every co-located candidate. `undefined`/null
+  // (e.g. when the tree walk fell back to a root-only probe) preserves the
+  // pre-task blind-probe behaviour.
+  observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
 ): Promise<DepEntry[]> {
   switch (eco) {
     case 'npm': {
@@ -400,8 +407,10 @@ async function collectDeps(
         // the manifest floor (per-dep fallback below), never reject and abort the
         // whole npm scan, which would return zero advisories and hide every
         // vuln for the repo.
-        fetchNpmLockfileResolutions(octokit, owner, repo, paths).catch(emptyLockfileResolutions),
-        fetchYarnLockfileResolutions(octokit, owner, repo, paths).catch(emptyLockfileResolutions),
+        fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null)
+          .catch(emptyLockfileResolutions),
+        fetchYarnLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.yarn ?? null)
+          .catch(emptyLockfileResolutions),
       ]);
       const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
         mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
@@ -502,7 +511,14 @@ export async function fetchOsvAdvisories(
     const octokit = createGitHubClient(accessToken);
     let deps: DepEntry[];
     try {
-      deps = await collectDeps(eco, octokit, owner, repo, ecosystemInfo.manifestPaths);
+      deps = await collectDeps(
+        eco,
+        octokit,
+        owner,
+        repo,
+        ecosystemInfo.manifestPaths,
+        ecosystemInfo.observedLockfilePaths,
+      );
     } catch (err) {
       console.warn('[osv] dep collection failed:', err);
       return { advisories: [], ecosystem: eco };
