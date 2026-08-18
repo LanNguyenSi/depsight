@@ -11,11 +11,16 @@ vi.mock('@/lib/github', () => ({
 
 import {
   selectManifestPaths,
+  selectLockfilePaths,
   pickPrimaryEcosystem,
   unionNpmDeps,
   detectEcosystem,
   fetchNpmManifests,
   fetchManifestContents,
+  fetchNpmLockfileResolutions,
+  fetchYarnLockfileResolutions,
+  discoverLockfilePaths,
+  discoverYarnLockfilePaths,
   type TreeEntry,
 } from '@/lib/manifest-discovery';
 
@@ -99,6 +104,58 @@ describe('selectManifestPaths', () => {
       blob('packages/x/package.json'),
     ]);
     expect(refs.map((r) => r.path)).toEqual(['packages/x/package.json']);
+  });
+});
+
+// task c2ddfe93: the observed-existence counterpart to
+// discoverLockfilePaths/discoverYarnLockfilePaths' candidate guessing — see
+// the fetchNpmLockfileResolutions/fetchYarnLockfileResolutions describe block
+// below for the network-call-count reduction this enables.
+describe('selectLockfilePaths', () => {
+  it('finds root package-lock.json and yarn.lock, separated by format', () => {
+    const { npm, yarn } = selectLockfilePaths([
+      blob('package.json'),
+      blob('package-lock.json'),
+      blob('yarn.lock'),
+    ]);
+    expect(npm).toEqual(['package-lock.json']);
+    expect(yarn).toEqual(['yarn.lock']);
+  });
+
+  it('finds co-located lockfiles in workspace directories', () => {
+    const { npm, yarn } = selectLockfilePaths([
+      blob('packages/a/package.json'),
+      blob('packages/a/package-lock.json'),
+      blob('packages/b/yarn.lock'),
+    ]);
+    expect(npm).toEqual(['packages/a/package-lock.json']);
+    expect(yarn).toEqual(['packages/b/yarn.lock']);
+  });
+
+  it('returns empty arrays for a repo with neither lockfile format (the common no-blind-probe case)', () => {
+    const { npm, yarn } = selectLockfilePaths([blob('package.json'), blob('README.md')]);
+    expect(npm).toEqual([]);
+    expect(yarn).toEqual([]);
+  });
+
+  it('excludes vendored / build / fixture directories (mirrors selectManifestPaths)', () => {
+    const { npm, yarn } = selectLockfilePaths([
+      blob('package-lock.json'),
+      blob('node_modules/foo/package-lock.json'),
+      blob('dist/yarn.lock'),
+      blob('yarn.lock'),
+    ]);
+    expect(npm).toEqual(['package-lock.json']);
+    expect(yarn).toEqual(['yarn.lock']);
+  });
+
+  it('ignores tree entries that are not blobs', () => {
+    const { npm, yarn } = selectLockfilePaths([
+      { path: 'packages', type: 'tree' },
+      blob('packages/x/yarn.lock'),
+    ]);
+    expect(npm).toEqual([]);
+    expect(yarn).toEqual(['packages/x/yarn.lock']);
   });
 });
 
@@ -509,6 +566,142 @@ describe('fetchManifestContents', () => {
   });
 });
 
+// task c2ddfe93: fetchNpmLockfileResolutions/fetchYarnLockfileResolutions ran
+// in parallel (PR #110) and each blindly probed root + every co-located
+// candidate for ITS OWN format, even when that format's lockfile doesn't
+// exist anywhere in the repo (the common case: a repo picks ONE JS package
+// manager). Passing the tree-walk-observed path set (EcosystemInfo.
+// observedLockfilePaths, see the detectEcosystem tests above) lets these
+// fetchers skip candidates known not to exist instead of eating a 404 per
+// candidate. Call-count is the acceptance signal: a fixture with N candidate
+// paths must drop from N getContent calls (blind) to 0 (filtered, nothing
+// observed) or exactly the count of paths that ARE observed.
+describe('fetchNpmLockfileResolutions / fetchYarnLockfileResolutions — observed-path filtering (task c2ddfe93, dedup of blind probes)', () => {
+  beforeEach(() => {
+    getContent.mockReset();
+  });
+
+  function yarnLockContent(version: string): string {
+    return `glob@^10.3.0:\n  version "${version}"\n  resolved "x"\n`;
+  }
+
+  it('REDUCTION: repo with NO yarn.lock anywhere in the tree — fetchYarnLockfileResolutions makes ZERO getContent calls (was: one blind probe per candidate)', async () => {
+    getContent.mockRejectedValue(new Error('404')); // would 404 on every candidate if still blindly probed
+    const manifestPaths = ['package.json', 'packages/a/package.json', 'packages/b/package.json'];
+    // Vorher: blind probing would hit every one of these candidates.
+    const blindCandidates = discoverYarnLockfilePaths(manifestPaths);
+    expect(blindCandidates).toHaveLength(3);
+
+    const result = await fetchYarnLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      manifestPaths,
+      [], // observed (task c2ddfe93): tree walk found zero yarn.lock paths anywhere
+    );
+
+    // Nachher: 0 getContent calls instead of 3 — the measured reduction.
+    expect(getContent).not.toHaveBeenCalled();
+    expect(result.resolved.size).toBe(0);
+  });
+
+  it('NEGATIVE CONTROL: repo WITH a root yarn.lock — fetchYarnLockfileResolutions still probes and resolves it', async () => {
+    getContent.mockImplementation(({ path }: { path: string }) => {
+      if (path === 'yarn.lock') {
+        return Promise.resolve({
+          data: { content: Buffer.from(yarnLockContent('10.5.0')).toString('base64') },
+        });
+      }
+      return Promise.reject(new Error('404'));
+    });
+
+    const result = await fetchYarnLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['package.json'],
+      ['yarn.lock'], // observed: root yarn.lock exists
+    );
+
+    expect(getContent).toHaveBeenCalledTimes(1);
+    expect(getContent).toHaveBeenCalledWith(expect.objectContaining({ path: 'yarn.lock' }));
+    expect(result.resolved.get('glob')).toBe('10.5.0');
+  });
+
+  it('CASE-ASYMMETRY: an observed path with unusual casing (Yarn.lock) still lets the lowercase candidate through', async () => {
+    // The observed set is matched case-insensitively so a case-variant
+    // lockfile becomes at worst a probe (404 like before), never a filtered
+    // data loss (R1 Finding 4).
+    getContent.mockRejectedValue(new Error('404'));
+
+    await fetchYarnLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['package.json'],
+      ['Yarn.lock'], // observed with unusual casing
+    );
+
+    expect(getContent).toHaveBeenCalledTimes(1);
+    expect(getContent).toHaveBeenCalledWith(expect.objectContaining({ path: 'yarn.lock' }));
+  });
+
+  it('BACKWARD-COMPAT FALLBACK: omitting observedLockfilePaths blind-probes every candidate, unchanged from pre-task behaviour', async () => {
+    getContent.mockRejectedValue(new Error('404'));
+    const manifestPaths = ['package.json', 'packages/a/package.json'];
+    const candidates = discoverYarnLockfilePaths(manifestPaths);
+
+    await fetchYarnLockfileResolutions(fakeOctokit as unknown as Octokit, 'o', 'r', manifestPaths);
+
+    expect(getContent).toHaveBeenCalledTimes(candidates.length);
+  });
+
+  it('REDUCTION (npm side): repo with NO package-lock.json anywhere — fetchNpmLockfileResolutions makes ZERO getContent calls', async () => {
+    getContent.mockRejectedValue(new Error('404'));
+    const manifestPaths = ['package.json', 'packages/a/package.json'];
+    expect(discoverLockfilePaths(manifestPaths)).toHaveLength(2); // vorher: 2 blind candidates
+
+    const result = await fetchNpmLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      manifestPaths,
+      [], // observed: no package-lock.json exists anywhere
+    );
+
+    expect(getContent).not.toHaveBeenCalled(); // nachher: 0
+    expect(result.resolved.size).toBe(0);
+  });
+
+  it('NEGATIVE CONTROL (npm side): a workspace-nested package-lock.json is probed at its exact observed path, root is skipped', async () => {
+    getContent.mockImplementation(({ path }: { path: string }) => {
+      if (path === 'packages/a/package-lock.json') {
+        return Promise.resolve(
+          contentResp({
+            lockfileVersion: 3,
+            packages: { '': {}, 'node_modules/glob': { version: '10.5.0' } },
+          }),
+        );
+      }
+      return Promise.reject(new Error('404'));
+    });
+
+    const result = await fetchNpmLockfileResolutions(
+      fakeOctokit as unknown as Octokit,
+      'o',
+      'r',
+      ['packages/a/package.json'],
+      ['packages/a/package-lock.json'], // observed: only this one exists, NOT repo-root
+    );
+
+    expect(getContent).toHaveBeenCalledTimes(1);
+    expect(getContent).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'packages/a/package-lock.json' }),
+    );
+    expect(result.resolved.get('glob')).toBe('10.5.0');
+  });
+});
+
 describe('detectEcosystem', () => {
   beforeEach(() => {
     getTree.mockReset();
@@ -535,6 +728,66 @@ describe('detectEcosystem', () => {
     expect(getTree).toHaveBeenCalledWith(
       expect.objectContaining({ tree_sha: 'master', recursive: 'true' }),
     );
+    // task c2ddfe93: a successful, untruncated walk found no lockfiles here,
+    // so observedLockfilePaths is non-null but empty — a downstream caller
+    // knows for certain zero lockfiles exist, rather than not knowing at all.
+    expect(info.observedLockfilePaths).toEqual({ npm: [], yarn: [] });
+  });
+
+  it('captures observed npm/yarn lockfile paths from the SAME tree walk that finds manifestPaths (task c2ddfe93)', async () => {
+    getTree.mockResolvedValue({
+      data: {
+        truncated: false,
+        tree: [
+          { path: 'package.json', type: 'blob' },
+          { path: 'package-lock.json', type: 'blob' },
+          { path: 'packages/a/package.json', type: 'blob' },
+          { path: 'packages/a/yarn.lock', type: 'blob' },
+        ],
+      },
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.manifestPaths).toEqual(['package.json', 'packages/a/package.json']);
+    expect(info.observedLockfilePaths).toEqual({
+      npm: ['package-lock.json'],
+      yarn: ['packages/a/yarn.lock'],
+    });
+    // Only ONE getTree call backs both manifestPaths and observedLockfilePaths
+    // — no separate network round-trip was needed to learn the lockfile set.
+    expect(getTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves observedLockfilePaths null when the tree is truncated (partial set would be unsafe to filter against)', async () => {
+    getTree.mockResolvedValue({
+      data: {
+        truncated: true,
+        tree: [{ path: 'package.json', type: 'blob' }],
+      },
+    });
+    getContent.mockResolvedValue({ data: [{ name: 'package.json', type: 'file' }] });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.observedLockfilePaths).toBeNull();
+  });
+
+  it('leaves observedLockfilePaths null when a complete walk yields ZERO manifest refs and the root probe patches in the manifests (R1 Finding 1)', async () => {
+    // The walk succeeded and was not truncated, but found nothing; the
+    // manifests then come from probeRootManifests - a tree the observed set
+    // does not describe. Trusting {npm: [], yarn: []} here would filter every
+    // candidate and silently lose the lockfile resolution.
+    getTree.mockResolvedValue({ data: { truncated: false, tree: [] } });
+    getContent.mockResolvedValue({
+      data: [
+        { name: 'package.json', type: 'file' },
+        { name: 'package-lock.json', type: 'file' },
+      ],
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.ecosystem).toBe('npm');
+    expect(info.manifestPaths).toEqual(['package.json']);
+    expect(info.observedLockfilePaths).toBeNull();
   });
 
   it('falls back to a root probe when getTree throws', async () => {
@@ -549,6 +802,9 @@ describe('detectEcosystem', () => {
     const info = await detectEcosystem('tok', 'o', 'r', 'main');
     expect(info.ecosystem).toBe('npm');
     expect(info.manifestPaths).toEqual(['package.json']);
+    // The full tree is unknown in the fallback path, so the lockfile set is
+    // unknown too — callers must blind-probe, same as before this task.
+    expect(info.observedLockfilePaths).toBeNull();
   });
 
   it('resolves the default branch when none is supplied', async () => {
