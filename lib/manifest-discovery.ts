@@ -345,7 +345,7 @@ export async function fetchManifestContents(
 // conflicting versions is ALSO kept, in a separate `ambiguous` map, so
 // `collectDeps` (lib/cve/osv.ts) has a last-resort fallback for a dependency
 // whose manifest spec carries no usable version EITHER (e.g. `*`, `latest`,
-// `workspace:*`, an unversioned git spec). Without this, such a dependency
+// `workspace:*`, a git spec whose URL contains no digit). Without this, such a dependency
 // was silently dropped from the OSV scan entirely whenever its lockfile
 // resolution was ambiguous (measured: 0 OSV queries instead of 3 for a small
 // reproduction repo, where the pre-fix docstring's "may over-report via the
@@ -381,6 +381,11 @@ function pickLowerVersion(a: string, b: string): string {
   const va = semver.valid(a);
   const vb = semver.valid(b);
   if (va && vb) return semver.lt(va, vb) ? a : b;
+  // When exactly one operand parses, keep the parseable one: it is the only
+  // version that can match an OSV advisory. Only when neither parses does the
+  // first-seen value win (deterministic-but-arbitrary; unmatchable either way).
+  if (va && !vb) return a;
+  if (!va && vb) return b;
   return a;
 }
 
@@ -504,7 +509,7 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * versions observed. `collectDeps` consults `ambiguous` ONLY as a last
  * resort, when neither a `resolved` entry nor a usable manifest-spec floor
  * exists for that name (e.g. the manifest pins it with `*`, `latest`,
- * `workspace:*`, or an unversioned git spec) — without this, such a
+ * `workspace:*`, or a git spec whose URL contains no digit) — without this, such a
  * dependency was silently dropped from the OSV scan entirely whenever its
  * lockfile resolution was ambiguous (measured: 0 OSV queries instead of 3
  * for a small reproduction repo). The corrected invariant: a declared
@@ -558,7 +563,7 @@ export function parseNpmLockfileContentsList(contents: string[]): LockfileResolu
         // letting a direct, safe install of the same real package silently
         // absorb the OSV query while the vulnerable aliased install is never
         // queried at all (task 18f6c239 Finding 2).
-        const name = entry.name ?? key.split('node_modules/').pop();
+        const name = entry.name || key.split('node_modules/').pop();
         if (!name) continue;
         tracker.record(name, entry.version);
       }
@@ -758,7 +763,7 @@ function parseYarnDescriptors(header: string): string[] {
  * resort, when neither a `resolved` entry nor a usable manifest-spec floor
  * exists for that name — this closes the same "0 OSV queries instead of 3"
  * silent-drop class that used to exist for a spec with no digit anywhere
- * (`*`, `latest`, `workspace:*`, an unversioned git spec) plus an ambiguous
+ * (`*`, `latest`, `workspace:*`, a git spec whose URL contains no digit) plus an ambiguous
  * yarn.lock resolution.
  *
  * Pure function, exported for testing.
@@ -834,8 +839,11 @@ export async function fetchYarnLockfileResolutions(
  * stray committed lockfile left over from a package-manager migration) is
  * still handled deterministically.
  *
- * `resolved` semantics are UNCHANGED from before task 18f6c239's Finding 1
- * (additive-only fix — see the `ambiguous` paragraph below): per orchestrator
+ * `resolved` merge semantics follow the pre-18f6c239 shape with one
+ * deliberate tightening: inputs are re-run through the shared tracker, so a
+ * version without any digit (e.g. a hand-crafted `latest`) is filtered from
+ * the merged `resolved` map — strictly safer, as both parsers pre-filter the
+ * same way. Otherwise (see the `ambiguous` paragraph below): per orchestrator
  * decision D-006 (ambiguity degrades to the manifest floor, everywhere), a
  * name present in only ONE input's `resolved` map uses that map's version
  * as-is. A name present in MORE THAN ONE input's `resolved` map is kept ONLY

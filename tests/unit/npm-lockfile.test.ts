@@ -371,6 +371,45 @@ describe('parseNpmLockfileContentsList', () => {
     expect(map.has('myLodash')).toBe(false);
   });
 
+  it('AMBIGUOUS-LOWEST: when one of two conflicting versions is not valid semver, the parseable one is kept regardless of order', () => {
+    const forward = parseNpmLockfileContentsList([
+      json({
+        lockfileVersion: 3,
+        packages: {
+          '': {},
+          'node_modules/pkg': { version: '1.2' },
+          'node_modules/nested/node_modules/pkg': { version: '0.9.1' },
+        },
+      }),
+    ]).ambiguous;
+    expect(forward.get('pkg')).toBe('0.9.1');
+
+    const reversed = parseNpmLockfileContentsList([
+      json({
+        lockfileVersion: 3,
+        packages: {
+          '': {},
+          'node_modules/pkg': { version: '0.9.1' },
+          'node_modules/nested/node_modules/pkg': { version: '1.2' },
+        },
+      }),
+    ]).ambiguous;
+    expect(reversed.get('pkg')).toBe('0.9.1');
+  });
+
+  it('ALIAS EDGE: an entry with an EMPTY-STRING name field falls back to the path segment instead of being dropped', () => {
+    const map = parseNpmLockfileContentsList([
+      json({
+        lockfileVersion: 3,
+        packages: {
+          '': {},
+          'node_modules/realpkg': { name: '', version: '1.2.3' },
+        },
+      }),
+    ]).resolved;
+    expect(map.get('realpkg')).toBe('1.2.3');
+  });
+
   it('ALIAS + SECURITY: an aliased install (vulnerable) and a direct install (safe) of the SAME real package conflict and drop to ambiguous, rather than the safe direct install silently absorbing the query', () => {
     // "node_modules/myLodash" is an alias for lodash-es, pinned vulnerable;
     // "node_modules/lodash-es" is a separate, direct, safe install. Without
