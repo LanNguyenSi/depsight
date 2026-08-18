@@ -395,6 +395,29 @@ export async function fetchManifestContents(
 // unchanged: a usable `resolved` entry, or a usable manifest floor, still
 // always wins over this fallback — see the `??`/floor/`ambiguous` chain in
 // `collectDeps`.
+//
+// "Usable manifest floor" (task 7fc55e6f, R2 finding on 18f6c239): `collectDeps`
+// derives the floor by stripping the leading non-digit prefix off the raw
+// manifest spec (e.g. `^2.5.0` -> `2.5.0`). Gating that floor's usability on
+// merely "non-empty" was wrong: a non-semver spec whose text happens to
+// contain a digit (e.g. a git spec `github:acme/widget2#main`) strips down to
+// a non-empty but meaningless value (`2#main`) that suppressed this
+// `ambiguous` fallback while itself being unmatchable against any real OSV
+// package version — the dep was still queried, just under a value that could
+// never produce a hit ("effectively unscanned", the same practical outcome as
+// the pre-Finding-1 silent drop this fallback exists to close). The guard is
+// `semver.valid(floor) !== null` instead: it validates the actual value that
+// becomes the OSV query version, not the raw manifest spec (which can
+// legitimately fail to parse as a range even when the floor it strips down to
+// IS a valid version — e.g. an `npm:real@^2.0.0` alias spec, out of scope
+// here, still floors to a valid `2.0.0` and is unaffected by this change).
+// This WIDENS which specs reach the `ambiguous` fallback to include any
+// digit-bearing spec whose floor-strip isn't a real semver version (a
+// garbage-suffixed git ref, a partial version like `1.2`, etc.) — such a dep
+// now gets the `ambiguous` map's lowest-observed-conflict version when one
+// exists, or is dropped from the scan (same as any other dep with no usable
+// version anywhere) when it doesn't. D-006's ordering is unchanged either way:
+// resolved > usable floor > ambiguous.
 
 export interface LockfileResolutions {
   /** name -> single unambiguous resolved version (D-006 semantics, unchanged). */
@@ -546,18 +569,10 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * ambiguity provenance is part of the cac1b6fb follow-up).
  *
  * The return value pairs that `resolved` map with an `ambiguous` one (task
- * 18f6c239 Finding 1): `ambiguous` holds, for every name dropped from
- * `resolved` by the conflict rule above, the LOWEST of the conflicting
- * versions observed. `collectDeps` consults `ambiguous` ONLY as a last
- * resort, when neither a `resolved` entry nor a usable manifest-spec floor
- * exists for that name (e.g. the manifest pins it with `*`, `latest`,
- * `workspace:*`, or a git spec whose URL contains no digit) — without this, such a
- * dependency was silently dropped from the OSV scan entirely whenever its
- * lockfile resolution was ambiguous (measured: 0 OSV queries instead of 3
- * for a small reproduction repo). The corrected invariant: a declared
- * dependency for which ANY version information exists anywhere (lockfile or
- * manifest) always produces an OSV query; a usable `resolved` entry or
- * manifest floor still always wins over the `ambiguous` fallback.
+ * 18f6c239 Finding 1) — see the shared-helpers banner above
+ * `LockfileResolutions` for the full ambiguous-fallback rationale (including
+ * what counts as a "usable" floor, task 7fc55e6f) and the D-006 ordering
+ * invariant that `collectDeps` (`lib/cve/osv.ts`) applies when consuming it.
  *
  * Also resolves npm's ALIASED installs (task 18f6c239 Finding 2): in the
  * lockfileVersion 2/3 `packages` map, an aliased entry carries the real
@@ -811,16 +826,9 @@ function parseYarnDescriptors(header: string): string[] {
  * share a bare name.
  *
  * The return value pairs that `resolved` map with an `ambiguous` one (task
- * 18f6c239 Finding 1, same shared mechanism as
- * `parseNpmLockfileContentsList` — see that function's doc comment for the
- * full rationale): `ambiguous` holds, for every name dropped from `resolved`
- * by the conflict rule above, the LOWEST of the conflicting versions
- * observed. `collectDeps` (lib/cve/osv.ts) consults it only as a last
- * resort, when neither a `resolved` entry nor a usable manifest-spec floor
- * exists for that name — this closes the same "0 OSV queries instead of 3"
- * silent-drop class that used to exist for a spec with no digit anywhere
- * (`*`, `latest`, `workspace:*`, a git spec whose URL contains no digit) plus an ambiguous
- * yarn.lock resolution.
+ * 18f6c239 Finding 1), same shared mechanism as `parseNpmLockfileContentsList`
+ * — see the shared-helpers banner above `LockfileResolutions` for the full
+ * ambiguous-fallback rationale.
  *
  * Pure function, exported for testing.
  */
@@ -938,8 +946,8 @@ export async function fetchYarnLockfileResolutions(
  * itself drops from `resolved` on cross-format disagreement, keeping the
  * LOWEST version recorded per name across all of those sources — the same
  * last-resort fallback `collectDeps` reads when a dep has neither a
- * `resolved` entry nor a usable manifest floor. See
- * `parseNpmLockfileContentsList`'s doc comment for the full rationale.
+ * `resolved` entry nor a usable manifest floor. See the shared-helpers
+ * banner above `LockfileResolutions` for the full rationale.
  *
  * Pure function, exported for testing.
  */

@@ -363,22 +363,23 @@ interface DepEntry {
  * agree, and on disagreement the name is dropped so the manifest floor is
  * used for it. Falls back to stripping the leading range operator from the
  * manifest spec (the previous floor behaviour) when no lockfile entry is
- * found, so existing repos without lockfiles do not regress. As a final,
- * last-resort fallback (task 18f6c239 Finding 1), when that floor-strip
- * yields NO usable version either (the manifest spec has no digit anywhere —
- * `*`, `latest`, `workspace:*`, an unversioned git spec) the dep's
- * `ambiguous`-map entry is used instead: the lowest version observed among
- * the lockfile's conflicting resolutions for that name, if any. Without this
- * fallback such a dep was silently dropped from the OSV scan entirely
- * whenever its lockfile resolution was ambiguous, rather than merely
- * degrading to the (in this case unusable) floor. The resulting invariant: a
- * declared dependency for which ANY version information exists anywhere
- * (lockfile or manifest) always produces an OSV query; D-006 is unchanged —
- * a usable `resolved` entry or manifest floor still always wins over this
- * fallback. pnpm-lock.yaml is not resolved (deferred, see the comment above
- * `discoverYarnLockfilePaths` in manifest-discovery.ts) so pnpm repos still
- * get the manifest floor (or the `ambiguous` fallback, if even that is
- * unusable).
+ * found, so existing repos without lockfiles do not regress. That floor is
+ * usable only when it parses as a real semver version
+ * (`semver.valid(floor) !== null`, task 7fc55e6f — R2 finding on 18f6c239):
+ * a non-semver spec whose text happens to contain a digit (e.g. a git spec
+ * `github:acme/widget2#main`) strips down to a non-empty but meaningless
+ * value (`2#main`) that must NOT count as usable — it can never match a real
+ * OSV package version, so the dep was queried but effectively unscanned. As
+ * a final, last-resort fallback (task 18f6c239 Finding 1) for when the floor
+ * is unusable by that definition, the dep's `ambiguous`-map entry is used
+ * instead: the lowest version observed among the lockfile's conflicting
+ * resolutions for that name, if any — see the shared-helpers banner above
+ * `LockfileResolutions` in manifest-discovery.ts for the full
+ * ambiguous-fallback rationale and the D-006 ordering invariant (unchanged
+ * here: resolved > usable floor > ambiguous). pnpm-lock.yaml is not resolved
+ * (deferred, see the comment above `discoverYarnLockfilePaths` in
+ * manifest-discovery.ts) so pnpm repos still get the manifest floor (or the
+ * `ambiguous` fallback, if even that is unusable).
  */
 async function collectDeps(
   eco: string,
@@ -419,14 +420,17 @@ async function collectDeps(
           // Prefer the lockfile-resolved version (exact installed version) to
           // avoid false positives from the manifest floor. Fall back to the
           // floor-strip when neither lockfile is present or lists this dep;
-          // if that floor is ALSO unusable (no digit in the manifest spec at
-          // all), fall back once more to the lowest-observed ambiguous
-          // lockfile resolution, if any (task 18f6c239 Finding 1 — see the
-          // doc comment above).
+          // if that floor is ALSO unusable — doesn't parse as a real semver
+          // version, whether because there was no digit at all OR because the
+          // digit(s) present belong to a non-semver spec like a git ref (task
+          // 7fc55e6f, e.g. `github:acme/widget2#main` strips to `2#main`) —
+          // fall back once more to the lowest-observed ambiguous lockfile
+          // resolution, if any (task 18f6c239 Finding 1 — see the doc comment
+          // above).
           const floor = versionSpec.replace(/^[^0-9]*/, '');
           const version =
             lockfileResolutions.get(name) ??
-            (floor !== '' ? floor : (ambiguousLockfileResolutions.get(name) ?? ''));
+            (semver.valid(floor) !== null ? floor : (ambiguousLockfileResolutions.get(name) ?? ''));
           return { name, version };
         })
         .filter(({ version }) => /\d/.test(version));

@@ -78,7 +78,10 @@ export function discoverPythonLockfilePaths(manifestPaths: string[]): string[] {
  * the LOWEST resolved version is kept — security-conservative. (The npm
  * lockfile parser used the same lowest-wins policy until it moved to
  * D-006 drop-on-distinct-version; the python parser keeps lowest-wins
- * deliberately, its multi-lockfile ambiguity surface is narrower.)
+ * deliberately, its multi-lockfile ambiguity surface is narrower. See the
+ * shared-helpers banner above `LockfileResolutions` in
+ * `lib/manifest-discovery.ts` for the D-006 background and the `ambiguous`
+ * last-resort fallback this parser does not participate in.)
  *
  * Pure function — exported for testing.
  */
