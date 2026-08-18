@@ -44,7 +44,16 @@ import {
   discoverYarnLockfilePaths,
   mergeLockfileResolutions,
   parseYarnLockfileContentsList,
+  type LockfileResolutions,
 } from '@/lib/manifest-discovery';
+
+/** Build a `LockfileResolutions` fixture from plain [name, version] entries. */
+function lr(
+  resolved: Array<[string, string]> = [],
+  ambiguous: Array<[string, string]> = [],
+): LockfileResolutions {
+  return { resolved: new Map(resolved), ambiguous: new Map(ambiguous) };
+}
 
 // ============================================================================
 // discoverYarnLockfilePaths
@@ -86,7 +95,7 @@ describe('discoverYarnLockfilePaths', () => {
 
 describe('parseYarnLockfileContentsList', () => {
   it('returns an empty map for an empty content list', () => {
-    expect(parseYarnLockfileContentsList([])).toEqual(new Map());
+    expect(parseYarnLockfileContentsList([]).resolved).toEqual(new Map());
   });
 
   it('parses a single unscoped descriptor block', () => {
@@ -102,7 +111,7 @@ describe('parseYarnLockfileContentsList', () => {
       '    foreground-child "^3.1.0"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('glob')).toBe('10.5.0');
   });
 
@@ -113,7 +122,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "https://registry.yarnpkg.com/@babel/code-frame/-/code-frame-7.24.0.tgz#x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('@babel/code-frame')).toBe('7.24.0');
   });
 
@@ -124,7 +133,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "https://registry.yarnpkg.com/@babel/code-frame/-/code-frame-7.24.0.tgz#x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     // Only one distinct name in this block, but confirms the multi-descriptor
     // header line is parsed without breaking.
     expect(map.get('@babel/code-frame')).toBe('7.24.0');
@@ -141,7 +150,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz#x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('lodash')).toBe('4.17.21');
   });
 
@@ -156,14 +165,14 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('glob')).toBe('10.5.0');
   });
 
   it('keeps a resolved version that agrees across MULTIPLE lockfile content strings', () => {
     const rootLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
     const packageLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
-    const map = parseYarnLockfileContentsList([rootLock, packageLock]);
+    const map = parseYarnLockfileContentsList([rootLock, packageLock]).resolved;
     expect(map.get('lodash')).toBe('4.17.21');
   });
 
@@ -189,14 +198,14 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.has('glob')).toBe(false);
   });
 
   it('D-006: distinct-version drop also applies across MULTIPLE lockfile content strings', () => {
     const rootLock = ['lodash@^4.0.0:', '  version "4.17.21"', '  resolved "x"', ''].join('\n');
     const packageLock = ['lodash@^4.0.0:', '  version "4.14.0"', '  resolved "x"', ''].join('\n');
-    const map = parseYarnLockfileContentsList([rootLock, packageLock]);
+    const map = parseYarnLockfileContentsList([rootLock, packageLock]).resolved;
     expect(map.has('lodash')).toBe(false);
   });
 
@@ -209,8 +218,8 @@ describe('parseYarnLockfileContentsList', () => {
       [`glob@${range}:`, `  version "${version}"`, '  resolved "x"', ''].join('\n');
     const aba = [block('^10.3.0', '10.4.0'), block('^7.1.6', '7.2.3'), block('^10.4.0', '10.4.0')].join('\n');
     const bab = [block('^7.1.6', '7.2.3'), block('^10.3.0', '10.4.0'), block('^7.2.0', '7.2.3')].join('\n');
-    expect(parseYarnLockfileContentsList([aba]).has('glob')).toBe(false);
-    expect(parseYarnLockfileContentsList([bab]).has('glob')).toBe(false);
+    expect(parseYarnLockfileContentsList([aba]).resolved.has('glob')).toBe(false);
+    expect(parseYarnLockfileContentsList([bab]).resolved.has('glob')).toBe(false);
   });
 
   it('berry marker check is load-bearing: a __metadata: lockfile is skipped even when a block uses v1-shaped version lines', () => {
@@ -227,7 +236,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    expect(parseYarnLockfileContentsList([content]).size).toBe(0);
+    expect(parseYarnLockfileContentsList([content]).resolved.size).toBe(0);
   });
 
   it('does not treat a non-indented line WITHOUT a trailing colon as a block header', () => {
@@ -236,7 +245,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  version "9.9.9"',
       '',
     ].join('\n');
-    expect(parseYarnLockfileContentsList([content]).size).toBe(0);
+    expect(parseYarnLockfileContentsList([content]).resolved.size).toBe(0);
   });
 
   it('does not silently unquote a descriptor token with an unbalanced quote', () => {
@@ -246,7 +255,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.has('lodash')).toBe(false);
   });
 
@@ -260,7 +269,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('semver')).toBe('7.6.3');
   });
 
@@ -276,7 +285,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolution: "glob@npm:10.5.0"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([berryContent]);
+    const map = parseYarnLockfileContentsList([berryContent]).resolved;
     expect(map.size).toBe(0);
   });
 
@@ -292,7 +301,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolution: "glob@npm:10.5.0"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([berryContentNoMarker]);
+    const map = parseYarnLockfileContentsList([berryContentNoMarker]).resolved;
     expect(map.size).toBe(0);
   });
 
@@ -303,7 +312,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\r\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('glob')).toBe('10.5.0');
   });
 
@@ -317,7 +326,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.has('weird-package')).toBe(false);
     expect(map.get('normal')).toBe('1.2.3');
   });
@@ -337,7 +346,7 @@ describe('parseYarnLockfileContentsList', () => {
       '    version "^3.0.0"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('foo')).toBe('1.2.3');
   });
 
@@ -352,7 +361,7 @@ describe('parseYarnLockfileContentsList', () => {
       '  resolved "x"',
       '',
     ].join('\n');
-    const map = parseYarnLockfileContentsList([content]);
+    const map = parseYarnLockfileContentsList([content]).resolved;
     expect(map.get('lodash')).toBe('1.9.9');
     expect(map.size).toBe(1); // no corrupt extra key from the torn-apart comma
   });
@@ -363,16 +372,14 @@ describe('parseYarnLockfileContentsList', () => {
 // ============================================================================
 
 describe('mergeLockfileResolutions', () => {
-  it('passes through a single map unchanged', () => {
-    const map = new Map([['glob', '10.5.0']]);
-    expect(mergeLockfileResolutions([map])).toEqual(new Map([['glob', '10.5.0']]));
+  it('passes through a single resolved map unchanged', () => {
+    const merged = mergeLockfileResolutions([lr([['glob', '10.5.0']])]);
+    expect(merged.resolved).toEqual(new Map([['glob', '10.5.0']]));
   });
 
   it('AGREE: keeps the version when both maps agree on it for the same package (e.g. npm + yarn)', () => {
-    const npmMap = new Map([['glob', '10.5.0']]);
-    const yarnMap = new Map([['glob', '10.5.0']]);
-    const merged = mergeLockfileResolutions([npmMap, yarnMap]);
-    expect(merged.get('glob')).toBe('10.5.0');
+    const merged = mergeLockfileResolutions([lr([['glob', '10.5.0']]), lr([['glob', '10.5.0']])]);
+    expect(merged.resolved.get('glob')).toBe('10.5.0');
   });
 
   it('D-006 DISAGREE: drops a name entirely when the two maps disagree on its version (floor fallback, not lowest-wins or npm-precedence)', () => {
@@ -381,32 +388,53 @@ describe('mergeLockfileResolutions', () => {
     // install, so neither "npm wins" nor "lower wins" is safe in general:
     // both can mask the real, yarn-resolved vulnerable version behind a
     // stale, safer-looking npm one. Drop to the floor instead.
-    const npmMap = new Map([['glob', '10.5.0']]);
-    const yarnMap = new Map([['glob', '10.3.1']]);
-    const merged = mergeLockfileResolutions([npmMap, yarnMap]);
-    expect(merged.has('glob')).toBe(false);
+    const merged = mergeLockfileResolutions([lr([['glob', '10.5.0']]), lr([['glob', '10.3.1']])]);
+    expect(merged.resolved.has('glob')).toBe(false);
   });
 
   it('ONE-SIDED: unions disjoint entries from both maps, using the only map that has each name', () => {
-    const npmMap = new Map([['glob', '10.5.0']]);
-    const yarnMap = new Map([['lodash', '4.17.21']]);
-    const merged = mergeLockfileResolutions([npmMap, yarnMap]);
-    expect(merged.get('glob')).toBe('10.5.0');
-    expect(merged.get('lodash')).toBe('4.17.21');
+    const merged = mergeLockfileResolutions([lr([['glob', '10.5.0']]), lr([['lodash', '4.17.21']])]);
+    expect(merged.resolved.get('glob')).toBe('10.5.0');
+    expect(merged.resolved.get('lodash')).toBe('4.17.21');
   });
 
   it('D-006 STICKY across maps: a name that conflicted between two maps is NOT resurrected by a third map agreeing with the first', () => {
     // Only two maps are passed in production today (npm + yarn), so this
     // pins the sticky-conflict guard directly at the unit level.
     const merged = mergeLockfileResolutions([
-      new Map([['glob', '10.4.0']]),
-      new Map([['glob', '7.2.3']]),
-      new Map([['glob', '10.4.0']]),
+      lr([['glob', '10.4.0']]),
+      lr([['glob', '7.2.3']]),
+      lr([['glob', '10.4.0']]),
     ]);
-    expect(merged.has('glob')).toBe(false);
+    expect(merged.resolved.has('glob')).toBe(false);
   });
 
-  it('returns an empty map when all inputs are empty', () => {
-    expect(mergeLockfileResolutions([new Map(), new Map()])).toEqual(new Map());
+  it('returns empty resolved/ambiguous maps when all inputs are empty', () => {
+    const merged = mergeLockfileResolutions([lr(), lr()]);
+    expect(merged.resolved).toEqual(new Map());
+    expect(merged.ambiguous).toEqual(new Map());
+  });
+
+  // --------------------------------------------------------------------------
+  // `ambiguous` plumbing (task 18f6c239 Finding 1, additive): the merge must
+  // carry each input's own ambiguous fallback through to the merged result,
+  // AND add its own cross-format `resolved` disagreements to it too — see the
+  // doc comment above `mergeLockfileResolutions`.
+  // --------------------------------------------------------------------------
+  it("AMBIGUOUS UNION: one input's own ambiguous entry (a same-format conflict) survives into the merged ambiguous map", () => {
+    const merged = mergeLockfileResolutions([lr([], [['glob', '7.2.3']]), lr()]);
+    expect(merged.resolved.has('glob')).toBe(false);
+    expect(merged.ambiguous.get('glob')).toBe('7.2.3');
+  });
+
+  it("AMBIGUOUS UNION: keeps the LOWEST across two inputs' own ambiguous entries for the same name", () => {
+    const merged = mergeLockfileResolutions([lr([], [['glob', '8.0.0']]), lr([], [['glob', '7.2.3']])]);
+    expect(merged.ambiguous.get('glob')).toBe('7.2.3');
+  });
+
+  it('AMBIGUOUS UNION: a cross-format resolved DISAGREEMENT also lands in the merged ambiguous map, at its lowest', () => {
+    const merged = mergeLockfileResolutions([lr([['glob', '10.5.0']]), lr([['glob', '10.3.1']])]);
+    expect(merged.resolved.has('glob')).toBe(false);
+    expect(merged.ambiguous.get('glob')).toBe('10.3.1');
   });
 });

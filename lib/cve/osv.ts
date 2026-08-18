@@ -361,12 +361,24 @@ interface DepEntry {
  * agreement-or-floor per D-006 (see `mergeLockfileResolutions`): a name in
  * only one lockfile uses that version, a name in both is kept only when they
  * agree, and on disagreement the name is dropped so the manifest floor is
- * used for it. Falls back to
- * stripping the leading range operator from the manifest spec (the previous
- * floor behaviour) when no lockfile or entry is found, so existing repos
- * without lockfiles do not regress. pnpm-lock.yaml is not resolved (deferred,
- * see the comment above `discoverYarnLockfilePaths` in manifest-discovery.ts)
- * so pnpm repos still get the manifest floor.
+ * used for it. Falls back to stripping the leading range operator from the
+ * manifest spec (the previous floor behaviour) when no lockfile entry is
+ * found, so existing repos without lockfiles do not regress. As a final,
+ * last-resort fallback (task 18f6c239 Finding 1), when that floor-strip
+ * yields NO usable version either (the manifest spec has no digit anywhere —
+ * `*`, `latest`, `workspace:*`, an unversioned git spec) the dep's
+ * `ambiguous`-map entry is used instead: the lowest version observed among
+ * the lockfile's conflicting resolutions for that name, if any. Without this
+ * fallback such a dep was silently dropped from the OSV scan entirely
+ * whenever its lockfile resolution was ambiguous, rather than merely
+ * degrading to the (in this case unusable) floor. The resulting invariant: a
+ * declared dependency for which ANY version information exists anywhere
+ * (lockfile or manifest) always produces an OSV query; D-006 is unchanged —
+ * a usable `resolved` entry or manifest floor still always wins over this
+ * fallback. pnpm-lock.yaml is not resolved (deferred, see the comment above
+ * `discoverYarnLockfilePaths` in manifest-discovery.ts) so pnpm repos still
+ * get the manifest floor (or the `ambiguous` fallback, if even that is
+ * unusable).
  */
 async function collectDeps(
   eco: string,
@@ -378,25 +390,34 @@ async function collectDeps(
   switch (eco) {
     case 'npm': {
       const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
+      const emptyLockfileResolutions = () => ({
+        resolved: new Map<string, string>(),
+        ambiguous: new Map<string, string>(),
+      });
       const [manifests, npmLockfileResolutions, yarnLockfileResolutions] = await Promise.all([
         fetchNpmManifests(octokit, owner, repo, paths),
         // Best-effort: a lockfile-resolution failure must only ever degrade to
         // the manifest floor (per-dep fallback below), never reject and abort the
         // whole npm scan, which would return zero advisories and hide every
         // vuln for the repo.
-        fetchNpmLockfileResolutions(octokit, owner, repo, paths).catch(() => new Map<string, string>()),
-        fetchYarnLockfileResolutions(octokit, owner, repo, paths).catch(() => new Map<string, string>()),
+        fetchNpmLockfileResolutions(octokit, owner, repo, paths).catch(emptyLockfileResolutions),
+        fetchYarnLockfileResolutions(octokit, owner, repo, paths).catch(emptyLockfileResolutions),
       ]);
-      const lockfileResolutions = mergeLockfileResolutions([
-        npmLockfileResolutions,
-        yarnLockfileResolutions,
-      ]);
+      const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
+        mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
       return unionNpmDeps(manifests)
         .map(({ name, versionSpec }) => {
           // Prefer the lockfile-resolved version (exact installed version) to
           // avoid false positives from the manifest floor. Fall back to the
-          // floor-strip when neither lockfile is present or lists this dep.
-          const version = lockfileResolutions.get(name) ?? versionSpec.replace(/^[^0-9]*/, '');
+          // floor-strip when neither lockfile is present or lists this dep;
+          // if that floor is ALSO unusable (no digit in the manifest spec at
+          // all), fall back once more to the lowest-observed ambiguous
+          // lockfile resolution, if any (task 18f6c239 Finding 1 — see the
+          // doc comment above).
+          const floor = versionSpec.replace(/^[^0-9]*/, '');
+          const version =
+            lockfileResolutions.get(name) ??
+            (floor !== '' ? floor : (ambiguousLockfileResolutions.get(name) ?? ''));
           return { name, version };
         })
         .filter(({ version }) => /\d/.test(version));
