@@ -99,6 +99,20 @@ export interface UnionedDep {
  * manifests' own `name`). Deduped by package name; a prod occurrence outranks a
  * dev one.
  *
+ * `npm:` alias RESOLUTION (decided direction, task 18f6c239): a dependency
+ * declared as `"localName": "npm:realName@range"` installs and resolves
+ * `realName`, not `localName` — querying OSV under the local alias key reports
+ * advisories for the wrong (and often nonexistent) package while hiding every
+ * advisory that actually affects `realName`. Of the two options considered
+ * (resolve to the real name, or drop the whole entry to a floor-only marker),
+ * resolution is the one that can never hide an advisory: before dedup, every
+ * `npm:` alias spec is parsed (`parseNpmAlias`) into its real name + range and
+ * unioned under that real name instead of the manifest's local key, so both
+ * the version comparison below and the final OSV query key are the real
+ * package. A malformed alias (no parseable `@range` suffix) is left as an
+ * unresolved raw spec and falls through to the non-comparable handling below,
+ * same as any other unparseable spec — never silently dropped.
+ *
  * Version collapse (worst-case heuristic; no schema migration — see the
  * per-workspace-provenance follow-up below): if two workspaces pin the same
  * dep at different specs, the spec with the LOWEST minimum version admitted
@@ -107,14 +121,14 @@ export interface UnionedDep {
  * workspace is never hidden by a newer pin elsewhere (relevant for CVE /
  * dependency-age reporting).
  *
- * Non-semver specs (`workspace:`, `file:`, `link:`, a git/url spec, an `npm:`
- * alias, a dist-tag like `latest`) and the universal wildcard (`*`, `x`, `''`,
- * anything `semver.validRange` normalizes to `'*'`) are "non-comparable": their
- * minimum would trivially be `0.0.0`, which would otherwise make them "win"
- * every comparison despite pinning nothing real. The rule: a comparable spec
- * always beats a non-comparable one; when both are non-comparable the
- * incumbent (first-seen, root-first) is kept — the safe default when nothing
- * meaningful can be compared.
+ * Non-semver specs (`workspace:`, `file:`, `link:`, a git/url spec, a
+ * malformed/unresolved `npm:` alias, a dist-tag like `latest`) and the
+ * universal wildcard (`*`, `x`, `''`, anything `semver.validRange` normalizes
+ * to `'*'`) are "non-comparable": their minimum would trivially be `0.0.0`,
+ * which would otherwise make them "win" every comparison despite pinning
+ * nothing real. The rule: a comparable spec always beats a non-comparable
+ * one; when both are non-comparable the incumbent (first-seen, root-first) is
+ * kept — the safe default when nothing meaningful can be compared.
  *
  * The isDev flag is decided independently: a prod occurrence anywhere clears
  * it, regardless of which spec wins. Per-workspace version reporting needs
@@ -169,12 +183,51 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
     });
   };
 
+  // Resolve an `npm:` alias entry to its real name + range before unioning
+  // (see the `npm:` alias RESOLUTION paragraph in the docstring above); a
+  // non-alias or unparseable-alias entry passes through unchanged.
+  const resolveAliasedEntry = (name: string, spec: string): { name: string; spec: string } => {
+    const alias = parseNpmAlias(spec);
+    return alias ? { name: alias.realName, spec: alias.realSpec } : { name, spec };
+  };
+
   for (const m of manifests) {
-    for (const [name, spec] of Object.entries(m.dependencies ?? {})) add(name, String(spec), false);
-    for (const [name, spec] of Object.entries(m.devDependencies ?? {})) add(name, String(spec), true);
+    for (const [name, spec] of Object.entries(m.dependencies ?? {})) {
+      const resolved = resolveAliasedEntry(name, String(spec));
+      add(resolved.name, resolved.spec, false);
+    }
+    for (const [name, spec] of Object.entries(m.devDependencies ?? {})) {
+      const resolved = resolveAliasedEntry(name, String(spec));
+      add(resolved.name, resolved.spec, true);
+    }
   }
 
   return [...byName.values()];
+}
+
+/**
+ * Parse an `npm:` alias dependency spec (`npm:realName@range`, e.g.
+ * `npm:lodash-es@^4.0.0`, or a scoped `npm:@scope/pkg@^1.0.0`) into the REAL
+ * package name and range it points at. Returns null when `spec` isn't an
+ * `npm:` alias at all, or has no parseable `@range` suffix (a malformed or
+ * unsupported form, e.g. a bare `npm:realName` with no version) — the caller
+ * then treats the raw spec as an ordinary, non-comparable string, same as any
+ * other unparseable spec, rather than guessing.
+ *
+ * Mirrors the scoped-name-aware `@`-search in `yarnDescriptorName` (a scoped
+ * real name's own leading `@` is not the name/range separator).
+ */
+function parseNpmAlias(spec: string): { realName: string; realSpec: string } | null {
+  const trimmed = spec.trim();
+  if (!trimmed.startsWith('npm:')) return null;
+  const aliased = trimmed.slice(4);
+  const searchFrom = aliased.startsWith('@') ? 1 : 0;
+  const at = aliased.indexOf('@', searchFrom);
+  if (at === -1) return null; // no `@range` suffix — malformed/unsupported alias
+  const realName = aliased.slice(0, at);
+  const realSpec = aliased.slice(at + 1);
+  if (!realName || !realSpec) return null;
+  return { realName, realSpec };
 }
 
 /**
@@ -289,22 +342,6 @@ interface ParsedNpmLockfile {
   dependencies?: Record<string, NpmLockfileEntry>;
 }
 
-// Simple numeric version comparison (no semver library; lockfile versions are
-// exact, never range-prefixed, so triple-integer comparison is correct).
-function lockfileVersionIsLower(a: string, b: string): boolean {
-  const parse = (s: string): [number, number, number] => {
-    const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
-    if (!m) return [0, 0, 0];
-    return [Number(m[1] ?? 0), Number(m[2] ?? 0), Number(m[3] ?? 0)];
-  };
-  const pa = parse(a);
-  const pb = parse(b);
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] !== pb[i]) return pa[i] < pb[i];
-  }
-  return false;
-}
-
 /**
  * Discover the `package-lock.json` paths that should be fetched for a given
  * set of `package.json` paths. Always includes the repo root lockfile; also
@@ -328,42 +365,61 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * Parse a list of raw `package-lock.json` content strings (lockfileVersion
  * 1/2/3) and return a flat `packageName → resolvedVersion` map.
  *
- * For a package that appears in multiple lockfile entries (e.g. a workspace
- * root lockfile AND a per-package lockfile), the **lowest** resolved version
- * is kept, consistent with `unionNpmDeps`'s lowest-spec policy: if one
- * workspace has a vulnerable resolved version, it must not be hidden by a
- * newer resolution elsewhere.
+ * The map is keyed by bare package name across ALL entries and ALL content
+ * strings in `contents`, not per manifest/workspace (same simplification as
+ * `parseYarnLockfileContentsList`; see task cac1b6fb for the per-workspace
+ * provenance follow-up). A workspace-nested entry
+ * (`packages/a/node_modules/glob`) collapses onto the same bare name as a
+ * top-level hoisted entry (`node_modules/glob`), and — critically — so does a
+ * deeply-nested transitive under a DIFFERENT package's tree
+ * (`node_modules/foo/node_modules/glob`): the two can legitimately resolve to
+ * different versions, and there is no per-manifest scoping here to
+ * disambiguate which entry is "the" resolution for a declared dependency.
  *
- * Known residual (full per-workspace provenance is task cac1b6fb): the map is
- * keyed by package name across all fetched lockfiles, not per manifest path. If
- * two workspaces pin the same dep to different version lines AND only the
- * higher-version workspace's lockfile is fetched (partial coverage), the query
- * uses that higher (safe) version and could hide the lower workspace's real
- * vuln. Complete coverage (the common npm-workspaces case with one root
- * lockfile) captures the lowest version and is safe; a total fetch failure
- * degrades to the manifest floor (also safe).
+ * Per orchestrator decision D-006 (ambiguity degrades to the manifest floor,
+ * everywhere — this path is now aligned with `parseYarnLockfileContentsList`,
+ * closing the exception that used to be documented here, task 18f6c239): when
+ * a bare name resolves to more than one DISTINCT version across
+ * entries/content strings, that name is dropped from the map entirely, rather
+ * than guessing via lowest-wins (which can pick an unrelated, wrong
+ * resolution and silently clear a real advisory — measured on depsight's own
+ * package-lock.json: a direct `semver@^7.8.5` was shadowed by an unrelated
+ * nested `semver@6.3.1`, so OSV was queried at 6.3.1 instead of the correct
+ * 7.8.5 floor) or semver-range intersection (explicitly deferred, not
+ * implemented here). The caller (`collectDeps` in `lib/cve/osv.ts`) then falls
+ * back to the manifest-floor version for that dep, matching
+ * pre-lockfile-resolution behaviour — unless `mergeLockfileResolutions`' one-
+ * sided rule finds an unambiguous resolution from the OTHER lockfile format
+ * (the drop is not propagated as a cross-format poison set; per-format
+ * ambiguity provenance is part of the cac1b6fb follow-up). This is
+ * conservative against false negatives — it may over-report via the floor,
+ * never silence.
  *
  * Malformed JSON entries are skipped gracefully.
- *
- * NOTE (D-006 scope): the lowest-wins rule above predates D-006 and is a
- * knowingly deferred exception to it — a nested lower-major duplicate
- * (`node_modules/a/node_modules/glob`) collapses onto the same bare name and
- * can still shadow a direct dep's real resolution here, the same ambiguity
- * class the yarn parser now drops to the floor. Aligning this path is
- * deliberately left to the per-workspace provenance follow-up (task
- * cac1b6fb) rather than changed silently in a yarn-scoped PR.
  *
  * Pure function — exported for testing.
  */
 export function parseNpmLockfileContentsList(contents: string[]): Map<string, string> {
   const resolved = new Map<string, string>();
+  // Names seen at more than one DISTINCT version across entries/content
+  // strings: permanently excluded from `resolved` per D-006 (see doc comment
+  // above; mirrors parseYarnLockfileContentsList's sticky conflict set). Once
+  // conflicted, a name stays dropped even if a later entry happens to agree
+  // with an earlier value — the true resolution is ambiguous given the
+  // entries seen so far.
+  const conflicted = new Set<string>();
 
-  const updateIfLower = (name: string, version: string): void => {
+  const recordVersion = (name: string, version: string): void => {
     if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    if (conflicted.has(name)) return; // already dropped, stays dropped
     const existing = resolved.get(name);
-    if (!existing || lockfileVersionIsLower(version, existing)) {
+    if (existing === undefined) {
       resolved.set(name, version);
+    } else if (existing !== version) {
+      resolved.delete(name);
+      conflicted.add(name);
     }
+    // existing === version: same resolution seen again, no-op.
   };
 
   for (const content of contents) {
@@ -391,13 +447,13 @@ export function parseNpmLockfileContentsList(contents: string[]): Map<string, st
         if (!key.includes('node_modules/')) continue;
         const name = key.split('node_modules/').pop();
         if (!name) continue;
-        updateIfLower(name, entry.version);
+        recordVersion(name, entry.version);
       }
     } else if (lock.dependencies && typeof lock.dependencies === 'object') {
       // lockfileVersion 1: flat `dependencies` map (best-effort, top-level only).
       for (const [name, entry] of Object.entries(lock.dependencies)) {
         if (!entry?.version) continue;
-        updateIfLower(name, entry.version);
+        recordVersion(name, entry.version);
       }
     }
   }

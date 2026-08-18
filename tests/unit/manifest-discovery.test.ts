@@ -346,7 +346,7 @@ describe('unionNpmDeps', () => {
     ).toBe('^2.0.0');
   });
 
-  it('treats other non-semver spec forms (workspace:, link:, npm alias) as non-comparable', () => {
+  it('treats other non-semver spec forms (workspace:, link:) as non-comparable', () => {
     expect(
       unionNpmDeps([
         { name: 'root', dependencies: { lodash: 'workspace:^1.0.0' } },
@@ -360,13 +360,59 @@ describe('unionNpmDeps', () => {
         { name: 'pkg', dependencies: { lodash: '1.2.3' } },
       ])[0].versionSpec,
     ).toBe('1.2.3');
+  });
 
-    expect(
-      unionNpmDeps([
-        { name: 'root', dependencies: { lodash: 'npm:lodash-es@^4.0.0' } },
-        { name: 'pkg', dependencies: { lodash: '1.2.3' } },
-      ])[0].versionSpec,
-    ).toBe('1.2.3');
+  // --------------------------------------------------------------------------
+  // `npm:` alias resolution (task 18f6c239, decided direction: resolve to the
+  // real package name — see the `npm:` alias RESOLUTION paragraph in
+  // unionNpmDeps' docstring). Querying OSV under the LOCAL alias key (the
+  // manifest's dependency key) would report advisories for the wrong package
+  // while hiding every advisory that actually affects the real package; this
+  // is the direction that can never hide an advisory.
+  // --------------------------------------------------------------------------
+  it('npm: ALIAS: resolves an aliased dependency to the REAL package name and range, not the local alias key', () => {
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { myLodash: 'npm:lodash-es@^4.0.0' } },
+    ]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('lodash-es'); // real package, NOT the local alias key "myLodash"
+    expect(deps[0].versionSpec).toBe('^4.0.0'); // the real range, now comparable
+  });
+
+  it('npm: ALIAS: resolves a SCOPED real package name correctly (scoped name\'s own leading @ is not the range separator)', () => {
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { myPkg: 'npm:@scope/pkg@^1.0.0' } },
+    ]);
+    expect(deps[0].name).toBe('@scope/pkg');
+    expect(deps[0].versionSpec).toBe('^1.0.0');
+  });
+
+  it('npm: ALIAS: an aliased dep and a direct dep on the SAME real package merge under the real name (lowest comparable spec wins)', () => {
+    // One workspace aliases an old, vulnerable lodash-es range under a local
+    // binding; another workspace depends on lodash-es directly at a newer
+    // range. Both must be recognized as the SAME real package so the older,
+    // vulnerable floor is not hidden behind the newer direct pin.
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { compat: 'npm:lodash-es@^3.0.0' } },
+      { name: 'pkg', dependencies: { 'lodash-es': '^4.0.0' } },
+    ]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('lodash-es');
+    expect(deps[0].versionSpec).toBe('^3.0.0'); // the older, vulnerable floor — not hidden
+  });
+
+  it('npm: ALIAS: a malformed alias (no parseable @range suffix) falls through as a raw, non-comparable spec rather than being dropped', () => {
+    // "npm:lodash-es" with no "@range" at all can't be split into a real
+    // name/range pair; the caller must not guess or silently drop it — it
+    // stays under the local alias key as an ordinary non-comparable spec,
+    // consistent with how any other unparseable spec is handled.
+    const deps = unionNpmDeps([
+      { name: 'root', dependencies: { myLodash: 'npm:lodash-es' } },
+      { name: 'pkg', dependencies: { myLodash: '1.2.3' } },
+    ]);
+    expect(deps).toHaveLength(1);
+    expect(deps[0].name).toBe('myLodash');
+    expect(deps[0].versionSpec).toBe('1.2.3'); // comparable concrete spec beats the non-comparable raw alias
   });
 });
 

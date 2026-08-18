@@ -75,8 +75,10 @@ export function discoverPythonLockfilePaths(manifestPaths: string[]): string[] {
  * the same entry.
  *
  * For a package that appears in multiple entries (e.g. across two lockfiles),
- * the LOWEST resolved version is kept — security-conservative, mirroring the
- * npm `lockfileVersionIsLower` policy.
+ * the LOWEST resolved version is kept — security-conservative. (The npm
+ * lockfile parser used the same lowest-wins policy until it moved to
+ * D-006 drop-on-distinct-version; the python parser keeps lowest-wins
+ * deliberately, its multi-lockfile ambiguity surface is narrower.)
  *
  * Pure function — exported for testing.
  */
