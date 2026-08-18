@@ -363,19 +363,43 @@ interface DepEntry {
  * agree, and on disagreement the name is dropped so the manifest floor is
  * used for it. Falls back to stripping the leading range operator from the
  * manifest spec (the previous floor behaviour) when no lockfile entry is
- * found, so existing repos without lockfiles do not regress. As a final,
- * last-resort fallback (task 18f6c239 Finding 1), when that floor-strip
- * yields NO usable version either (the manifest spec has no digit anywhere —
- * `*`, `latest`, `workspace:*`, an unversioned git spec) the dep's
- * `ambiguous`-map entry is used instead: the lowest version observed among
- * the lockfile's conflicting resolutions for that name, if any. Without this
- * fallback such a dep was silently dropped from the OSV scan entirely
- * whenever its lockfile resolution was ambiguous, rather than merely
- * degrading to the (in this case unusable) floor. The resulting invariant: a
- * declared dependency for which ANY version information exists anywhere
- * (lockfile or manifest) always produces an OSV query; D-006 is unchanged —
- * a usable `resolved` entry or manifest floor still always wins over this
- * fallback. pnpm-lock.yaml is not resolved (deferred, see the comment above
+ * found, so existing repos without lockfiles do not regress. That floor is
+ * usable as an exact version only when it parses as a real semver version
+ * (`semver.valid(floor) !== null`, task 7fc55e6f — R2 finding on 18f6c239):
+ * a non-semver spec whose text happens to contain a digit (e.g. a git spec
+ * `github:acme/widget2#main`) strips down to a non-empty but meaningless
+ * value (`2#main`) that must NOT count as a usable exact version. Measured
+ * against api.osv.dev/v1/querybatch: such a value is NOT silently unmatchable
+ * — OSV returns an ARBITRARY, unfiltered result set for a version string it
+ * cannot interpret (`lodash@"2#main"` returned 5 vulns in the same batch
+ * where `lodash@"999.0.0"` returned 0 and a real resolved version returned
+ * the correct 10), because `fetchOsvAdvisories` maps every vuln OSV returns
+ * for a query with no further local version filtering. So a garbage floor
+ * risks arbitrary OVER-reporting for that dep, not silence — a real observed
+ * version is preferred whenever one is available. When the floor doesn't
+ * parse as an exact version, a declared RANGE still gets its own precise
+ * query: when `semver.validRange(versionSpec)` succeeds (`^19`, `~1.2`,
+ * `2.x`, `>=1.2` — ordinary ranges whose floor-strip merely isn't a full
+ * x.y.z), `semver.minVersion(versionSpec)` supplies the range's lowest
+ * version (`^19` -> `19.0.0`) as the query version — more precise than the
+ * pre-task raw-floor value would have been for the same range. Only when
+ * NEITHER the exact-floor nor the range path yields anything (a git ref, a
+ * malformed/unsupported `npm:` alias, or a genuinely version-free spec like
+ * `*`/`latest`/`workspace:*`) does collection fall back to the dep's
+ * `ambiguous`-map entry as a final, last-resort fallback (task 18f6c239
+ * Finding 1): the lowest version observed among the lockfile's conflicting
+ * resolutions for that name, if any — see the shared-helpers banner above
+ * `LockfileResolutions` in manifest-discovery.ts for the full
+ * ambiguous-fallback rationale and the D-006 ordering invariant (unchanged
+ * here: resolved > usable floor (exact or range-derived) > ambiguous). The
+ * resulting invariant: a declared dependency for which ANY USABLE version
+ * information exists anywhere (lockfile, an exact or range-parseable
+ * manifest spec, or an ambiguous lockfile entry) always produces an OSV
+ * query. The one documented exception: a digit-bearing spec that is neither
+ * a real semver version nor a parseable range (a git ref, an unsupported
+ * alias form) with no `ambiguous` entry to fall back to is dropped from the
+ * scan, same as any other dep with no usable version anywhere. pnpm-lock.yaml
+ * is not resolved (deferred, see the comment above
  * `discoverYarnLockfilePaths` in manifest-discovery.ts) so pnpm repos still
  * get the manifest floor (or the `ambiguous` fallback, if even that is
  * unusable).
@@ -419,14 +443,29 @@ async function collectDeps(
           // Prefer the lockfile-resolved version (exact installed version) to
           // avoid false positives from the manifest floor. Fall back to the
           // floor-strip when neither lockfile is present or lists this dep;
-          // if that floor is ALSO unusable (no digit in the manifest spec at
-          // all), fall back once more to the lowest-observed ambiguous
-          // lockfile resolution, if any (task 18f6c239 Finding 1 — see the
-          // doc comment above).
+          // full rationale for what counts as a "usable" floor (exact vs.
+          // range-derived), the ambiguous last-resort, and the one documented
+          // drop case is in the doc comment above this function. Mechanics:
+          // `floor` is usable as-is when it parses as an exact semver version
+          // (fast path); otherwise `rangeFloor()` tries the RAW `versionSpec`
+          // as a semver RANGE (`floor !== ''` excludes the digit-free
+          // wildcard class — `*`/`latest`/`workspace:*` — which
+          // `semver.validRange` would otherwise accept as `*` and
+          // `minVersion` would wrongly resolve to `0.0.0`) and returns its
+          // `minVersion`; only when neither yields anything does the
+          // `ambiguous` map (or, failing that, an empty string that drops the
+          // dep) apply. D-006 ordering is unchanged: resolved > usable floor
+          // (exact or range-derived) > ambiguous.
           const floor = versionSpec.replace(/^[^0-9]*/, '');
+          const rangeFloor = (): string | null => {
+            if (floor === '' || semver.validRange(versionSpec) === null) return null;
+            return semver.minVersion(versionSpec)?.version ?? null;
+          };
           const version =
             lockfileResolutions.get(name) ??
-            (floor !== '' ? floor : (ambiguousLockfileResolutions.get(name) ?? ''));
+            (semver.valid(floor) !== null
+              ? floor
+              : (rangeFloor() ?? ambiguousLockfileResolutions.get(name) ?? ''));
           return { name, version };
         })
         .filter(({ version }) => /\d/.test(version));

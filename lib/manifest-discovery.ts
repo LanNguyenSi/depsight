@@ -394,7 +394,56 @@ export async function fetchManifestContents(
 // floor, never silence" claim did not actually hold). D-006 itself is
 // unchanged: a usable `resolved` entry, or a usable manifest floor, still
 // always wins over this fallback — see the `??`/floor/`ambiguous` chain in
-// `collectDeps`.
+// `collectDeps`. The resulting invariant: a declared dependency for which ANY
+// USABLE version information exists anywhere (lockfile, a manifest spec that
+// resolves to an exact or range-derived floor, or an `ambiguous` lockfile
+// entry) always produces an OSV query. The one documented exception: a
+// digit-bearing manifest spec that is neither a real semver version nor a
+// parseable semver range (a git ref, an unsupported `npm:` alias form — see
+// the alias paragraph on `unionNpmDeps` above) with no `ambiguous` entry to
+// fall back to is dropped from the scan, same as any other dep with no
+// usable version anywhere.
+//
+// "Usable manifest floor" (task 7fc55e6f, R2 finding on 18f6c239): `collectDeps`
+// derives the floor by stripping the leading non-digit prefix off the raw
+// manifest spec (e.g. `^2.5.0` -> `2.5.0`). Gating that floor's usability on
+// merely "non-empty" was wrong: a non-semver spec whose text happens to
+// contain a digit (e.g. a git spec `github:acme/widget2#main`) strips down to
+// a non-empty but meaningless value (`2#main`) — that value must NOT be sent
+// to OSV as if it were a real version. Measured against
+// api.osv.dev/v1/querybatch (not assumed): such an unparseable version string
+// is NOT silently unmatchable — OSV returns an ARBITRARY, unfiltered result
+// set for it (`lodash@"2#main"` returned 5 vulns in the same batch where
+// `lodash@"999.0.0"` returned 0 and the real resolved version returned the
+// correct 10, and `fetchOsvAdvisories` applies no further local version
+// filter to what OSV returns). So the old floor risked arbitrary
+// OVER-reporting for that dep, not the "effectively unscanned" silence the
+// pre-fix docstring assumed — a real observed version is preferred whenever
+// one is available. Raising the guard to plain `semver.valid(floor) !== null`
+// would, however, also reject a floor derived from an ordinary, legitimate
+// RANGE spec (`^19`, `~1.2`, `2.x`, `>=1.2` — measured across the pandora
+// corpus: 65/1316 manifest specs, 4.9%, are in this class, all legitimate
+// ranges, zero git refs), since a range's floor-strip is rarely a full
+// `x.y.z`. `collectDeps` therefore tries `semver.validRange` against the RAW
+// spec (not the floor) as a second path before giving up on the floor
+// entirely, and uses `semver.minVersion` of that range as the query version
+// (`^19` -> `19.0.0`) — more precise than the pre-task raw-floor value would
+// have been for the same range. Only a spec that fails BOTH the exact-version
+// and the range check (the git-ref case above, or a malformed/unsupported
+// `npm:` alias — see below) reaches the `ambiguous` fallback or drop. An
+// `npm:real@^2.0.0` alias with a WELL-FORMED `name@range` suffix is resolved
+// to its real name and range by `unionNpmDeps`'s own alias handling (see the
+// `npm:` alias paragraph on `unionNpmDeps` above) before `collectDeps` ever
+// computes a floor from it, regardless of whether the real name or range
+// contains a digit (`npm:h3@^1.0.0` resolves cleanly to name `h3`, range
+// `^1.0.0`, floor `1.0.0`) — so it is unaffected by this change either way. Only a
+// MALFORMED/unsupported alias form that `unionNpmDeps`'s alias parser can't
+// parse (e.g. a bare `npm:h3` with no `@range` suffix) is passed through
+// unresolved, and can then floor to an invalid, digit-bearing value the same
+// way a git ref does; that residual gap is out of scope for this task (no
+// alias parsing changes here) and is pinned by a test as a known limitation.
+// D-006's ordering is unchanged either way: resolved > usable floor (exact or
+// range-derived) > ambiguous.
 
 export interface LockfileResolutions {
   /** name -> single unambiguous resolved version (D-006 semantics, unchanged). */
@@ -546,18 +595,18 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  * ambiguity provenance is part of the cac1b6fb follow-up).
  *
  * The return value pairs that `resolved` map with an `ambiguous` one (task
- * 18f6c239 Finding 1): `ambiguous` holds, for every name dropped from
- * `resolved` by the conflict rule above, the LOWEST of the conflicting
- * versions observed. `collectDeps` consults `ambiguous` ONLY as a last
- * resort, when neither a `resolved` entry nor a usable manifest-spec floor
- * exists for that name (e.g. the manifest pins it with `*`, `latest`,
- * `workspace:*`, or a git spec whose URL contains no digit) — without this, such a
- * dependency was silently dropped from the OSV scan entirely whenever its
- * lockfile resolution was ambiguous (measured: 0 OSV queries instead of 3
- * for a small reproduction repo). The corrected invariant: a declared
- * dependency for which ANY version information exists anywhere (lockfile or
- * manifest) always produces an OSV query; a usable `resolved` entry or
- * manifest floor still always wins over the `ambiguous` fallback.
+ * 18f6c239 Finding 1) — see the shared-helpers banner above
+ * `LockfileResolutions` for the full ambiguous-fallback rationale (including
+ * what counts as a "usable" floor, task 7fc55e6f) and the D-006 ordering
+ * invariant that `collectDeps` (`lib/cve/osv.ts`) applies when consuming it.
+ * The resulting invariant: a declared dependency for which ANY USABLE version
+ * information exists anywhere (lockfile, an exact-or-range-parseable manifest
+ * spec, or an `ambiguous` entry) always produces an OSV query; a usable
+ * `resolved` entry or manifest floor still always wins over the `ambiguous`
+ * fallback. The one documented exception (task 7fc55e6f): a digit-bearing
+ * spec that parses as neither a real semver version nor a semver range (a
+ * git ref, an unsupported `npm:` alias form) with no `ambiguous` entry to
+ * fall back to is dropped from the scan.
  *
  * Also resolves npm's ALIASED installs (task 18f6c239 Finding 2): in the
  * lockfileVersion 2/3 `packages` map, an aliased entry carries the real
@@ -811,16 +860,9 @@ function parseYarnDescriptors(header: string): string[] {
  * share a bare name.
  *
  * The return value pairs that `resolved` map with an `ambiguous` one (task
- * 18f6c239 Finding 1, same shared mechanism as
- * `parseNpmLockfileContentsList` — see that function's doc comment for the
- * full rationale): `ambiguous` holds, for every name dropped from `resolved`
- * by the conflict rule above, the LOWEST of the conflicting versions
- * observed. `collectDeps` (lib/cve/osv.ts) consults it only as a last
- * resort, when neither a `resolved` entry nor a usable manifest-spec floor
- * exists for that name — this closes the same "0 OSV queries instead of 3"
- * silent-drop class that used to exist for a spec with no digit anywhere
- * (`*`, `latest`, `workspace:*`, a git spec whose URL contains no digit) plus an ambiguous
- * yarn.lock resolution.
+ * 18f6c239 Finding 1), same shared mechanism as `parseNpmLockfileContentsList`
+ * — see the shared-helpers banner above `LockfileResolutions` for the full
+ * ambiguous-fallback rationale.
  *
  * Pure function, exported for testing.
  */
@@ -938,8 +980,8 @@ export async function fetchYarnLockfileResolutions(
  * itself drops from `resolved` on cross-format disagreement, keeping the
  * LOWEST version recorded per name across all of those sources — the same
  * last-resort fallback `collectDeps` reads when a dep has neither a
- * `resolved` entry nor a usable manifest floor. See
- * `parseNpmLockfileContentsList`'s doc comment for the full rationale.
+ * `resolved` entry nor a usable manifest floor. See the shared-helpers
+ * banner above `LockfileResolutions` for the full rationale.
  *
  * Pure function, exported for testing.
  */

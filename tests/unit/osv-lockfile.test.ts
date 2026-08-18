@@ -437,6 +437,200 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     // usable floor wins over it per D-006).
     expect(body.queries[0].version).toBe('3.0.0');
   });
+
+  // --------------------------------------------------------------------------
+  // Fix-round 2 review (task 7fc55e6f, R2 finding on 18f6c239): collectDeps
+  // gated the floor's usability on `floor !== ''`. A non-semver spec whose
+  // text happens to contain a digit (e.g. a git spec
+  // `github:acme/widget2#main`) strips to a non-empty but meaningless floor
+  // (`2#main`) that used to count as "usable" and suppress the `ambiguous`
+  // fallback, even though it can never match a real OSV package version — the
+  // dep was queried but effectively unscanned. The fix raises the guard to
+  // `semver.valid(floor) !== null`.
+  // --------------------------------------------------------------------------
+
+  it('(f) FLOOR USABILITY (task 7fc55e6f): a digit-bearing non-semver spec with conflicting lockfile copies queries the ambiguous lowest, not the meaningless floor', async () => {
+    // widget's manifest spec is a git ref containing a digit
+    // (`github:acme/widget2#main`): floor-strip
+    // (`versionSpec.replace(/^[^0-9]*/, '')`) yields '2#main' — non-empty,
+    // but not a real semver version, so it can never match a real OSV
+    // package version. Pre-fix, `floor !== ''` accepted it as "usable" and
+    // suppressed the ambiguous fallback entirely. Post-fix,
+    // `semver.valid(floor) !== null` rejects it, so the lockfile's ambiguous
+    // (conflicting 3.2.1/2.0.4) resolution is used instead, at its lowest
+    // value.
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { widget: 'github:acme/widget2#main' } },
+    ]);
+    const { parseNpmLockfileContentsList } = await import('@/lib/manifest-discovery');
+    const conflictedLock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {},
+        'node_modules/widget': { version: '3.2.1' },
+        'node_modules/foo/node_modules/widget': { version: '2.0.4' },
+      },
+    });
+    mockFetchNpmLockfileResolutions.mockResolvedValue(
+      parseNpmLockfileContentsList([conflictedLock]),
+    );
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('widget');
+    // THE FIX: the ambiguous lowest (2.0.4), not the meaningless floor
+    // ('2#main', which the pre-fix `floor !== ''` guard would have sent).
+    expect(body.queries[0].version).toBe('2.0.4');
+  });
+
+  it('(g) NEGATIVE CONTROL: a usable semver floor still wins over the ambiguous fallback', async () => {
+    // Guards against a wrong fix that always prefers `ambiguous` once an
+    // entry exists, or that widens the semver-usability check so far it also
+    // rejects a perfectly normal manifest floor. D-006 order is unchanged:
+    // resolved > usable floor > ambiguous.
+    mockFetchNpmManifests.mockResolvedValue([{ dependencies: { widget: '^2.5.0' } }]);
+    const { parseNpmLockfileContentsList } = await import('@/lib/manifest-discovery');
+    const conflictedLock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {},
+        'node_modules/widget': { version: '3.2.1' },
+        'node_modules/foo/node_modules/widget': { version: '1.0.4' },
+      },
+    });
+    mockFetchNpmLockfileResolutions.mockResolvedValue(
+      parseNpmLockfileContentsList([conflictedLock]),
+    );
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries[0].package.name).toBe('widget');
+    // The usable floor (2.5.0) wins over the ambiguous lowest (1.0.4).
+    expect(body.queries[0].version).toBe('2.5.0');
+  });
+
+  it('(h) NO-DIGIT CLASS: `latest` and `workspace:*` manifest specs also reach the ambiguous fallback (not just `*`)', async () => {
+    // The existing regression-guard test (c) above only exercises `*`.
+    // `latest` and `workspace:*` strip to '' the same way (no digit
+    // anywhere) and must reach the same last-resort ambiguous fallback, not
+    // be silently dropped.
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { latestDep: 'latest', wsDep: 'workspace:*' } },
+    ]);
+    const { parseNpmLockfileContentsList } = await import('@/lib/manifest-discovery');
+    const conflictedLock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {},
+        'node_modules/latestDep': { version: '2.0.0' },
+        'node_modules/foo/node_modules/latestDep': { version: '1.0.0' },
+        'node_modules/wsDep': { version: '5.0.0' },
+        'node_modules/bar/node_modules/wsDep': { version: '4.0.0' },
+      },
+    });
+    mockFetchNpmLockfileResolutions.mockResolvedValue(
+      parseNpmLockfileContentsList([conflictedLock]),
+    );
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(2);
+    const byName = Object.fromEntries(body.queries.map((q) => [q.package.name, q.version]));
+    expect(byName.latestDep).toBe('1.0.0');
+    expect(byName.wsDep).toBe('4.0.0');
+  });
+
+  // --------------------------------------------------------------------------
+  // Fix-round 2 (task 7fc55e6f, R2 review on this branch's own guard fix
+  // above): raising the guard all the way to plain `semver.valid(floor) !==
+  // null` was TOO STRICT — it also rejects a floor derived from an ordinary
+  // RANGE spec (`^19`, `~1.2`, `2.x`, `>=1.2`, ...), which is common and
+  // legitimate (measured: 4.9% of manifest specs across the pandora corpus),
+  // silently diverting those deps to the ambiguous/drop path exactly like a
+  // git ref. The corrected guard: keep the `semver.valid(floor)` fast path;
+  // when it fails, try `semver.validRange(versionSpec)` (against the RAW
+  // spec) + `semver.minVersion` before falling back further.
+  // --------------------------------------------------------------------------
+
+  it('(j) RANGE FLOOR (task 7fc55e6f fix-round-2, F1): a `^19`-shaped range spec with no lockfile match anywhere queries the range minVersion, not a raw floor or a drop', async () => {
+    // `^19` strips to floor '19', which fails `semver.valid` (not a full
+    // x.y.z) — but the SPEC is a perfectly ordinary semver range. Both
+    // `resolved` and `ambiguous` are empty here (no lockfile at all), so the
+    // ONLY way this dep still produces a query is the range-floor path:
+    // `semver.validRange('^19')` succeeds and `semver.minVersion('^19')`
+    // gives '19.0.0'. THIS TEST IS RED against the unfixed
+    // `semver.valid(floor) !== null` guard alone (react would be dropped,
+    // zero queries) — see the fix-round-2 mutation probe.
+    mockFetchNpmManifests.mockResolvedValue([{ dependencies: { react: '^19' } }]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('react');
+    expect(body.queries[0].version).toBe('19.0.0');
+  });
+
+  it('(k) RANGE-CHECK STILL FAILS -> DROP: a digit-bearing git-ref spec with no ambiguous entry and no lockfile match is dropped, not sent as a meaningless version', async () => {
+    // `github:acme/widget2#main` fails BOTH the exact-floor check (floor
+    // '2#main' is not a real semver version) AND the new range check
+    // (`semver.validRange` on the raw spec is null — a git ref is not a
+    // semver range either), unlike `^19` in (j) above. With no `ambiguous`
+    // lockfile entry to fall back to, the dep must be DROPPED entirely, not
+    // sent to OSV under a garbage value. The companion `glob` dep (from the
+    // default manifest fixture) proves the scan still runs and only the
+    // git-ref dep is missing.
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { glob: '^10.3.0', widget: 'github:acme/widget2#main' } },
+    ]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    // Only glob is queried; widget was dropped (no query for it at all).
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('glob');
+  });
+
+  it('(l) OUT-OF-SCOPE ALIAS LIMITATION: a MALFORMED `npm:` alias with no `@range` suffix is diverted to ambiguous/drop (known limitation, no alias parsing added here)', async () => {
+    // `unionNpmDeps`'s own alias resolution (`parseNpmAlias`) cleanly
+    // resolves any WELL-FORMED `npm:realName@range` alias BEFORE
+    // `collectDeps` ever computes a floor — including one whose real name
+    // contains a digit, e.g. `npm:h3@^1.0.0` resolves to name `h3`, range
+    // `^1.0.0`, floor `1.0.0` (valid), and is therefore unaffected by this
+    // task (verified empirically; NOT what this test exercises). The
+    // genuine gap is a MALFORMED alias `parseNpmAlias` can't parse at all
+    // (no `@range` suffix, e.g. a bare `npm:h3`): `resolveAliasedEntry`
+    // leaves it as an unresolved raw spec under the LOCAL alias key, which
+    // then floors to '3' (fails `semver.valid`) and also fails the range
+    // check (`semver.validRange('npm:h3')` is null). With no lockfile entry,
+    // it is dropped — pinned here as a documented out-of-scope limitation of
+    // the alias handling, not fixed (no alias-parsing changes in this task).
+    mockFetchNpmManifests.mockResolvedValue([
+      { dependencies: { glob: '^10.3.0', h3alias: 'npm:h3' } },
+    ]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr());
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    // Only glob is queried; the malformed alias was dropped, not queried
+    // under its meaningless local-key floor.
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('glob');
+  });
 });
 
 // ---- yarn Tests -----------------------------------------------------------------
@@ -595,6 +789,39 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
     expect(body.queries[0].package.name).toBe('glob');
     // Degraded to the manifest floor (10.3.0); the scan still runs.
     expect(body.queries[0].version).toBe('10.3.0');
+  });
+
+  it('(i) CROSS-FORMAT AMBIGUOUS UNION MERGE (task 7fc55e6f): a no-digit spec plus disagreeing npm/yarn resolutions queries the cross-format ambiguous lowest', async () => {
+    // NOTE on naming (task 7fc55e6f fix-round-2, F6): this composes the REAL
+    // `mergeLockfileResolutions` with the real `collectDeps`, but the two
+    // per-format resolution maps below are synthesized directly via `lr(...)`
+    // rather than produced by feeding real package-lock.json/yarn.lock text
+    // through `parseNpmLockfileContentsList`/`parseYarnLockfileContentsList`
+    // (unlike the "(a)"/"D-006 END-TO-END" tests above, which do parse real
+    // lockfile text). So this is an end-to-end exercise of the MERGE step
+    // only, not of either format's parser — hence "MERGE", not "END-TO-END",
+    // in the title.
+    //
+    // `latest` strips to '' (no digit) — the manifest floor is unusable
+    // either way. package-lock.json resolves the dep to 10.5.0 alone (no
+    // in-format conflict, so it lands in npm's own `resolved` map);
+    // yarn.lock resolves it to 9.3.1 alone (same, in yarn's own `resolved`
+    // map). The two formats DISAGREE, so mergeLockfileResolutions drops the
+    // name from the merged `resolved` map per D-006 and records the union's
+    // LOWEST (9.3.1) in the merged `ambiguous` map — collectDeps must
+    // consult that CROSS-FORMAT ambiguous entry too, not just a same-format
+    // one (already covered by (f)/(g)/(h) above).
+    mockFetchNpmManifests.mockResolvedValue([{ dependencies: { widget: 'latest' } }]);
+    mockFetchNpmLockfileResolutions.mockResolvedValue(lr([['widget', '10.5.0']]));
+    mockFetchYarnLockfileResolutions.mockResolvedValue(lr([['widget', '9.3.1']]));
+    mockFetch.mockResolvedValue(OSV_NO_VULNS);
+
+    await fetchOsvAdvisories('tok', 'o', 'r', 'main');
+
+    const body = osvQueryBody(mockFetch);
+    expect(body.queries).toHaveLength(1);
+    expect(body.queries[0].package.name).toBe('widget');
+    expect(body.queries[0].version).toBe('9.3.1');
   });
 });
 
