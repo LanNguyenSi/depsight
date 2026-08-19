@@ -55,6 +55,14 @@ describe('fetchRepoAdvisories', () => {
     expect(result.dependabotDisabled).toBeFalsy();
     expect(result.advisories).toHaveLength(150);
     expect(result.counts.total).toBe(150);
+  });
+
+  it("requests only state: 'open' alerts, never auto_dismissed ones", async () => {
+    const octokit = makeMockOctokit(() => Promise.resolve([makeAlert(1)]));
+    vi.mocked(createGitHubClient).mockReturnValue(octokit as ReturnType<typeof createGitHubClient>);
+
+    await fetchRepoAdvisories('token', 'owner', 'repo');
+
     // Guards the dev-scope blind spot documented in
     // docs/features.md#known-limitations: this channel must only ever
     // request `state: 'open'` alerts, never fold in `auto_dismissed` ones.

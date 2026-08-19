@@ -79,7 +79,9 @@ export async function fetchRepoAdvisories(
     //
     // Deliberate scope, not an oversight: `state: 'open'` never sees an alert
     // GitHub's own "auto-triage rules" already dismissed (state=auto_dismissed).
-    // That preset is ON by default for public repos and dismisses low-impact
+    // That preset is ON by default for public repos (GitHub's documented
+    // default; no settings-read API exists to confirm any one repo's actual
+    // auto-triage configuration) and dismisses low-impact
     // findings scoped to devDependencies — so a dev-scope advisory can be
     // invisible here on one repo and fully `open` on another private repo with
     // the same dependency, purely because of visibility, not code health.
