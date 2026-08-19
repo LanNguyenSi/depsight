@@ -15,24 +15,35 @@ A complete list of what depsight does today, beyond the headline value props in 
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
   development-scoped dependencies" auto-triage preset is **on by default for
-  public repos** and **opt-in for private repos**; an alert it dismisses is
-  never `open`, so it never reaches depsight's counts, risk score, or UI —
-  not marked, not tiered, simply absent. This is a deliberate choice, not a
-  bug to fix by counting `auto_dismissed` the same as `open`: GitHub's own
-  classification already distinguishes "low impact on a dev-only dependency"
-  from an actually open finding, and blending the two would misrepresent
-  what "open" means in the dashboard.
+  public repos** and **opt-in for private repos** (no settings-read API
+  exists to confirm a specific repo's configuration; this is GitHub's
+  documented default, not something verified per repo). An alert it
+  dismisses is never `open`, so the Dependabot channel never returns it —
+  not marked, not tiered, simply absent from that channel. This is a
+  deliberate choice, not a bug to fix by counting `auto_dismissed` the same
+  as `open`: GitHub's own classification already distinguishes "low impact
+  on a dev-only dependency" from an actually open finding, and blending the
+  two would misrepresent what "open" means in the dashboard.
   - Because the preset's default depends on repo **visibility**, not repo
     content, the same advisory can be `open` on a private repo and
     `auto_dismissed` on a public one with the identical dependency — a
     difference in depsight's counts between two repos can reflect that
     default, not a difference in actual exposure.
-  - depsight's independent OSV channel (queries the lockfile directly,
-    dev and prod) is not a verified backstop for this gap: it also missed
-    the historical case documented in the cve-sweep skill.
-  - Cross-check per repo: `gh api "repos/<owner>/<repo>/dependabot/alerts?state=auto_dismissed&per_page=100"`.
-    See the cve-sweep skill (`.claude/skills/cve-sweep/SKILL.md`) for the
-    full two-channel discovery procedure and each channel's blind spots.
+  - depsight's independent OSV channel queries the UNION of DIRECT manifest
+    dependencies (`dependencies` + `devDependencies`) on lockfile-resolved
+    versions, dev and prod alike (`lib/manifest-discovery.ts`). It is not a
+    backstop for a TRANSITIVE-only package (outside that query set, e.g. a
+    dependency pulled in only via another devDependency) — that gap is
+    structural, not a bug. For a DIRECT dependency, OSV remains in scope and
+    a matching advisory can still reach the merged counts
+    (`lib/cve/merge.ts`) even when Dependabot auto-dismissed the same
+    finding.
+  - Cross-check per repo: `gh api --paginate "repos/<owner>/<repo>/dependabot/alerts?state=auto_dismissed&per_page=100"`.
+    An empty result is the common case (as of 2026-08-19, only 2 of 22 fleet
+    repos with Dependabot data carry any `auto_dismissed` alert at all) and
+    does not by itself mean this blind spot doesn't apply to that repo. See
+    the cve-sweep skill (`.claude/skills/cve-sweep/SKILL.md`) for the full
+    two-channel discovery procedure and each channel's blind spots.
 
 ## Reporting and export
 

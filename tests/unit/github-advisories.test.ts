@@ -47,15 +47,21 @@ describe('fetchRepoAdvisories', () => {
     // Generate 150 fake alerts to confirm the old per_page=100 hard-cap is gone
     const fakeAlerts = Array.from({ length: 150 }, (_, i) => makeAlert(i + 1));
 
-    vi.mocked(createGitHubClient).mockReturnValue(
-      makeMockOctokit(() => Promise.resolve(fakeAlerts)) as ReturnType<typeof createGitHubClient>,
-    );
+    const octokit = makeMockOctokit(() => Promise.resolve(fakeAlerts));
+    vi.mocked(createGitHubClient).mockReturnValue(octokit as ReturnType<typeof createGitHubClient>);
 
     const result = await fetchRepoAdvisories('token', 'owner', 'repo');
 
     expect(result.dependabotDisabled).toBeFalsy();
     expect(result.advisories).toHaveLength(150);
     expect(result.counts.total).toBe(150);
+    // Guards the dev-scope blind spot documented in
+    // docs/features.md#known-limitations: this channel must only ever
+    // request `state: 'open'` alerts, never fold in `auto_dismissed` ones.
+    expect(octokit.paginate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ state: 'open' }),
+    );
   });
 
   it('returns dependabotDisabled=true when paginate rejects with status 404', async () => {
