@@ -9,6 +9,31 @@ A complete list of what depsight does today, beyond the headline value props in 
 - **Dependency age tracking** and outdated alerts.
 - **Multi-ecosystem support:** npm, Python, Go, Java, Rust, PHP.
 
+## Known limitations
+
+- **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
+  The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
+  `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
+  development-scoped dependencies" auto-triage preset is **on by default for
+  public repos** and **opt-in for private repos**; an alert it dismisses is
+  never `open`, so it never reaches depsight's counts, risk score, or UI —
+  not marked, not tiered, simply absent. This is a deliberate choice, not a
+  bug to fix by counting `auto_dismissed` the same as `open`: GitHub's own
+  classification already distinguishes "low impact on a dev-only dependency"
+  from an actually open finding, and blending the two would misrepresent
+  what "open" means in the dashboard.
+  - Because the preset's default depends on repo **visibility**, not repo
+    content, the same advisory can be `open` on a private repo and
+    `auto_dismissed` on a public one with the identical dependency — a
+    difference in depsight's counts between two repos can reflect that
+    default, not a difference in actual exposure.
+  - depsight's independent OSV channel (queries the lockfile directly,
+    dev and prod) is not a verified backstop for this gap: it also missed
+    the historical case documented in the cve-sweep skill.
+  - Cross-check per repo: `gh api "repos/<owner>/<repo>/dependabot/alerts?state=auto_dismissed&per_page=100"`.
+    See the cve-sweep skill (`.claude/skills/cve-sweep/SKILL.md`) for the
+    full two-channel discovery procedure and each channel's blind spots.
+
 ## Reporting and export
 
 - **SBOM export** in CycloneDX 1.4 format.
