@@ -75,7 +75,20 @@ export async function fetchRepoAdvisories(
   const advisories: GitHubAdvisory[] = [];
 
   try {
-    // Primary: GitHub Dependabot Alerts — paginate to fetch all open alerts
+    // Primary: GitHub Dependabot Alerts — paginate to fetch all open alerts.
+    //
+    // Deliberate scope, not an oversight: `state: 'open'` never sees an alert
+    // GitHub's own "auto-triage rules" already dismissed (state=auto_dismissed).
+    // That preset is ON by default for public repos (GitHub's documented
+    // default; no settings-read API exists to confirm any one repo's actual
+    // auto-triage configuration) and dismisses low-impact
+    // findings scoped to devDependencies — so a dev-scope advisory can be
+    // invisible here on one repo and fully `open` on another private repo with
+    // the same dependency, purely because of visibility, not code health.
+    // depsight does not fold auto_dismissed into these counts (see
+    // docs/features.md#known-limitations and the cve-sweep skill's dev-scope
+    // cross-check) rather than silently treating "GitHub judged this low-impact
+    // for a dev-only dependency" the same as "open".
     const alerts = await octokit.paginate(octokit.rest.dependabot.listAlertsForRepo, {
       owner,
       repo,
