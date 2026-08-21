@@ -14,7 +14,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 | `depsight_get_license_report` | Per-package license compatibility + policy violations |
 | `depsight_get_deps` | Dependency-age analysis (up-to-date / outdated / major-behind / deprecated) |
 | `depsight_get_history` | Time series of CVE scan results for a repo |
-| `depsight_evaluate_policy` | Run enabled policies against a specific scan (read-only) |
+| `depsight_evaluate_policy` | Run enabled policies against a specific scan |
 | `depsight_ci_analytics` | GitHub Actions CI insights — per-repo (with `repoId`) or cross-repo (without) |
 | `depsight_get_sbom` | Export the CycloneDX 1.4 SBOM for a repo (requires a completed scan) |
 | `depsight_list_policies` | List the user's configured dependency policies |

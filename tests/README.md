@@ -4,7 +4,7 @@
 
 ```
 tests/
-├── unit/         # Unit tests for lib/, API routes, components
+├── unit/         # Unit tests for lib/ and API routes (no component tests yet)
 └── policy/       # Policy evaluation tests
 ```
 
