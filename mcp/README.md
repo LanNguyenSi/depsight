@@ -16,8 +16,11 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 | `depsight_get_history` | Time series of CVE scan results for a repo |
 | `depsight_evaluate_policy` | Run enabled policies against a specific scan (read-only) |
 | `depsight_ci_analytics` | GitHub Actions CI insights — per-repo (with `repoId`) or cross-repo (without) |
+| `depsight_get_sbom` | Export the CycloneDX 1.4 SBOM for a repo (requires a completed scan) |
+| `depsight_list_policies` | List the user's configured dependency policies |
+| `depsight_rescan` | Trigger a synchronous CVE scan for a tracked repository (the one write tool) |
 
-All tools are **read-only** in v1. Scan triggers, webhook management, and policy mutation are not exposed.
+All tools are **read-only** except `depsight_rescan`, which triggers a CVE scan for a tracked repository. Webhook management and policy mutation are not exposed.
 
 ## Prerequisites
 
@@ -106,7 +109,7 @@ HTTP errors carry the upstream status code and response body so you can tell a 4
 
 ## Scope / limitations
 
-- Read-only. v1 intentionally omits write operations (scan triggers, policy mutation, Slack config).
+- Read-only except `depsight_rescan` (scan trigger). v1 intentionally omits the other write operations (webhook management, policy mutation, Slack config).
 - No per-tool ACL. A token with the `dsat_` prefix can call any read tool for its user's data.
 - No pagination beyond what the underlying REST endpoints already expose. Very large repos may produce large JSON responses.
 - Tokens never expire automatically. Operators must rotate manually.

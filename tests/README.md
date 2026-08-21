@@ -4,23 +4,20 @@
 
 ```
 tests/
-├── unit/         # Unit tests for lib/, components/
-├── integration/  # API route tests
-└── e2e/          # End-to-end tests (Playwright)
+├── unit/         # Unit tests for lib/, API routes, components
+└── policy/       # Policy evaluation tests
 ```
 
 ## Running Tests
 
 ```bash
-# Unit + Integration tests (to be added in Wave 2-3)
-npm test
-
-# E2E tests (to be added in Wave 4)
-npm run test:e2e
+npm test              # full suite (vitest)
+npm run test:watch    # watch mode
+npm run test:coverage # with coverage
 ```
 
 ## Current Status
 
 - ✅ CI pipeline configured (.github/workflows/ci.yml)
-- ⏳ Test framework setup (Task 013 - Wave 4)
-- ⏳ Test coverage baseline (Task 013 - Wave 4)
+- ✅ Test framework (vitest; 60+ test files under tests/)
+- ⏳ E2E tests (no Playwright setup and no `test:e2e` script yet)
