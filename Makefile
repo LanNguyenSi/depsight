@@ -10,7 +10,7 @@ help: ## Show this help message
 
 # ── Development (Docker) ────────────────────────────────────────────
 
-dev: ## Start dev environment (installs deps, migrates DB, starts server)
+dev: ## Start dev environment (installs deps, pushes DB schema, starts server)
 	docker compose -f docker-compose.dev.yml up --build
 
 dev-up: ## Start dev environment in background

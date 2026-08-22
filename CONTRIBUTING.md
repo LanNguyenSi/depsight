@@ -20,7 +20,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npm test
    ```
 
-4. For Prisma schema changes, generate a migration and check it in alongside the schema edit.
+4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `prisma db push` (no migrations directory).
 5. Open the PR with a clear summary, motivation, and test plan.
 
 ## Dev Setup
@@ -30,7 +30,7 @@ git clone https://github.com/LanNguyenSi/depsight.git
 cd depsight
 npm install
 docker compose -f docker-compose.dev.yml up   # Postgres
-npx prisma migrate dev
+npx prisma db push
 npm run dev
 ```
 
