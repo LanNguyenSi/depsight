@@ -20,6 +20,11 @@ const eslintConfig = [
       "**/build/**",
       "coverage/**",
       "prisma/migrations/**",
+      // Next.js-generated, gitignored, and rewritten by every `next build`
+      // (adds a `.next/types/routes.d.ts` triple-slash reference that
+      // @typescript-eslint/triple-slash-reference otherwise flags). Not
+      // meant to be edited or linted; see next-env.d.ts's own header.
+      "next-env.d.ts",
     ],
   },
 ];
