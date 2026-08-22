@@ -28,7 +28,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
 ```bash
 git clone https://github.com/LanNguyenSi/depsight.git
 cd depsight
-docker compose -f docker-compose.dev.yml up
+docker compose -f docker-compose.dev.yml up   # or: make dev (adds --build)
 ```
 
 The `app` container's entrypoint (`docker/entrypoint.dev.sh`) already runs
@@ -37,9 +37,9 @@ The `app` container's entrypoint (`docker/entrypoint.dev.sh`) already runs
 step is needed for this flow. A host-side `npx prisma db push` is only
 needed if you run Prisma commands directly against Postgres from the host
 (outside the `app` container); in that case set `DATABASE_URL` in `.env` to
-match the `db` service's credentials (`postgresql://dev:dev@localhost:5432/depsight_dev`),
-not the `.env.example` default, which documents the production-style
-credentials used by `docker-compose.yml`/`docker-compose.traefik.yml`.
+match the `db` service's credentials (`postgresql://dev:dev@localhost:5432/depsight_dev`).
+The `.env.example` default is a production-style placeholder and matches
+neither the dev compose credentials nor the other compose files.
 
 ## Style
 
