@@ -14,3 +14,4 @@ __pycache__/
 *.pyc
 *.tsbuildinfo
 coverage/
+next-env.d.ts
