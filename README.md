@@ -11,7 +11,7 @@ GitHub-connected security dashboard: CVEs, licenses, and dep health, self-hosted
 ```bash
 git clone https://github.com/LanNguyenSi/depsight.git
 cd depsight
-make dev          # docker compose up: app + Postgres, runs migrations, starts dev server
+make dev          # docker compose up: app + Postgres, pushes the DB schema, starts dev server
 ```
 
 Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets.
@@ -42,7 +42,6 @@ For the broader operational picture beyond security, see [agent-ops-dashboard](h
 ## Roadmap
 
 - [ ] Improved CVE auto-triage and severity override rules
-- [ ] Scheduled scan support (cron-based rescans)
 - [ ] Expanded ecosystem coverage (Ruby, .NET)
 - [ ] Dashboard widgets and customizable views
 - [ ] Team-level access controls and role management

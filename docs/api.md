@@ -22,4 +22,4 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 
 ## MCP server
 
-For agent access, depsight ships an MCP server in [`mcp/`](../mcp/README.md) that exposes read-only queries (CVEs, licenses, deps, policies, CI analytics) to Claude and other MCP-capable clients.
+For agent access, depsight ships an MCP server in [`mcp/`](../mcp/README.md) that exposes queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-trigger tool to Claude and other MCP-capable clients; read-only apart from the scan trigger.
