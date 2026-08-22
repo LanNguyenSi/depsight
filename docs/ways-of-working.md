@@ -12,7 +12,7 @@
 ```bash
 npm run dev          # Start dev server (port 3000)
 npx prisma studio    # Database GUI
-npx prisma migrate dev --name <desc>  # New migration
+npm run db:push      # Push schema changes (no migrations directory)
 ```
 
 ## Deployment

@@ -42,7 +42,6 @@ For the broader operational picture beyond security, see [agent-ops-dashboard](h
 ## Roadmap
 
 - [ ] Improved CVE auto-triage and severity override rules
-- [ ] Scheduled scan support (cron-based rescans)
 - [ ] Expanded ecosystem coverage (Ruby, .NET)
 - [ ] Dashboard widgets and customizable views
 - [ ] Team-level access controls and role management

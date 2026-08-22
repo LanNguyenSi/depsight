@@ -68,7 +68,7 @@ Workflow fail rates, build times, flaky-job detection. Powered by the companion 
 
 ## MCP server
 
-Read-only queries (CVEs, licenses, deps, policies, CI analytics) exposed to Claude and other agents via [`mcp/`](../mcp/README.md).
+Queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-trigger tool exposed to Claude and other agents via [`mcp/`](../mcp/README.md).
 
 ## Settings
 

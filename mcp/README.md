@@ -92,7 +92,7 @@ printf '%s\n' \
   | DEPSIGHT_URL=http://localhost:3000 DEPSIGHT_API_TOKEN=dsat_... node dist/index.js
 ```
 
-Should print a JSON-RPC response listing the 8 tools, then a second response with the user's GitHub repos. In Claude Code, ask *"list my depsight repos with critical CVEs"* — the agent should call `depsight_list_repos` then `depsight_get_cves` with `minSeverity: "CRITICAL"` per repo.
+Should print a JSON-RPC response listing the 11 tools, then a second response with the user's GitHub repos. In Claude Code, ask *"list my depsight repos with critical CVEs"* — the agent should call `depsight_list_repos` then `depsight_get_cves` with `minSeverity: "CRITICAL"` per repo.
 
 ## Error handling
 

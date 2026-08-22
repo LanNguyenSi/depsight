@@ -19,7 +19,7 @@ depsight is a full-stack Next.js application with the App Router, backed by Post
 | API | `app/api/` | REST endpoints |
 | Components | `components/` | Reusable UI |
 | Library | `lib/` | Business logic, auth, utilities |
-| Database | `prisma/` | Schema, migrations |
+| Database | `prisma/` | Schema (managed via `prisma db push`; no migrations directory) |
 
 ## Project structure
 
