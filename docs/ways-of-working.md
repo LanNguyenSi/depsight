@@ -2,7 +2,7 @@
 
 ## Git Workflow
 
-1. `main` branch is production
+1. `master` branch is production
 2. Feature branches: `feat/<task-id>-<short-name>`
 3. PRs reviewed before merge
 4. Conventional commits: `feat:`, `fix:`, `docs:`, `chore:`
