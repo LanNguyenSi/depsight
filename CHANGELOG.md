@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **cve-sweep skill reduced to the depsight layer (2.0.0):** the skill now
+  covers only what applies to every depsight user: MCP discovery
+  (`depsight_get_overview`, `depsight_get_cves`), response shapes, and both
+  channels' structural blind spots (Dependabot dev-scope auto-dismissal, OSV's
+  direct-dependency-only query set) as mechanisms.
+
+### Removed
+
+- Operating-layer content (clone paths, token storage, branch/PR conventions,
+  governance/routing, per-machine toolchain pinning, sweep history) from the
+  cve-sweep skill: it now belongs in the consuming workspace's own skill
+  layer, not in depsight's repo.
+- The `verify-toolchain-forms.sh` script from the cve-sweep skill directory;
+  toolchain verification is now the consuming workspace's concern.
+- The detailed lockfile remediation procedure from the skill body; it now
+  points to an external reference at
+  https://github.com/LanNguyenSi/agent-dx/blob/master/packages/agentic-coding-playbook/references/npm-lockfile-cve-remediation.md
+
 ## [0.5.1] - 2026-06-25
 
 **Headline: CVEs are now matched against the resolved lockfile version, not the manifest floor.** A scanner-correctness pass closes the gap between the version a manifest declares as a lower bound and the version actually locked, for both npm and Python projects. depsight is deployed from `master`; this tag is deploy provenance.

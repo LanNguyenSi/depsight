@@ -39,11 +39,10 @@ A complete list of what depsight does today, beyond the headline value props in 
     (`lib/cve/merge.ts`) even when Dependabot auto-dismissed the same
     finding.
   - Cross-check per repo: `gh api --paginate "repos/<owner>/<repo>/dependabot/alerts?state=auto_dismissed&per_page=100"`.
-    An empty result is the common case (as of 2026-08-19, only 2 of the 24
-    fleet repos returning Dependabot data carry any `auto_dismissed` alert) and
-    does not by itself mean this blind spot doesn't apply to that repo. See
-    the cve-sweep skill (`.claude/skills/cve-sweep/SKILL.md`) for the full
-    two-channel discovery procedure and each channel's blind spots.
+    An empty result is the common case and does not by itself mean the blind
+    spot does not apply to that repo. See the cve-sweep skill
+    (`.claude/skills/cve-sweep/SKILL.md`) for the full two-channel discovery
+    procedure and each channel's blind spots.
 
 ## Reporting and export
 
