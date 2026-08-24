@@ -139,4 +139,4 @@ The workflow checks `mcp/package.json` version against the tag, builds, and runs
 `npm publish --access public --provenance`. Publishing is tokenless via npm
 Trusted Publishing (OIDC): the package needs a Trusted Publisher entry on
 npmjs.com (repo `LanNguyenSi/depsight`, workflow `publish-npm.yml`; operator
-one-time setup) — no `NPM_TOKEN` secret is required.
+one-time setup); no `NPM_TOKEN` secret is required.
