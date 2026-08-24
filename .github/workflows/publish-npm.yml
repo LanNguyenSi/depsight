@@ -9,8 +9,9 @@ name: Publish MCP to npm
 #   2. Commit, then push a matching tag: `git tag depsight-mcp-v0.2.0 && git push origin depsight-mcp-v0.2.0`.
 # The tag suffix must equal mcp/package.json version or the job fails the version check.
 #
-# Prerequisite (operator, one-time): the `@opentriologue` npm org must exist and an
-# automation token with publish rights to it must be stored as the repo secret NPM_TOKEN.
+# Prerequisite (operator, one-time): the `@opentriologue` npm org must exist and the
+# package needs a Trusted Publisher entry on npmjs.com (repo LanNguyenSi/depsight,
+# workflow publish-npm.yml) — publishing is tokenless via OIDC, no NPM_TOKEN secret.
 
 on:
   push:
@@ -54,7 +55,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      # npm Trusted Publishing (OIDC) needs npm >= 11.5.1; node 22 bundles
+      # npm 10, so upgrade right before the publish step (wave standard:
+      # install/build run under the node-bundled npm). Auth comes from the
+      # GitHub OIDC token (id-token: write above) matched against the
+      # package's Trusted Publisher entry on npmjs.com (repo
+      # LanNguyenSi/depsight, workflow publish-npm.yml) — no NPM_TOKEN.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@11
+
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
