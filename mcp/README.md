@@ -136,5 +136,7 @@ git push origin depsight-mcp-v0.2.1
 ```
 
 The workflow checks `mcp/package.json` version against the tag, builds, and runs
-`npm publish --access public --provenance`. It requires a repo secret `NPM_TOKEN`
-with publish rights to the `@opentriologue` npm org (operator one-time setup).
+`npm publish --access public --provenance`. Publishing is tokenless via npm
+Trusted Publishing (OIDC): the package needs a Trusted Publisher entry on
+npmjs.com (repo `LanNguyenSi/depsight`, workflow `publish-npm.yml`; operator
+one-time setup) — no `NPM_TOKEN` secret is required.
