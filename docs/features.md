@@ -61,6 +61,10 @@ A complete list of what depsight does today, beyond the headline value props in 
 
 Custom CVE and license rules: define what severity / license combinations are allowed, denied, or require a waiver. See the `/api/policies` endpoint in [docs/api.md](api.md).
 
+Supported policy types are `LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY` and `DEPENDENCY_MAX_AGE` (`lib/policy/engine.ts`). Every type is evaluated per scan against the licenses, advisories or dependency ages of that scan.
+
+Known gap: no policy type expresses a per-package minimum version (a floor such as "package X must resolve to at least version Y"). Fleet-wide version floors after an advisory therefore still need a manual sweep; the scan data already stores each dependency's installed version, so a `DEPENDENCY_MIN_VERSION` type is the natural extension and is tracked as a feature task.
+
 ## CI Health
 
 Workflow fail rates, build times, flaky-job detection. Powered by the companion [ci-insights](https://github.com/LanNguyenSi/ci-insights) service. See the [CI Health setup](configuration.md#ci-health-ci-insights-integration) section for how to wire it up.
