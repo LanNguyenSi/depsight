@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { listPolicies, createPolicy } from '@/lib/policy/service';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 
@@ -7,19 +7,19 @@ export const dynamic = 'force-dynamic';
 
 // GET /api/policies — list user's policies
 export async function GET() {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const policies = await listPolicies(session.user.id);
+  const policies = await listPolicies(user.id);
   return NextResponse.json({ policies });
 }
 
 // POST /api/policies — create a new policy
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'rule must be an object' }, { status: 400 });
   }
 
-  const policy = await createPolicy(session.user.id, {
+  const policy = await createPolicy(user.id, {
     name: name.trim(),
     type: type as PolicyType,
     rule: rule as Prisma.InputJsonValue,
