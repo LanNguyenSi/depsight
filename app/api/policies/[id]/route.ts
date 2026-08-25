@@ -5,6 +5,13 @@ import { Prisma, PolicyType, Severity } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
+// Policy CRUD is intentionally reachable via a dsat_ Bearer token
+// (resolveRequestUser(), not auth()) on every method, including the write
+// operations PUT/DELETE: headless agents such as the MCP server need to
+// manage policies without a browser session. A dsat_ token carries the
+// same authority as the user it belongs to, so this only widens what an
+// already-valid token can do, not who can act.
+
 interface RouteParams {
   params: Promise<{ id: string }>;
 }

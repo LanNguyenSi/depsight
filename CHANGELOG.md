@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   points to an external reference at
   https://github.com/LanNguyenSi/agent-dx/blob/master/packages/agentic-coding-playbook/references/npm-lockfile-cve-remediation.md
 
+### Fixed
+
+- **`/api/policies` and `/api/policies/[id]` accept a dsat_ Bearer token**: the policy CRUD routes were still session-only (`auth()`), so headless callers such as the MCP server got 401s. They now resolve the acting user via `resolveRequestUser()`, matching the rest of the API.
+
 ## [0.5.1] - 2026-06-25
 
 **Headline: CVEs are now matched against the resolved lockfile version, not the manifest floor.** A scanner-correctness pass closes the gap between the version a manifest declares as a lower bound and the version actually locked, for both npm and Python projects. depsight is deployed from `master`; this tag is deploy provenance.
