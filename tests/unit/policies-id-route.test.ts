@@ -246,7 +246,7 @@ describe('PUT /api/policies/[id]', () => {
   });
 
   it('(10) accepts all valid PolicyType values without 400', async () => {
-    const validTypes = ['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE'];
+    const validTypes = ['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE', 'DEPENDENCY_MIN_VERSION'];
     for (const type of validTypes) {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });

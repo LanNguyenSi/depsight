@@ -45,6 +45,24 @@ function isDependencyMinVersionRule(
   return typeof pkg === 'string' && pkg.length > 0 && typeof minVersion === 'string' && minVersion.length > 0;
 }
 
+// Validates a DEPENDENCY_MIN_VERSION rule payload at the API boundary (create/update),
+// so a non-semver floor is rejected before it can silently disable the policy at
+// evaluation time (see isDependencyMinVersionRule / the `!semver.valid` guard below).
+// Returns an error message string, or null when the rule is valid.
+export function validateDependencyMinVersionRule(rule: unknown): string | null {
+  if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+    return 'rule must be an object';
+  }
+  const { package: pkg, minVersion } = rule as Record<string, unknown>;
+  if (typeof pkg !== 'string' || !pkg.trim()) {
+    return 'package is required';
+  }
+  if (typeof minVersion !== 'string' || !semver.valid(minVersion)) {
+    return 'minVersion must be a valid semver version';
+  }
+  return null;
+}
+
 export async function evaluatePolicies(
   userId: string,
   scanId: string,
@@ -176,8 +194,17 @@ export async function evaluatePolicies(
             continue;
           }
           if (semver.lt(dep.installedVersion, minVersion)) {
-            affected.push(`${dep.name}@${dep.installedVersion} (Floor: ${minVersion})`);
+            affected.push(`${dep.name}@${dep.installedVersion} (Mindestversion: ${minVersion})`);
           }
+        }
+
+        if (unparseableCount > 0) {
+          // Visible even when affected.length is 0: a policy that skips every
+          // installed version because it can't be parsed as semver still reports
+          // clean, and that must not happen without a trace.
+          console.warn(
+            `[policy] DEPENDENCY_MIN_VERSION policy "${policy.name}" (${policy.id}) skipped ${unparseableCount} unparseable installed version(s) of ${targetPackage}`,
+          );
         }
 
         if (affected.length > 0) {

@@ -208,14 +208,84 @@ describe('POST /api/policies', () => {
   });
 
   it('(8) accepts all valid PolicyType values', async () => {
-    const validTypes = ['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE'];
+    const validTypes = ['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE', 'DEPENDENCY_MIN_VERSION'];
     for (const type of validTypes) {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       createPolicyMock.mockResolvedValue({ id: 'pol-x', name: 'P', type, severity: 'HIGH', enabled: true });
 
-      const res = await POST(makePostRequest({ ...validPolicyBody(), type }));
+      // DEPENDENCY_MIN_VERSION rules are shape-validated (see the (9x) block below),
+      // so this generic rule only applies to the other types.
+      const rule = type === 'DEPENDENCY_MIN_VERSION'
+        ? { package: 'postcss', minVersion: '8.5.18' }
+        : validPolicyBody().rule;
+
+      const res = await POST(makePostRequest({ ...validPolicyBody(), type, rule }));
       expect(res.status).toBe(201);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // (9x) DEPENDENCY_MIN_VERSION rule validation
+  // ---------------------------------------------------------------------------
+  it('(9a) returns 400 when DEPENDENCY_MIN_VERSION minVersion is not valid semver', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: 'postcss', minVersion: '8.5' },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('minVersion must be a valid semver version');
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(9b) returns 201 when DEPENDENCY_MIN_VERSION minVersion is valid semver', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    createPolicyMock.mockResolvedValue({
+      id: 'pol-new', name: 'Floor postcss', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: 'postcss', minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(createPolicyMock).toHaveBeenCalled();
+  });
+
+  it('(9c) returns 400 when DEPENDENCY_MIN_VERSION package is missing', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package is required');
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(9d) returns 400 when DEPENDENCY_MIN_VERSION package is an empty string', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: '  ', minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package is required');
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 
   it('(8) accepts all valid Severity values', async () => {

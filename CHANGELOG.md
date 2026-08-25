@@ -14,7 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   evaluator compares each matching dependency's installed version from the
   scan against the floor with semver and reports a violation per package
   below it; installed versions that are not valid semver are skipped and
-  counted as unparseable rather than reported as a violation.
+  counted as unparseable rather than reported as a violation. `minVersion`
+  is validated as a real semver version (and `package` as a non-empty
+  string) when a `DEPENDENCY_MIN_VERSION` policy is created via
+  `POST /api/policies`, or updated via `PUT /api/policies/[id]` when that
+  request itself sets both `type` and `rule`, so a malformed floor can no
+  longer be saved as an enabled policy that silently checks nothing. The
+  evaluator now also logs a warning when it skips unparseable installed
+  versions, even when that skip leaves no violation to report.
 
 ### Changed
 

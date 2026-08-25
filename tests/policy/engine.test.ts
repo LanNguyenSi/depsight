@@ -1,6 +1,6 @@
 /**
  * Unit tests for lib/policy/engine.ts — evaluatePolicies()
- * Mocks Prisma to test all 4 PolicyTypes in isolation.
+ * Mocks Prisma to test all 5 PolicyTypes in isolation.
  */
 
 import { vi } from 'vitest';
@@ -291,6 +291,121 @@ describe('evaluatePolicies()', () => {
     const violations = await evaluatePolicies('user-1', 'scan-1');
 
     expect(violations).toHaveLength(0);
+  });
+
+  it('DEPENDENCY_MIN_VERSION — an invalid (non-semver) floor reports no violation and does not throw', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'postcss', installedVersion: '1.0.0', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+
+    await expect(evaluatePolicies('user-1', 'scan-1')).resolves.toEqual([]);
+  });
+
+  it('DEPENDENCY_MIN_VERSION — matches the dependency name exactly, not as a substring', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          // Name merely contains the target package name; must not be treated as a match.
+          { id: 'd1', name: 'postcss-selector-parser', installedVersion: '1.0.0', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(0);
+  });
+
+  it('DEPENDENCY_MIN_VERSION — a malformed rule is skipped without throwing, and a second valid policy in the same run still reports', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      {
+        // Built directly rather than via makePolicy(): that helper's
+        // `overrides.rule ?? {}` default would silently turn a `null` rule
+        // back into `{}`, which the separate `!semver.valid(minVersion)`
+        // guard already catches on its own (minVersion would be undefined)
+        // and would not isolate the isDependencyMinVersionRule guard's
+        // removal. A rule that is not even an object is what does that:
+        // destructuring `{package, minVersion}` out of `null` throws, while
+        // isDependencyMinVersionRule(null) correctly returns false first.
+        id: 'policy-broken',
+        userId: 'user-1',
+        name: 'Broken Policy',
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        severity: Severity.HIGH,
+        rule: null,
+        enabled: true,
+        createdAt: new Date(),
+      },
+      makePolicy({
+        id: 'policy-valid',
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'postcss', installedVersion: '1.0.0', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+
+    let violations: Awaited<ReturnType<typeof evaluatePolicies>> = [];
+    await expect(
+      (async () => {
+        violations = await evaluatePolicies('user-1', 'scan-1');
+      })(),
+    ).resolves.not.toThrow();
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].policyId).toBe('policy-valid');
+    expect(violations[0].affectedPackages[0]).toContain('postcss@1.0.0');
+  });
+
+  it('DEPENDENCY_MIN_VERSION — warns visibly when unparseable installs are skipped, even without a violation', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'leftpad', minVersion: '1.0.0' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'leftpad', installedVersion: 'workspace:*', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(0);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('leftpad');
+    warnSpy.mockRestore();
   });
 
   it('disabled policies are skipped', async () => {

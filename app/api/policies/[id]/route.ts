@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getPolicyById, updatePolicy, deletePolicy } from '@/lib/policy/service';
+import { validateDependencyMinVersionRule } from '@/lib/policy/engine';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
@@ -76,6 +77,16 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'rule must be an object' }, { status: 400 });
     }
     updateData.rule = body.rule as Prisma.InputJsonValue;
+  }
+  if (updateData.rule !== undefined && updateData.type === PolicyType.DEPENDENCY_MIN_VERSION) {
+    // Only validated when this PUT request itself sets both type and rule to
+    // DEPENDENCY_MIN_VERSION. A request that updates only `rule` on an already
+    // existing DEPENDENCY_MIN_VERSION policy (without resending `type`) is not
+    // covered here; see the implementer's open_questions for why.
+    const ruleError = validateDependencyMinVersionRule(updateData.rule);
+    if (ruleError) {
+      return NextResponse.json({ error: ruleError }, { status: 400 });
+    }
   }
   if (typeof body.enabled === 'boolean') {
     updateData.enabled = body.enabled;
