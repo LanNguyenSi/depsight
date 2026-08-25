@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`DEPENDENCY_MIN_VERSION` policy type:** expresses a per-package minimum
+  version floor (rule shape `{ package: string, minVersion: string }`). The
+  evaluator compares each matching dependency's installed version from the
+  scan against the floor with semver and reports a violation per package
+  below it; installed versions that are not valid semver are skipped and
+  counted as unparseable rather than reported as a violation. `minVersion`
+  is validated as a real semver version (and `package` as a non-empty
+  string, normalized by trimming) when a `DEPENDENCY_MIN_VERSION` policy is
+  created via `POST /api/policies`, or updated via `PUT /api/policies/[id]`
+  — whether that request sets `type` and `rule` together, sets only `rule`
+  on a policy that is already `DEPENDENCY_MIN_VERSION`, or sets only `type`
+  to `DEPENDENCY_MIN_VERSION` on a policy whose stored rule then has to
+  satisfy the same shape — so a malformed floor, or one left over from a
+  policy's previous type, can no longer be saved as an enabled policy that
+  silently checks nothing. Trimming the package name on the way in also
+  keeps it from silently drifting out of sync with the evaluator's exact
+  dependency-name match. The evaluator now also logs a warning when it
+  skips unparseable installed versions, even when that skip leaves no
+  violation to report.
+
 ### Changed
 
 - **cve-sweep skill reduced to the depsight layer (2.0.0):** the skill now
@@ -30,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **`/api/policies` and `/api/policies/[id]` accept a dsat_ Bearer token**: the policy CRUD routes were still session-only (`auth()`), so headless callers such as the MCP server got 401s. They now resolve the acting user via `resolveRequestUser()`, matching the rest of the API.
+- **`PUT /api/policies/[id]` now always persists the validated `DEPENDENCY_MIN_VERSION` rule**: the write-back was previously gated on the request itself sending `rule`, so flipping a policy's `type` to `DEPENDENCY_MIN_VERSION` without resending `rule` (validating the stored rule against the new type) validated the stored rule but never wrote its normalized form back. An unnormalized rule left over from a copy-paste (a padded package name) could survive that flip untouched and never match the evaluator's exact `d.name === targetPackage` lookup, reporting clean forever. The route now writes `result.rule` unconditionally whenever the effective type is `DEPENDENCY_MIN_VERSION`, so every write path for this policy type persists the same validated value.
+- **`DEPENDENCY_MIN_VERSION` package names now reject invisible characters and non-lowercase input** instead of silently storing them: zero-width characters (U+200B-U+200D, U+FEFF) survive `trim()` untouched, and npm package names are always lowercase, so a name like `PostCSS` or one carrying a zero-width character previously passed validation, got stored as-is, and never matched a real installed dependency name, reporting clean forever, the same failure class the existing trim was added to close. Both are now rejected with 400 (`package must not contain invisible characters` / `package must be a valid npm package name`) rather than silently accepted.
+- **Correction to two measurements cited when `DEPENDENCY_MIN_VERSION` shipped**: `vitest.config.ts` has no per-file coverage floor for `lib/policy/engine.ts`; the second gated file (alongside `app/api/policies/[id]/route.ts`) is `app/api/policies/route.ts`. And the `PolicyList.tsx` semver import change did not remove the client-side semver chunk, it shrank it (measured 26,022 to 9,416 bytes; `semver/valid` still pulls in `parse`/`SemVer`/`re`); `/policies` First Load JS went from 118 kB (`origin/master`) to 127 kB and back down to 122 kB, not to a state where the chunk is gone.
 
 ## [0.5.1] - 2026-06-25
 

@@ -195,6 +195,7 @@ enum PolicyType {
   LICENSE_ALLOW_ONLY
   CVE_MIN_SEVERITY
   DEPENDENCY_MAX_AGE
+  DEPENDENCY_MIN_VERSION
 }
 
 model WebhookConfig {

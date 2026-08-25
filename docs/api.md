@@ -13,7 +13,7 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `POST` | `/api/export` | Export CVE, license and dependency results as a zip archive (body: `{ repoId }`) |
 | `POST` | `/api/repos/sync` | Sync repositories from GitHub |
 | `GET` | `/api/policies` | List policy rules |
-| `POST` | `/api/policies` | Create or update a policy rule |
+| `POST` | `/api/policies` | Create or update a policy rule (`LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE`, `DEPENDENCY_MIN_VERSION`) |
 | `POST` | `/api/dependabot` | Enable Dependabot alerts for a repo (body: `{ repoId }`) |
 | `GET` | `/api/dependabot/check` | Check which repos have Dependabot disabled |
 | `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot across all repos |

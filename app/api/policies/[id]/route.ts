@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getPolicyById, updatePolicy, deletePolicy } from '@/lib/policy/service';
+import { validateDependencyMinVersionRule } from '@/lib/policy/engine';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
@@ -79,6 +80,56 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
   }
   if (typeof body.enabled === 'boolean') {
     updateData.enabled = body.enabled;
+  }
+
+  // A PUT can change `type` and `rule` independently, so validating a
+  // DEPENDENCY_MIN_VERSION rule needs the *effective* type and rule after
+  // this request applies, not just what this request happens to include.
+  // Two cases need the currently stored policy:
+  //   (a) this request sets only `rule`, on a policy that is ALREADY
+  //       DEPENDENCY_MIN_VERSION (type omitted): validate the new rule
+  //       against the stored type.
+  //   (b) this request sets `type` to DEPENDENCY_MIN_VERSION without
+  //       resending `rule`: validate the STORED rule, so a policy can't
+  //       flip into DEPENDENCY_MIN_VERSION while carrying an incompatible
+  //       rule shape left over from its previous type (which would then
+  //       fail isDependencyMinVersionRule at evaluation time and report
+  //       clean forever).
+  // When this request sets both `type` and `rule` together, neither fetch
+  // is needed: the new rule is validated directly, as before.
+  const needsStoredPolicy =
+    (updateData.rule !== undefined && updateData.type === undefined) ||
+    (updateData.type === PolicyType.DEPENDENCY_MIN_VERSION && updateData.rule === undefined);
+
+  let storedPolicy: Awaited<ReturnType<typeof getPolicyById>> | null = null;
+  if (needsStoredPolicy) {
+    storedPolicy = await getPolicyById(user.id, id);
+    if (!storedPolicy) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+  }
+
+  const effectiveType = updateData.type ?? storedPolicy?.type;
+  if (effectiveType === PolicyType.DEPENDENCY_MIN_VERSION) {
+    const ruleToValidate = updateData.rule ?? storedPolicy?.rule;
+    const result = validateDependencyMinVersionRule(ruleToValidate);
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    // Always write the *validated* rule back into updateData, not just when
+    // this request happened to send `rule` itself. Door (b) (`type` flips to
+    // DEPENDENCY_MIN_VERSION, `rule` omitted) validates the STORED rule, but
+    // that stored rule can still be un-normalized (padded package name from
+    // whatever wrote it originally). Without this unconditional assignment,
+    // updateData.rule stays undefined on that path, updatePolicy() leaves
+    // the stored rule untouched, and the padded name survives — the same
+    // bug validateDependencyMinVersionRule's trim was meant to close, just
+    // reopened by a write path that never read its normalized return value.
+    // Persisting result.rule unconditionally makes every write path for this
+    // policy type route through the validated value; on the paths that
+    // already sent a matching rule this is a no-op (identical to the
+    // previous behavior), so nothing else changes.
+    updateData.rule = result.rule as unknown as Prisma.InputJsonValue;
   }
 
   const policy = await updatePolicy(user.id, id, updateData);

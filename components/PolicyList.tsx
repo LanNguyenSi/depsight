@@ -1,11 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import semverValid from 'semver/functions/valid';
 import { useLocale } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 
-type PolicyType = 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE';
+type PolicyType = 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE' | 'DEPENDENCY_MIN_VERSION';
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 
 interface Policy {
@@ -28,6 +29,7 @@ function policyTypeLabel(type: PolicyType, t: Translations): string {
     case 'LICENSE_ALLOW_ONLY': return t['policy.type.licenseAllow'];
     case 'CVE_MIN_SEVERITY': return t['policy.type.cveSeverity'];
     case 'DEPENDENCY_MAX_AGE': return t['policy.type.maxAge'];
+    case 'DEPENDENCY_MIN_VERSION': return t['policy.type.minVersion'];
   }
 }
 
@@ -36,6 +38,7 @@ const POLICY_TYPE_STYLES: Record<PolicyType, string> = {
   LICENSE_ALLOW_ONLY: 'bg-emerald-950/50 text-emerald-400 border-emerald-900/50',
   CVE_MIN_SEVERITY: 'bg-orange-950/50 text-orange-400 border-orange-900/50',
   DEPENDENCY_MAX_AGE: 'bg-blue-950/50 text-blue-400 border-blue-900/50',
+  DEPENDENCY_MIN_VERSION: 'bg-purple-950/50 text-purple-400 border-purple-900/50',
 };
 
 const SEVERITY_STYLES: Record<Severity, string> = {
@@ -56,6 +59,8 @@ interface FormState {
   allowedLicenses: string;
   minSeverity: Severity;
   maxAgeDays: string;
+  minVersionPackage: string;
+  minVersion: string;
 }
 
 const DEFAULT_FORM: FormState = {
@@ -66,6 +71,8 @@ const DEFAULT_FORM: FormState = {
   allowedLicenses: '',
   minSeverity: 'HIGH',
   maxAgeDays: '365',
+  minVersionPackage: '',
+  minVersion: '',
 };
 
 function buildRule(form: FormState): Record<string, unknown> {
@@ -78,6 +85,8 @@ function buildRule(form: FormState): Record<string, unknown> {
       return { minSeverity: form.minSeverity };
     case 'DEPENDENCY_MAX_AGE':
       return { maxAgeDays: parseInt(form.maxAgeDays, 10) };
+    case 'DEPENDENCY_MIN_VERSION':
+      return { package: form.minVersionPackage.trim(), minVersion: form.minVersion.trim() };
   }
 }
 
@@ -121,6 +130,14 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
     if (!form.name.trim()) {
       setError(t['policy.form.required']);
       return;
+    }
+    if (form.type === 'DEPENDENCY_MIN_VERSION') {
+      const pkg = form.minVersionPackage.trim();
+      const minVersion = form.minVersion.trim();
+      if (!pkg || !semverValid(minVersion)) {
+        setError(t['policy.form.minVersionInvalid']);
+        return;
+      }
     }
 
     setSaving(true);
@@ -281,6 +298,31 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
                   placeholder="365"
                   className={inputCls}
                 />
+              </div>
+            )}
+
+            {form.type === 'DEPENDENCY_MIN_VERSION' && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>{t['policy.form.minVersionPackage']}</label>
+                  <input
+                    type="text"
+                    value={form.minVersionPackage}
+                    onChange={(e) => setForm((f) => ({ ...f, minVersionPackage: e.target.value }))}
+                    placeholder="postcss"
+                    className={`${inputCls} font-mono`}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>{t['policy.form.minVersion']}</label>
+                  <input
+                    type="text"
+                    value={form.minVersion}
+                    onChange={(e) => setForm((f) => ({ ...f, minVersion: e.target.value }))}
+                    placeholder="8.5.18"
+                    className={`${inputCls} font-mono`}
+                  />
+                </div>
               </div>
             )}
 

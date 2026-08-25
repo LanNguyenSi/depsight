@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { listPolicies, createPolicy } from '@/lib/policy/service';
+import { validateDependencyMinVersionRule } from '@/lib/policy/engine';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
@@ -53,10 +54,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'rule must be an object' }, { status: 400 });
   }
 
+  let ruleToPersist = rule as Prisma.InputJsonValue;
+  if (type === PolicyType.DEPENDENCY_MIN_VERSION) {
+    const result = validateDependencyMinVersionRule(rule);
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    ruleToPersist = result.rule as unknown as Prisma.InputJsonValue;
+  }
+
   const policy = await createPolicy(user.id, {
     name: name.trim(),
     type: type as PolicyType,
-    rule: rule as Prisma.InputJsonValue,
+    rule: ruleToPersist,
     severity: severity as Severity,
     enabled: typeof enabled === 'boolean' ? enabled : true,
   });
