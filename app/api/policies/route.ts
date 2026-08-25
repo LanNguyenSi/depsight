@@ -53,17 +53,20 @@ export async function POST(req: NextRequest) {
   if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
     return NextResponse.json({ error: 'rule must be an object' }, { status: 400 });
   }
+
+  let ruleToPersist = rule as Prisma.InputJsonValue;
   if (type === PolicyType.DEPENDENCY_MIN_VERSION) {
-    const ruleError = validateDependencyMinVersionRule(rule);
-    if (ruleError) {
-      return NextResponse.json({ error: ruleError }, { status: 400 });
+    const result = validateDependencyMinVersionRule(rule);
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
+    ruleToPersist = result.rule as unknown as Prisma.InputJsonValue;
   }
 
   const policy = await createPolicy(user.id, {
     name: name.trim(),
     type: type as PolicyType,
-    rule: rule as Prisma.InputJsonValue,
+    rule: ruleToPersist,
     severity: severity as Severity,
     enabled: typeof enabled === 'boolean' ? enabled : true,
   });

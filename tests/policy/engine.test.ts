@@ -462,3 +462,36 @@ describe('evaluatePolicies()', () => {
     expect(violations).toHaveLength(0);
   });
 });
+
+describe('validateDependencyMinVersionRule()', () => {
+  it('normalizes a padded package name so it can never desync from the evaluator\'s exact-match lookup', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    const result = validateDependencyMinVersionRule({ package: ' postcss\n', minVersion: '8.5.18' });
+
+    expect(result.error).toBeUndefined();
+    expect(result.rule).toEqual({ package: 'postcss', minVersion: '8.5.18' });
+  });
+
+  it('rejects a non-object rule', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    expect(validateDependencyMinVersionRule(null).error).toBe('rule must be an object');
+    expect(validateDependencyMinVersionRule('not-an-object').error).toBe('rule must be an object');
+    expect(validateDependencyMinVersionRule(['x']).error).toBe('rule must be an object');
+  });
+
+  it('rejects a missing or empty package', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    expect(validateDependencyMinVersionRule({ minVersion: '8.5.18' }).error).toBe('package is required');
+    expect(validateDependencyMinVersionRule({ package: '   ', minVersion: '8.5.18' }).error).toBe('package is required');
+  });
+
+  it('rejects a non-semver minVersion', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    expect(validateDependencyMinVersionRule({ package: 'postcss', minVersion: '8.5' }).error)
+      .toBe('minVersion must be a valid semver version');
+  });
+});

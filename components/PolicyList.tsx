@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import semver from 'semver';
+import semverValid from 'semver/functions/valid';
 import { useLocale } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
@@ -134,7 +134,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
     if (form.type === 'DEPENDENCY_MIN_VERSION') {
       const pkg = form.minVersionPackage.trim();
       const minVersion = form.minVersion.trim();
-      if (!pkg || !semver.valid(minVersion)) {
+      if (!pkg || !semverValid(minVersion)) {
         setError(t['policy.form.minVersionInvalid']);
         return;
       }

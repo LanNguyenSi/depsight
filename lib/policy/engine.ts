@@ -45,22 +45,44 @@ function isDependencyMinVersionRule(
   return typeof pkg === 'string' && pkg.length > 0 && typeof minVersion === 'string' && minVersion.length > 0;
 }
 
+export interface DependencyMinVersionRule {
+  package: string;
+  minVersion: string;
+}
+
+export type DependencyMinVersionRuleValidation =
+  | { error: string; rule?: undefined }
+  | { error?: undefined; rule: DependencyMinVersionRule };
+
 // Validates a DEPENDENCY_MIN_VERSION rule payload at the API boundary (create/update),
 // so a non-semver floor is rejected before it can silently disable the policy at
 // evaluation time (see isDependencyMinVersionRule / the `!semver.valid` guard below).
-// Returns an error message string, or null when the rule is valid.
-export function validateDependencyMinVersionRule(rule: unknown): string | null {
+// Also normalizes `package` (trims it) and returns that normalized rule: the
+// evaluator matches installs with a strict `d.name === targetPackage` (see
+// evaluatePolicies below), so a padded package name that made it into storage
+// untrimmed would never match anything and the policy would report clean
+// forever. Persisting the trimmed value here makes that failure mode
+// impossible regardless of what any particular client does.
+//
+// The "rule must be an object" branch is unreachable for callers that
+// already checked the request body's own shape (POST and PUT on the API
+// routes both reject a non-object `rule` before calling this). It stays
+// live for a caller validating a rule read back from storage rather than
+// from the current request body — see the PUT handler's "door (b)" case in
+// app/api/policies/[id]/route.ts, where nothing upstream has already
+// checked the stored value's shape.
+export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVersionRuleValidation {
   if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
-    return 'rule must be an object';
+    return { error: 'rule must be an object' };
   }
   const { package: pkg, minVersion } = rule as Record<string, unknown>;
   if (typeof pkg !== 'string' || !pkg.trim()) {
-    return 'package is required';
+    return { error: 'package is required' };
   }
   if (typeof minVersion !== 'string' || !semver.valid(minVersion)) {
-    return 'minVersion must be a valid semver version';
+    return { error: 'minVersion must be a valid semver version' };
   }
-  return null;
+  return { rule: { package: pkg.trim(), minVersion } };
 }
 
 export async function evaluatePolicies(

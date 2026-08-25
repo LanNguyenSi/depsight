@@ -228,7 +228,7 @@ describe('POST /api/policies', () => {
   // (9x) DEPENDENCY_MIN_VERSION rule validation
   // ---------------------------------------------------------------------------
   it('(9a) returns 400 when DEPENDENCY_MIN_VERSION minVersion is not valid semver', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({
       ...validPolicyBody(),
@@ -243,7 +243,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(9b) returns 201 when DEPENDENCY_MIN_VERSION minVersion is valid semver', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
     createPolicyMock.mockResolvedValue({
       id: 'pol-new', name: 'Floor postcss', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
     });
@@ -259,7 +259,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(9c) returns 400 when DEPENDENCY_MIN_VERSION package is missing', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({
       ...validPolicyBody(),
@@ -274,7 +274,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(9d) returns 400 when DEPENDENCY_MIN_VERSION package is an empty string', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({
       ...validPolicyBody(),

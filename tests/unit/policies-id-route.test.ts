@@ -251,12 +251,185 @@ describe('PUT /api/policies/[id]', () => {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });
 
+      // DEPENDENCY_MIN_VERSION requires a compatible rule (see the (9x)/(door)
+      // tests below): sending `type` alone for it is door (b) and is no
+      // longer accepted, so this type is exercised with a rule attached.
+      const body = type === 'DEPENDENCY_MIN_VERSION'
+        ? { type, rule: { package: 'postcss', minVersion: '8.5.18' } }
+        : { type };
+
       const res = await PUT(
-        makePutRequest('pol-1', { type }),
+        makePutRequest('pol-1', body),
         makeParams('pol-1'),
       );
       expect(res.status).toBe(200);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // (9x) DEPENDENCY_MIN_VERSION rule validation on PUT
+  // ---------------------------------------------------------------------------
+  it('(9a) returns 400 when DEPENDENCY_MIN_VERSION minVersion is not valid semver', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { package: 'postcss', minVersion: '8.5' },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('minVersion must be a valid semver version');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(9c) returns 400 when DEPENDENCY_MIN_VERSION package is missing', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { minVersion: '8.5.18' },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package is required');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(9d) returns 400 when DEPENDENCY_MIN_VERSION package is an empty string', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { package: '  ', minVersion: '8.5.18' },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package is required');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(9b) returns 200 when DEPENDENCY_MIN_VERSION rule is valid alongside the type', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    updatePolicyMock.mockResolvedValue({
+      id: 'pol-1', name: 'P', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updatePolicyMock).toHaveBeenCalledWith(
+      'user-1',
+      'pol-1',
+      expect.objectContaining({
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Two doors into an unvalidated DEPENDENCY_MIN_VERSION rule when `type` and
+  // `rule` are updated independently rather than together.
+  // ---------------------------------------------------------------------------
+  it('(10a) door (a): validates a rule-only update against the stored type', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1',
+      name: 'Floor postcss',
+      type: 'DEPENDENCY_MIN_VERSION',
+      severity: 'HIGH',
+      rule: { package: 'postcss', minVersion: '8.5.18' },
+      enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', { rule: { package: 'postcss', minVersion: '8.5' } }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('minVersion must be a valid semver version');
+    expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(10b) door (b): validates the stored rule when only `type` flips to DEPENDENCY_MIN_VERSION', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1',
+      name: 'Block GPL',
+      type: 'LICENSE_DENY',
+      severity: 'HIGH',
+      rule: { deniedLicenses: ['GPL-3.0'] },
+      enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', { type: 'DEPENDENCY_MIN_VERSION' }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package is required');
+    expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(10c) door (b) with a stored rule that is not even an object still returns 400, not a throw', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1',
+      name: 'Legacy Policy',
+      type: 'LICENSE_DENY',
+      severity: 'HIGH',
+      rule: null,
+      enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', { type: 'DEPENDENCY_MIN_VERSION' }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('rule must be an object');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(10d) door (a)/(b) fetch returns 404 when the policy does not belong to the user', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue(null);
+
+    const res = await PUT(
+      makePutRequest('pol-missing', { type: 'DEPENDENCY_MIN_VERSION' }),
+      makeParams('pol-missing'),
+    );
+
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Not found');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 });
 
