@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { PolicyType, Severity } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
@@ -34,6 +35,14 @@ function isSeverity(val: unknown): val is Severity {
 
 function isNumber(val: unknown): val is number {
   return typeof val === 'number';
+}
+
+function isDependencyMinVersionRule(
+  val: unknown,
+): val is { package: string; minVersion: string } {
+  if (typeof val !== 'object' || val === null) return false;
+  const { package: pkg, minVersion } = val as Record<string, unknown>;
+  return typeof pkg === 'string' && pkg.length > 0 && typeof minVersion === 'string' && minVersion.length > 0;
 }
 
 export async function evaluatePolicies(
@@ -145,6 +154,48 @@ export async function evaluatePolicies(
             type: policy.type,
             severity: policy.severity,
             message: `${affected.length} Abhängigkeit(en) älter als ${maxAgeDays} Tage`,
+            affectedPackages: affected,
+          });
+        }
+        break;
+      }
+
+      case PolicyType.DEPENDENCY_MIN_VERSION: {
+        if (!isDependencyMinVersionRule(rule)) break;
+        const { package: targetPackage, minVersion } = rule;
+        if (!semver.valid(minVersion)) break;
+
+        const matching = scan.dependencies.filter((d) => d.name === targetPackage);
+
+        const affected: string[] = [];
+        let unparseableCount = 0;
+
+        for (const dep of matching) {
+          if (!semver.valid(dep.installedVersion)) {
+            unparseableCount += 1;
+            continue;
+          }
+          if (semver.lt(dep.installedVersion, minVersion)) {
+            affected.push(`${dep.name}@${dep.installedVersion} (Floor: ${minVersion})`);
+          }
+        }
+
+        if (affected.length > 0) {
+          const messageParts = [
+            `${affected.length} Installation(en) von ${targetPackage} unterschreiten die Mindestversion ${minVersion}`,
+          ];
+          if (unparseableCount > 0) {
+            messageParts.push(
+              `${unparseableCount} Installation(en) mit nicht auswertbarer Version übersprungen (unparseable)`,
+            );
+          }
+
+          violations.push({
+            policyId: policy.id,
+            policyName: policy.name,
+            type: policy.type,
+            severity: policy.severity,
+            message: messageParts.join('; '),
             affectedPackages: affected,
           });
         }

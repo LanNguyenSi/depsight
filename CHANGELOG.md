@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`DEPENDENCY_MIN_VERSION` policy type:** expresses a per-package minimum
+  version floor (rule shape `{ package: string, minVersion: string }`). The
+  evaluator compares each matching dependency's installed version from the
+  scan against the floor with semver and reports a violation per package
+  below it; installed versions that are not valid semver are skipped and
+  counted as unparseable rather than reported as a violation.
+
 ### Changed
 
 - **cve-sweep skill reduced to the depsight layer (2.0.0):** the skill now

@@ -16,7 +16,7 @@ export default async function PoliciesPage() {
   const serialized = policies.map((p) => ({
     id: p.id,
     name: p.name,
-    type: p.type as 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE',
+    type: p.type as 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE' | 'DEPENDENCY_MIN_VERSION',
     severity: p.severity as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN',
     rule: p.rule as Record<string, unknown>,
     enabled: p.enabled,

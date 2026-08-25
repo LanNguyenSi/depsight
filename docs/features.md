@@ -61,9 +61,9 @@ A complete list of what depsight does today, beyond the headline value props in 
 
 Custom CVE and license rules: define what severity / license combinations are allowed, denied, or require a waiver. See the `/api/policies` endpoint in [docs/api.md](api.md).
 
-Supported policy types are `LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY` and `DEPENDENCY_MAX_AGE` (`lib/policy/engine.ts`). Every type is evaluated per scan against the licenses, advisories or dependency ages of that scan.
+Supported policy types are `LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE` and `DEPENDENCY_MIN_VERSION` (`lib/policy/engine.ts`). Every type is evaluated per scan against the licenses, advisories or dependency ages/versions of that scan.
 
-Known gap: no policy type expresses a per-package minimum version (a floor such as "package X must resolve to at least version Y"). Fleet-wide version floors after an advisory therefore still need a manual sweep; the scan data already stores each dependency's installed version, so a `DEPENDENCY_MIN_VERSION` type is the natural extension and is tracked as a feature task.
+`DEPENDENCY_MIN_VERSION` expresses a per-package minimum version floor (rule shape `{ package: string, minVersion: string }`, e.g. "package X must resolve to at least version Y"). It compares each matching dependency's installed version from the scan against the floor with semver; installed versions that are not valid semver (a git ref, a `workspace:*` reference, a range) are skipped and counted as unparseable rather than reported as a violation.
 
 ## CI Health
 

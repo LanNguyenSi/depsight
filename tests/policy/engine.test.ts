@@ -174,6 +174,125 @@ describe('evaluatePolicies()', () => {
     expect(violations[0].affectedPackages[0]).toContain('oldpkg');
   });
 
+  it('DEPENDENCY_MIN_VERSION — catches installed version below the floor', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'postcss', installedVersion: '8.5.17', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].type).toBe(PolicyType.DEPENDENCY_MIN_VERSION);
+    expect(violations[0].affectedPackages).toHaveLength(1);
+    expect(violations[0].affectedPackages[0]).toContain('postcss@8.5.17');
+  });
+
+  it('DEPENDENCY_MIN_VERSION — installed version at the floor is not a violation', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'postcss', installedVersion: '8.5.18', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(0);
+  });
+
+  it('DEPENDENCY_MIN_VERSION — negative control: an unrealistically high floor still reports red', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'leftpad', minVersion: '99.0.0' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'leftpad', installedVersion: '1.3.0', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].affectedPackages).toHaveLength(1);
+    expect(violations[0].affectedPackages[0]).toContain('leftpad@1.3.0');
+  });
+
+  it('DEPENDENCY_MIN_VERSION — non-semver installedVersion is skipped and counted as unparseable, not reported as a violation itself', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'leftpad', minVersion: '99.0.0' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          // Genuine violation: parseable and below the floor.
+          { id: 'd1', name: 'leftpad', installedVersion: '1.3.0', ageInDays: null },
+          // Unparseable: not valid semver (e.g. a workspace protocol reference), must be
+          // skipped and merely counted, never added to affectedPackages.
+          { id: 'd2', name: 'leftpad', installedVersion: 'workspace:*', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].affectedPackages).toHaveLength(1);
+    expect(violations[0].affectedPackages[0]).toContain('leftpad@1.3.0');
+    expect(violations[0].affectedPackages.join(' ')).not.toContain('workspace:*');
+    expect(violations[0].message).toContain('unparseable');
+    expect(violations[0].message).toContain('1 Installation(en) mit nicht auswertbarer Version');
+  });
+
+  it('DEPENDENCY_MIN_VERSION — a purely unparseable installed version alone reports no violation', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'leftpad', minVersion: '1.0.0' },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'leftpad', installedVersion: 'workspace:*', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(0);
+  });
+
   it('disabled policies are skipped', async () => {
     mockPolicyFindMany.mockResolvedValue([
       makePolicy({

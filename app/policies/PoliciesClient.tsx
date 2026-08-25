@@ -6,7 +6,7 @@ import { PolicyList } from '@/components/PolicyList';
 interface Policy {
   id: string;
   name: string;
-  type: 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE';
+  type: 'LICENSE_DENY' | 'LICENSE_ALLOW_ONLY' | 'CVE_MIN_SEVERITY' | 'DEPENDENCY_MAX_AGE' | 'DEPENDENCY_MIN_VERSION';
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
   rule: Record<string, unknown>;
   enabled: boolean;
