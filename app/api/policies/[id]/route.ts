@@ -116,9 +116,20 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
     if (result.error) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
-    if (updateData.rule !== undefined) {
-      updateData.rule = result.rule as unknown as Prisma.InputJsonValue;
-    }
+    // Always write the *validated* rule back into updateData, not just when
+    // this request happened to send `rule` itself. Door (b) (`type` flips to
+    // DEPENDENCY_MIN_VERSION, `rule` omitted) validates the STORED rule, but
+    // that stored rule can still be un-normalized (padded package name from
+    // whatever wrote it originally). Without this unconditional assignment,
+    // updateData.rule stays undefined on that path, updatePolicy() leaves
+    // the stored rule untouched, and the padded name survives — the same
+    // bug validateDependencyMinVersionRule's trim was meant to close, just
+    // reopened by a write path that never read its normalized return value.
+    // Persisting result.rule unconditionally makes every write path for this
+    // policy type route through the validated value; on the paths that
+    // already sent a matching rule this is a no-op (identical to the
+    // previous behavior), so nothing else changes.
+    updateData.rule = result.rule as unknown as Prisma.InputJsonValue;
   }
 
   const policy = await updatePolicy(user.id, id, updateData);

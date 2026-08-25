@@ -431,6 +431,75 @@ describe('PUT /api/policies/[id]', () => {
     expect(body.error).toBe('Not found');
     expect(updatePolicyMock).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // R1/R2 (fix round 3): every write path for this policy type must persist
+  // the *validated* rule, not whatever the request (or the previously
+  // stored row) happened to carry. Door (b) in particular used to be a
+  // silent no-op here: `updateData.rule` stayed `undefined` on that path, so
+  // updatePolicy() never got the normalized rule and a padded/unnormalized
+  // stored rule survived a type flip untouched.
+  // ---------------------------------------------------------------------------
+  it('(10e) door (a): persists the normalized (trimmed) package name from a rule-only update', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1',
+      name: 'Floor postcss',
+      type: 'DEPENDENCY_MIN_VERSION',
+      severity: 'HIGH',
+      rule: { package: 'postcss', minVersion: '8.5.0' },
+      enabled: true,
+    });
+    updatePolicyMock.mockResolvedValue({
+      id: 'pol-1', name: 'Floor postcss', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', { rule: { package: '  postcss  ', minVersion: '8.5.18' } }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updatePolicyMock).toHaveBeenCalledWith(
+      'user-1',
+      'pol-1',
+      expect.objectContaining({ rule: { package: 'postcss', minVersion: '8.5.18' } }),
+    );
+  });
+
+  it('(10f) door (b): persists the normalized (trimmed) stored rule when only `type` flips to DEPENDENCY_MIN_VERSION', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1',
+      name: 'Floor postcss (mislabeled)',
+      type: 'LICENSE_DENY',
+      severity: 'HIGH',
+      // A DEPENDENCY_MIN_VERSION-shaped rule left over on a policy of a
+      // different type, carrying a padded package name that was never
+      // trimmed because it was never validated as a DMV rule before now.
+      rule: { package: '  postcss  ', minVersion: '8.5.18' },
+      enabled: true,
+    });
+    updatePolicyMock.mockResolvedValue({
+      id: 'pol-1', name: 'Floor postcss (mislabeled)', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await PUT(
+      makePutRequest('pol-1', { type: 'DEPENDENCY_MIN_VERSION' }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
+    expect(updatePolicyMock).toHaveBeenCalledWith(
+      'user-1',
+      'pol-1',
+      expect.objectContaining({
+        type: 'DEPENDENCY_MIN_VERSION',
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

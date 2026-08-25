@@ -494,4 +494,49 @@ describe('validateDependencyMinVersionRule()', () => {
     expect(validateDependencyMinVersionRule({ package: 'postcss', minVersion: '8.5' }).error)
       .toBe('minVersion must be a valid semver version');
   });
+
+  // R3 (fix round 3): `trim()` removes ASCII/Unicode whitespace (including
+  // NBSP and the ideographic space) but not zero-width characters, so a
+  // package name carrying one previously sailed through untouched, was
+  // stored as-is, and never matched the evaluator's exact
+  // `d.name === targetPackage` lookup against a real (zero-width-free)
+  // installed name — a policy that reports clean forever, the same failure
+  // mode trimming itself exists to prevent.
+  it('rejects a package name containing a zero-width character', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    expect(validateDependencyMinVersionRule({ package: 'postcss\u200B', minVersion: '8.5.18' }).error)
+      .toBe('package must not contain invisible characters');
+  });
+
+  // npm package names are always lowercase; a mixed-case name also passes
+  // every other check here but never matches a real installed dependency
+  // name — again the same "reports clean forever" failure mode.
+  it('rejects a package name that is not lowercase npm grammar', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    expect(validateDependencyMinVersionRule({ package: 'PostCSS', minVersion: '8.5.18' }).error)
+      .toBe('package must be a valid npm package name');
+  });
+
+  // Verifies the npm-name regex itself against real package name shapes
+  // (dotted, underscored, hyphenated, scoped, and a hyphenated scope with a
+  // hyphenated name) rather than trusting it unexercised.
+  it('accepts real npm package name shapes: dotted, underscored, hyphenated, and scoped', async () => {
+    const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');
+
+    const shapes = [
+      'lodash.merge',
+      'left_pad',
+      'is-number',
+      '@babel/core',
+      '@size-limit/preset-app',
+    ];
+
+    for (const pkg of shapes) {
+      const result = validateDependencyMinVersionRule({ package: pkg, minVersion: '8.5.18' });
+      expect(result.error).toBeUndefined();
+      expect(result.rule).toEqual({ package: pkg, minVersion: '8.5.18' });
+    }
+  });
 });

@@ -288,6 +288,63 @@ describe('POST /api/policies', () => {
     expect(createPolicyMock).not.toHaveBeenCalled();
   });
 
+  // R2/R3 (fix round 3): the route must persist validateDependencyMinVersionRule's
+  // *normalized* return value, not the raw request body's rule — proving the
+  // POST write path actually reads `ruleToPersist` (the validated result)
+  // rather than the untouched `rule` variable. See the sibling test in
+  // tests/unit/policies-id-route.test.ts for the PUT write paths.
+  it('(9e) persists the normalized (trimmed) package name from a DEPENDENCY_MIN_VERSION rule', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    createPolicyMock.mockResolvedValue({
+      id: 'pol-new', name: 'Floor postcss', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: '  postcss  ', minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(createPolicyMock).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ rule: { package: 'postcss', minVersion: '8.5.18' } }),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // (10x) DEPENDENCY_MIN_VERSION package-name normalization/rejection
+  // ---------------------------------------------------------------------------
+  it('(10x-a) returns 400 when package contains a zero-width character', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: 'postcss\u200B', minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package must not contain invisible characters');
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(10x-b) returns 400 when package is not lowercase npm grammar', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await POST(makePostRequest({
+      ...validPolicyBody(),
+      type: 'DEPENDENCY_MIN_VERSION',
+      rule: { package: 'PostCSS', minVersion: '8.5.18' },
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('package must be a valid npm package name');
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
   it('(8) accepts all valid Severity values', async () => {
     const validSeverities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
     for (const severity of validSeverities) {

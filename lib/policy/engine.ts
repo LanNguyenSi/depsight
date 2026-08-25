@@ -54,6 +54,31 @@ export type DependencyMinVersionRuleValidation =
   | { error: string; rule?: undefined }
   | { error?: undefined; rule: DependencyMinVersionRule };
 
+// `String.prototype.trim()` removes ASCII whitespace and the Unicode space
+// separators (including NBSP U+00A0 and ideographic space U+3000), but not
+// zero-width characters: zero-width space/non-joiner/joiner (U+200B-U+200D)
+// and the zero-width no-break space / BOM (U+FEFF). Those are invisible in
+// any UI a caller copy-pasted the name from, so left unchecked they slip
+// through into storage and never match the evaluator's exact
+// `d.name === targetPackage` comparison against a real (zero-width-free)
+// installed dependency name — the same "policy reports clean forever"
+// failure mode trimming was added to close, just via a character class
+// trim() doesn't cover.
+// Written as explicit \u escapes rather than literal invisible characters,
+// so the class itself isn't made of the very characters it's meant to catch.
+const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
+
+// npm package name grammar (lowercase only; a segment's first character
+// cannot be `.`, `_`, or a symbol — npm disallows a leading dot or
+// underscore). Verified against real package shapes: unscoped
+// (`postcss`), dotted (`lodash.merge`), underscored (`left_pad`), hyphenated
+// (`is-number`), scoped (`@babel/core`), and a hyphenated scope with a
+// hyphenated name (`@size-limit/preset-app`) all match; `PostCSS` does not
+// (uppercase). npm package names are always lowercase, so a mixed-case name
+// passes every other check here but never matches an installed dependency's
+// real (lowercase) name at evaluation time — again the same failure mode.
+const NPM_PACKAGE_NAME_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+
 // Validates a DEPENDENCY_MIN_VERSION rule payload at the API boundary (create/update),
 // so a non-semver floor is rejected before it can silently disable the policy at
 // evaluation time (see isDependencyMinVersionRule / the `!semver.valid` guard below).
@@ -63,6 +88,13 @@ export type DependencyMinVersionRuleValidation =
 // untrimmed would never match anything and the policy would report clean
 // forever. Persisting the trimmed value here makes that failure mode
 // impossible regardless of what any particular client does.
+//
+// Beyond trimming, a name is rejected outright (not silently cleaned) when
+// it carries zero-width characters or is not valid lowercase npm grammar
+// (see the two constants above): silently stripping or lowercasing it here
+// would still leave the caller with a policy that looks accepted but can
+// never match anything, which is the same silently-broken-policy outcome
+// this whole function exists to prevent. Better to fail the request loudly.
 //
 // The "rule must be an object" branch is unreachable for callers that
 // already checked the request body's own shape (POST and PUT on the API
@@ -79,10 +111,17 @@ export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVe
   if (typeof pkg !== 'string' || !pkg.trim()) {
     return { error: 'package is required' };
   }
+  const trimmedPkg = pkg.trim();
+  if (trimmedPkg.replace(ZERO_WIDTH_RE, '') !== trimmedPkg) {
+    return { error: 'package must not contain invisible characters' };
+  }
+  if (!NPM_PACKAGE_NAME_RE.test(trimmedPkg)) {
+    return { error: 'package must be a valid npm package name' };
+  }
   if (typeof minVersion !== 'string' || !semver.valid(minVersion)) {
     return { error: 'minVersion must be a valid semver version' };
   }
-  return { rule: { package: pkg.trim(), minVersion } };
+  return { rule: { package: trimmedPkg, minVersion } };
 }
 
 export async function evaluatePolicies(
