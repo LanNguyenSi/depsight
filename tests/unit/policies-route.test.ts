@@ -1,13 +1,21 @@
 // Route-level tests for GET /api/policies and POST /api/policies.
-// Uses auth() (PATTERN B). listPolicies and createPolicy are mocked at the
-// service boundary. PolicyType and Severity enums are real @prisma/client values.
+// Uses resolveRequestUser() (session or dsat_ bearer token). listPolicies and
+// createPolicy are mocked at the service boundary. PolicyType and Severity
+// enums are real @prisma/client values.
+//
+// resolveRequestUser() itself (session vs. Bearer dsat_ token, revocation)
+// is unit-tested in tests/unit/auth-api.test.ts; most tests below mock it
+// directly rather than re-proving its internal branches. The
+// "(real auth-api composition)" tests near the bottom of this file are the
+// exception: they leave @/lib/auth-api unmocked to prove the route actually
+// wires a Bearer dsat_ token through to a 200/201 and a revoked token to 401.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, listPoliciesMock, createPolicyMock } = vi.hoisted(() => ({
-  authMock: vi.fn(),
+const { resolveRequestUserMock, listPoliciesMock, createPolicyMock } = vi.hoisted(() => ({
+  resolveRequestUserMock: vi.fn(),
   listPoliciesMock: vi.fn(),
   createPolicyMock: vi.fn(),
 }));
@@ -15,7 +23,7 @@ const { authMock, listPoliciesMock, createPolicyMock } = vi.hoisted(() => ({
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
 vi.mock('@/lib/policy/service', () => ({
   listPolicies: listPoliciesMock,
   createPolicy: createPolicyMock,
@@ -47,18 +55,20 @@ function validPolicyBody() {
   };
 }
 
+const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+
 // ---------------------------------------------------------------------------
 // Tests — GET /api/policies
 // ---------------------------------------------------------------------------
 describe('GET /api/policies', () => {
   beforeEach(() => {
-    authMock.mockReset();
+    resolveRequestUserMock.mockReset();
     listPoliciesMock.mockReset();
     createPolicyMock.mockReset();
   });
 
-  it('(1) returns 401 when there is no session', async () => {
-    authMock.mockResolvedValue(null);
+  it('(1) returns 401 when there is neither a session nor a token', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
 
     const res = await GET();
 
@@ -67,8 +77,8 @@ describe('GET /api/policies', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
-  it('(2) returns 200 with policies list and calls listPolicies with userId', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  it('(2) returns 200 with policies list and calls listPolicies with userId (session)', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
     listPoliciesMock.mockResolvedValue([
       { id: 'pol-1', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true },
     ]);
@@ -87,21 +97,23 @@ describe('GET /api/policies', () => {
 // ---------------------------------------------------------------------------
 describe('POST /api/policies', () => {
   beforeEach(() => {
-    authMock.mockReset();
+    resolveRequestUserMock.mockReset();
     listPoliciesMock.mockReset();
     createPolicyMock.mockReset();
   });
 
-  it('(3) returns 401 when there is no session', async () => {
-    authMock.mockResolvedValue(null);
+  it('(3) returns 401 when there is neither a session nor a token', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
 
     const res = await POST(makePostRequest(validPolicyBody()));
 
     expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
   });
 
   it('(4) returns 400 when name is missing', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const withoutName = { ...validPolicyBody() };
     delete (withoutName as Record<string, unknown>).name;
@@ -113,7 +125,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(4) returns 400 when name is empty string', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), name: '' }));
 
@@ -123,7 +135,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(5) returns 400 when type is an invalid enum value', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), type: 'INVALID_TYPE' }));
 
@@ -133,7 +145,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(6) returns 400 when severity is an invalid enum value', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), severity: 'SUPER_CRITICAL' }));
 
@@ -143,7 +155,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(7) returns 400 when rule is not an object (is a string)', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), rule: 'not-an-object' }));
 
@@ -153,7 +165,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(7) returns 400 when rule is an array (not a plain object)', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), rule: ['item'] }));
 
@@ -163,7 +175,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(7) returns 400 when rule is null', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
 
     const res = await POST(makePostRequest({ ...validPolicyBody(), rule: null }));
 
@@ -173,7 +185,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(8) returns 201 with policy on valid inputs, calls createPolicy with userId', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
     const createdPolicy = { id: 'pol-new', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true };
     createPolicyMock.mockResolvedValue(createdPolicy);
 
@@ -198,7 +210,7 @@ describe('POST /api/policies', () => {
   it('(8) accepts all valid PolicyType values', async () => {
     const validTypes = ['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE'];
     for (const type of validTypes) {
-      authMock.mockResolvedValue({ user: { id: 'user-1' } });
+      resolveRequestUserMock.mockResolvedValue(mockUser);
       createPolicyMock.mockResolvedValue({ id: 'pol-x', name: 'P', type, severity: 'HIGH', enabled: true });
 
       const res = await POST(makePostRequest({ ...validPolicyBody(), type }));
@@ -209,7 +221,7 @@ describe('POST /api/policies', () => {
   it('(8) accepts all valid Severity values', async () => {
     const validSeverities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'];
     for (const severity of validSeverities) {
-      authMock.mockResolvedValue({ user: { id: 'user-1' } });
+      resolveRequestUserMock.mockResolvedValue(mockUser);
       createPolicyMock.mockResolvedValue({ id: 'pol-x', name: 'P', type: 'LICENSE_DENY', severity, enabled: true });
 
       const res = await POST(makePostRequest({ ...validPolicyBody(), severity }));
@@ -218,7 +230,7 @@ describe('POST /api/policies', () => {
   });
 
   it('(8) defaults enabled to true when not provided', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
     createPolicyMock.mockResolvedValue({ id: 'pol-x', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
 
     const bodyWithoutEnabled = validPolicyBody();
@@ -229,5 +241,107 @@ describe('POST /api/policies', () => {
       expect.anything(),
       expect.objectContaining({ enabled: true }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — real auth-api composition (no @/lib/auth-api mock)
+// ---------------------------------------------------------------------------
+// The tests above mock @/lib/auth-api directly, so they never actually
+// exercise a Bearer dsat_ token through the real resolveRequestUser(). These
+// tests unmock it and stub its own dependencies (@/lib/auth, next/headers,
+// @/lib/prisma) instead, following the pattern in tests/unit/auth-api.test.ts.
+// That proves the route is really wired to the token path end to end, not
+// just to a mock that returns a user object. This block relies on vitest's
+// per-file isolation to keep its unmocked @/lib/auth-api from leaking into
+// other test files; it would need its own cleanup if isolation were ever
+// turned off.
+describe('GET/POST /api/policies (real auth-api composition)', () => {
+  const authMock = vi.fn();
+  const headersMock = vi.fn();
+  const apiTokenFindUniqueMock = vi.fn();
+  const apiTokenUpdateMock = vi.fn().mockResolvedValue({});
+
+  function buildHeaders(map: Record<string, string>) {
+    return {
+      get: (k: string) => map[k.toLowerCase()] ?? null,
+    };
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock('@/lib/auth-api');
+    vi.doMock('@/lib/auth', () => ({ auth: authMock }));
+    vi.doMock('next/headers', () => ({ headers: headersMock }));
+    vi.doMock('@/lib/prisma', () => ({
+      prisma: {
+        apiToken: {
+          findUnique: apiTokenFindUniqueMock,
+          update: apiTokenUpdateMock,
+        },
+      },
+    }));
+    vi.doMock('@/lib/policy/service', () => ({
+      listPolicies: listPoliciesMock,
+      createPolicy: createPolicyMock,
+    }));
+
+    authMock.mockReset();
+    headersMock.mockReset();
+    apiTokenFindUniqueMock.mockReset();
+    apiTokenUpdateMock.mockReset();
+    apiTokenUpdateMock.mockResolvedValue({});
+    listPoliciesMock.mockReset();
+    createPolicyMock.mockReset();
+  });
+
+  it('(2c) returns 200 for a valid dsat_ token with no session', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-live',
+      revokedAt: null,
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+    listPoliciesMock.mockResolvedValue([]);
+
+    const { GET } = await import('@/app/api/policies/route');
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(listPoliciesMock).toHaveBeenCalledWith('user-9');
+  });
+
+  it('(2d) returns 401 for a revoked dsat_ token with no session', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_revoked' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-revoked',
+      revokedAt: new Date('2026-01-01T00:00:00Z'),
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { GET } = await import('@/app/api/policies/route');
+    const res = await GET();
+
+    expect(res.status).toBe(401);
+    expect(listPoliciesMock).not.toHaveBeenCalled();
+  });
+
+  it('(2e) POST returns 201 for a valid dsat_ token with no session, and creates the policy for the token owner', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-live',
+      revokedAt: null,
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+    createPolicyMock.mockResolvedValue({ id: 'pol-new', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
+
+    const { POST } = await import('@/app/api/policies/route');
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(201);
+    expect(createPolicyMock).toHaveBeenCalledWith('user-9', expect.anything());
   });
 });

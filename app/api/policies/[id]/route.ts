@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { getPolicyById, updatePolicy, deletePolicy } from '@/lib/policy/service';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
+
+// Policy CRUD is intentionally reachable via a dsat_ Bearer token
+// (resolveRequestUser(), not auth()) on every method, including the write
+// operations PUT/DELETE: headless agents such as the MCP server need to
+// manage policies without a browser session. A dsat_ token carries the
+// same authority as the user it belongs to, so this only widens what an
+// already-valid token can do, not who can act.
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -11,13 +18,13 @@ interface RouteParams {
 
 // GET /api/policies/[id]
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const { id } = await params;
-  const policy = await getPolicyById(session.user.id, id);
+  const policy = await getPolicyById(user.id, id);
   if (!policy) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
@@ -27,8 +34,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
 // PUT /api/policies/[id]
 export async function PUT(req: NextRequest, { params }: RouteParams) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -74,7 +81,7 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
     updateData.enabled = body.enabled;
   }
 
-  const policy = await updatePolicy(session.user.id, id, updateData);
+  const policy = await updatePolicy(user.id, id, updateData);
   if (!policy) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
@@ -84,13 +91,13 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
 
 // DELETE /api/policies/[id]
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const { id } = await params;
-  const deleted = await deletePolicy(session.user.id, id);
+  const deleted = await deletePolicy(user.id, id);
   if (!deleted) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
