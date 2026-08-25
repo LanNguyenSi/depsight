@@ -7,10 +7,10 @@ export const dynamic = 'force-dynamic';
 
 // Policy CRUD is intentionally reachable via a dsat_ Bearer token
 // (resolveRequestUser(), not auth()) on every method, including the write
-// operations POST/PUT/DELETE: headless agents such as the MCP server need
-// to create and manage policies without a browser session. A dsat_ token
-// carries the same authority as the user it belongs to, so this only widens
-// what an already-valid token can do, not who can act.
+// operation POST: headless agents such as the MCP server need to create and
+// manage policies without a browser session. A dsat_ token carries the same
+// authority as the user it belongs to, so this only widens what an
+// already-valid token can do, not who can act.
 
 // GET /api/policies — list user's policies
 export async function GET() {

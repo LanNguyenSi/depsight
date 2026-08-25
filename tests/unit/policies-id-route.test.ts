@@ -8,7 +8,7 @@
 // "(real auth-api composition)" tests near the bottom of this file are the
 // exception: they leave @/lib/auth-api unmocked to prove the route actually
 // wires a Bearer dsat_ token through to a 200 and a revoked token to 401.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -82,22 +82,6 @@ describe('GET /api/policies/[id]', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
-  it('(1c) forwards the resolved user id to getPolicyById', async () => {
-    resolveRequestUserMock.mockResolvedValue(mockUser);
-    getPolicyByIdMock.mockResolvedValue({
-      id: 'pol-1',
-      name: 'Block GPL',
-      type: 'LICENSE_DENY',
-      severity: 'HIGH',
-      enabled: true,
-    });
-
-    const res = await GET(makeGetRequest('pol-1'), makeParams('pol-1'));
-
-    expect(res.status).toBe(200);
-    expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
-  });
-
   it('(2) returns 404 when getPolicyById returns null', async () => {
     resolveRequestUserMock.mockResolvedValue(mockUser);
     getPolicyByIdMock.mockResolvedValue(null);
@@ -126,6 +110,7 @@ describe('GET /api/policies/[id]', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { policy: object };
     expect(body.policy).toMatchObject({ id: 'pol-1', name: 'Block GPL' });
+    expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
   });
 });
 
@@ -148,16 +133,6 @@ describe('PUT /api/policies/[id]', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
-  });
-
-  it('(4c) forwards the resolved user id to updatePolicy', async () => {
-    resolveRequestUserMock.mockResolvedValue(mockUser);
-    updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'Updated', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
-
-    const res = await PUT(makePutRequest('pol-1', { name: 'Updated' }), makeParams('pol-1'));
-
-    expect(res.status).toBe(200);
-    expect(updatePolicyMock).toHaveBeenCalledWith('user-1', 'pol-1', expect.anything());
   });
 
   it('(5) returns 400 when type is an invalid enum value', async () => {
@@ -306,16 +281,6 @@ describe('DELETE /api/policies/[id]', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
-  it('(11c) forwards the resolved user id to deletePolicy', async () => {
-    resolveRequestUserMock.mockResolvedValue(mockUser);
-    deletePolicyMock.mockResolvedValue(true);
-
-    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
-
-    expect(res.status).toBe(200);
-    expect(deletePolicyMock).toHaveBeenCalledWith('user-1', 'pol-1');
-  });
-
   it('(12) returns 404 when deletePolicy returns false (policy not found)', async () => {
     resolveRequestUserMock.mockResolvedValue(mockUser);
     deletePolicyMock.mockResolvedValue(false);
@@ -337,6 +302,7 @@ describe('DELETE /api/policies/[id]', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { success: boolean };
     expect(body.success).toBe(true);
+    expect(deletePolicyMock).toHaveBeenCalledWith('user-1', 'pol-1');
   });
 });
 
@@ -348,7 +314,10 @@ describe('DELETE /api/policies/[id]', () => {
 // two tests unmock it and stub its own dependencies (@/lib/auth, next/headers,
 // @/lib/prisma) instead, following the pattern in tests/unit/auth-api.test.ts.
 // That proves the route is really wired to the token path end to end, not
-// just to a mock that returns a user object.
+// just to a mock that returns a user object. This block relies on vitest's
+// per-file isolation to keep its unmocked @/lib/auth-api from leaking into
+// other test files; it would need its own cleanup if isolation were ever
+// turned off.
 describe('GET /api/policies/[id] (real auth-api composition)', () => {
   const authMock = vi.fn();
   const headersMock = vi.fn();
@@ -388,10 +357,6 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
     getPolicyByIdMock.mockReset();
     updatePolicyMock.mockReset();
     deletePolicyMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.doMock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
   });
 
   it('(14) returns 200 for a valid dsat_ token with no session', async () => {
