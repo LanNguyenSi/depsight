@@ -463,6 +463,46 @@ describe('evaluatePolicies()', () => {
   });
 });
 
+describe('evaluatePolicies(): untracked/archived repo scoping', () => {
+  it('scopes the scan lookup by { id, repo: { userId, tracked: true } }: exact where clause', async () => {
+    mockPolicyFindMany.mockResolvedValue([]);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(mockScanFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'scan-1',
+        repo: { userId: 'user-1', tracked: true },
+      },
+      include: {
+        licenses: true,
+        advisories: true,
+        dependencies: true,
+      },
+    });
+  });
+
+  it('a stale scanId on a now-untracked (e.g. archived) repo is treated as not found, so no violation is reported', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MIN_VERSION,
+        rule: { package: 'postcss', minVersion: '8.5.18' },
+      }),
+    ]);
+    // Simulates Prisma's `repo: { userId, tracked: true }` filtering the row
+    // away once the repo has been untracked (e.g. archived on GitHub).
+    mockScanFindFirst.mockResolvedValue(null);
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+
+    await expect(evaluatePolicies('user-1', 'scan-1')).rejects.toThrow(
+      'Scan scan-1 not found or not owned by user user-1',
+    );
+  });
+});
+
 describe('validateDependencyMinVersionRule()', () => {
   it('normalizes a padded package name so it can never desync from the evaluator\'s exact-match lookup', async () => {
     const { validateDependencyMinVersionRule } = await import('@/lib/policy/engine');

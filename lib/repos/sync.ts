@@ -63,7 +63,7 @@ export function getRemovedGithubRepoIds(
 }
 
 // Splits a GitHub repo list into repos to keep syncing (not archived, or
-// archived-status unknown — fail-safe default) and repos GitHub reports as
+// archived-status unknown, fail-safe default) and repos GitHub reports as
 // archived. Only an explicit `archived === true` counts as archived; a
 // missing/undefined field keeps the repo in the active set.
 export function partitionArchivedRepos(githubRepos: GitHubRepoSyncRecord[]) {
@@ -94,7 +94,7 @@ export async function syncUserRepos(
   });
 
   // Archived repos are excluded from `active`, so they fall out of
-  // `syncedRepoIds` here just like a repo that disappeared from GitHub —
+  // `syncedRepoIds` here just like a repo that disappeared from GitHub:
   // if they were tracked, the removedRepoIds branch below untracks them via
   // the same updateMany that already handles "repo no longer on GitHub".
   // Scan history is never deleted, only the `tracked` flag flips to false.

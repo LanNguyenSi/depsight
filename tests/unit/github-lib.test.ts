@@ -65,7 +65,7 @@ describe('createGitHubClient', () => {
 });
 
 describe('getUserRepos', () => {
-  it('paginates listForAuthenticatedUser with the exact options and maps the raw repo shape', async () => {
+  it('paginates listForAuthenticatedUser with the exact options and maps the raw repo shape, including archived', async () => {
     paginateMock.mockResolvedValue([
       {
         id: 1,
@@ -77,6 +77,20 @@ describe('getUserRepos', () => {
         default_branch: 'main',
         updated_at: '2026-01-01T00:00:00Z',
         language: 'TypeScript',
+        archived: false,
+        owner: { login: 'acme', avatar_url: 'https://avatars/acme.png' },
+      },
+      {
+        id: 2,
+        name: 'boardflow',
+        full_name: 'acme/boardflow',
+        description: 'An archived repo',
+        private: false,
+        html_url: 'https://github.com/acme/boardflow',
+        default_branch: 'main',
+        updated_at: '2026-01-01T00:00:00Z',
+        language: 'TypeScript',
+        archived: true,
         owner: { login: 'acme', avatar_url: 'https://avatars/acme.png' },
       },
     ]);
@@ -90,7 +104,7 @@ describe('getUserRepos', () => {
       sort: 'updated',
       per_page: 100,
     });
-    expect(repos).toEqual([
+    expect(repos).toStrictEqual([
       {
         id: 1,
         name: 'widgets',
@@ -101,6 +115,20 @@ describe('getUserRepos', () => {
         defaultBranch: 'main',
         updatedAt: '2026-01-01T00:00:00Z',
         language: 'TypeScript',
+        archived: false,
+        owner: { login: 'acme', avatarUrl: 'https://avatars/acme.png' },
+      },
+      {
+        id: 2,
+        name: 'boardflow',
+        fullName: 'acme/boardflow',
+        description: 'An archived repo',
+        private: false,
+        url: 'https://github.com/acme/boardflow',
+        defaultBranch: 'main',
+        updatedAt: '2026-01-01T00:00:00Z',
+        language: 'TypeScript',
+        archived: true,
         owner: { login: 'acme', avatarUrl: 'https://avatars/acme.png' },
       },
     ]);

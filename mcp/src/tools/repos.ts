@@ -8,7 +8,7 @@ export function registerRepoTools(
 ): void {
   server.tool(
     "depsight_list_repos",
-    "List the GitHub repositories the authenticated user has access to (via their GitHub token). Use this to discover `repoId` values that other depsight_* tools accept.",
+    "List the GitHub repositories the authenticated user has access to (via their GitHub token). This is the live GitHub list, not depsight's tracked-repo set, and each entry carries GitHub's `archived` flag; a policy sweep should skip entries where `archived` is true, since depsight's own tracked repos are untracked (and excluded from scan/policy evaluation) once GitHub reports them as archived. Use this to discover `repoId` values that other depsight_* tools accept.",
     {},
     async () => {
       try {

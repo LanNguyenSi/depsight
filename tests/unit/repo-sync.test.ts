@@ -159,7 +159,7 @@ describe('repo sync', () => {
     }));
 
     // The archived repo is untracked via the same updateMany path used for
-    // repos that disappeared from GitHub — no delete, only tracked: false.
+    // repos that disappeared from GitHub: no delete, only tracked: false.
     expect(updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', githubId: { in: [202] }, tracked: true },
       data: { tracked: false },
@@ -184,5 +184,38 @@ describe('repo sync', () => {
     }));
     expect(updateMany).not.toHaveBeenCalled();
     expect(result).toEqual({ syncedCount: 1, removedCount: 0, archivedCount: 0 });
+  });
+
+  it('re-tracks a repo on the sync after it is unarchived on GitHub', async () => {
+    // The repo is currently untracked (it was archived on a previous sync),
+    // so it is not in the existing-tracked set.
+    const { db, upsert, updateMany } = makeDb([]);
+
+    const result = await syncUserRepos(db, 'user-1', [
+      makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: false }),
+    ]);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_githubId: { userId: 'user-1', githubId: 202 } },
+      update: expect.objectContaining({ tracked: true }),
+      create: expect.objectContaining({ tracked: true }),
+    }));
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ syncedCount: 1, removedCount: 0, archivedCount: 0 });
+  });
+
+  it('short-circuits without a transaction call when every incoming repo is archived and none were previously tracked', async () => {
+    const { db, upsert, updateMany, transaction } = makeDb([]);
+
+    const result = await syncUserRepos(db, 'user-1', [
+      makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: true }),
+      makeGitHubRepo({ id: 303, name: 'agent-control', fullName: 'acme/agent-control', archived: true }),
+    ]);
+
+    expect(upsert).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(result).toEqual({ syncedCount: 0, removedCount: 0, archivedCount: 2 });
   });
 });

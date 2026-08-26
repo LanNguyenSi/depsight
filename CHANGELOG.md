@@ -15,24 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   so they fall through the same "no longer tracked" path already used
   for repos that disappeared from GitHub: `tracked` flips to `false` on
   the next sync, scan history is never deleted, and once untracked the
-  repo is excluded from scans and policy evaluation (every scan/policy
-  read already filters on `repo.tracked`). Fail-safe: a repo whose
-  `archived` field is missing or undefined from the GitHub API response
-  is treated as not archived and stays tracked, so a partial API
-  response or schema drift never silently untracks a repo; likewise, an
-  API/network error during sync throws before any DB write, so nothing
-  changes. No new Prisma column: the existing `tracked` boolean already
-  drives every scan/policy read, so no `prisma db push` is required for
-  this change. `POST /api/repos/sync` also reports `archived` (repo
-  count) alongside `synced`/`removed`. Fixes the flotte-wide
-  `DEPENDENCY_MIN_VERSION` sweep reporting violations against archived,
-  read-only repos (`LanNguyenSi/boardflow`,
-  `LanNguyenSi/agent-control`), where no fix can ever be pushed.
-  Untracking those two specific repos still requires the operator
-  account's GitHub token (the sync runs per authenticated user): sign in
-  to the depsight dashboard as the operator and click "Sync" — the next
-  sync run will untrack both automatically since GitHub already reports
-  them as archived.
+  repo is excluded from new scans and policy evaluation (`lib/cve/scanner.ts`
+  requires `tracked: true` to start a scan, and `evaluatePolicies()`
+  requires `tracked: true` on the scan's repo). A repo whose `archived`
+  field is missing or undefined from the GitHub API response is treated
+  as not archived and stays tracked, so schema drift never silently
+  untracks a repo; an API/network error during sync throws before any DB
+  write, so nothing changes either. No new Prisma column: the existing
+  `tracked` boolean already drives every scan/policy read, so no
+  `prisma db push` is required for this change. `POST /api/repos/sync`
+  also reports `archived` (repo count) alongside `synced`/`removed`.
+  Archived repos are untracked on the next sync, including the hourly
+  auto-scan sync (`instrumentation.ts` / `lib/cron/auto-scan.ts`). Not
+  covered by this fix: a truncated GitHub repo LIST response (the
+  paginated call stopping early) already, pre-existing, reads as those
+  repos "no longer on GitHub" and untracks them via the same removal
+  path, independent of the `archived` flag.
 
 ### Added
 
