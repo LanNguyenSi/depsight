@@ -121,7 +121,7 @@ describe('POST /api/dependabot/enable-all', () => {
       return allRepos.filter(
         (r) =>
           where.id.in.includes(r.id) &&
-          r.tracked === where.tracked,
+          (where.tracked === undefined || r.tracked === where.tracked),
       );
     });
     enableDependabotAlertsMock.mockResolvedValue(true);

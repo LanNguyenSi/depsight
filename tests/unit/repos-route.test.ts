@@ -1,5 +1,7 @@
 // Route-level tests for GET /api/repos.
-// Covers 401, 400 for missing/falsy githubToken, 200 happy path, and 500 path.
+// Covers 401, 400 for missing/falsy githubToken, 200 happy path, 500 path,
+// the archived-by-default filter (including a payload without the field) and
+// the exact `includeArchived=true` opt-out.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -117,5 +119,29 @@ describe('GET /api/repos', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { repos: typeof mockRepos };
     expect(body.repos).toEqual(mockRepos);
+  });
+
+  it('keeps repos whose payload lacks the archived field (fail-open, mirrors the sync rule)', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual([mockRepos[0]]);
+  });
+
+  it('treats any spelling other than includeArchived=true as the default (archived filtered)', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false, archived: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest('includeArchived=1'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual([mockRepos[0]]);
   });
 });
