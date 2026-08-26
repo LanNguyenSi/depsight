@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
   let scope: ApiTokenScope = ApiTokenScope.WRITE;
   if (body.scope !== undefined) {
     if (!Object.values(ApiTokenScope).includes(body.scope as ApiTokenScope)) {
-      return NextResponse.json({ error: 'invalid scope' }, { status: 400 });
+      return NextResponse.json({ error: 'Invalid token scope (expected READ or WRITE)' }, { status: 400 });
     }
     scope = body.scope as ApiTokenScope;
   }

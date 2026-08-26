@@ -73,6 +73,16 @@ describe('parseArgs', () => {
 
     expect(parseArgs()).toEqual({});
   });
+
+  it('parses --scope and -s flags', () => {
+    process.argv = ['node', 'mint-api-token.ts', '--user', 'user-1', '--scope', 'READ'];
+
+    expect(parseArgs()).toEqual({ userId: 'user-1', scope: 'READ' });
+
+    process.argv = ['node', 'mint-api-token.ts', '-u', 'user-1', '-s', 'WRITE'];
+
+    expect(parseArgs()).toEqual({ userId: 'user-1', scope: 'WRITE' });
+  });
 });
 
 describe('main — argument-parse edge (missing required --user)', () => {
@@ -103,6 +113,18 @@ describe('main — user-not-found edge', () => {
   });
 });
 
+describe('main - invalid --scope edge', () => {
+  it('exits with code 2 and does not touch prisma when --scope is not READ or WRITE', async () => {
+    process.argv = ['node', 'mint-api-token.ts', '--user', 'user-1', '--scope', 'ADMIN'];
+
+    await expect(main()).rejects.toThrow('process.exit(2)');
+
+    expect(console.error).toHaveBeenCalledWith('Invalid --scope: "ADMIN" (expected READ or WRITE)');
+    expect(userFindUnique).not.toHaveBeenCalled();
+    expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('main — success path', () => {
   it('mints a token: prisma.apiToken.create called with userId, a dsat_-prefixed token, and the given --name label', async () => {
     process.argv = ['node', 'mint-api-token.ts', '--user', 'user-1', '--name', 'headless-agent'];
@@ -116,10 +138,32 @@ describe('main — success path', () => {
         userId: 'user-1',
         token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
         name: 'headless-agent',
+        // No --scope given: defaults to WRITE, matching this script's
+        // behaviour from before the scope field existed.
+        scope: 'WRITE',
       },
-      select: { id: true, name: true, createdAt: true },
+      select: { id: true, name: true, scope: true, createdAt: true },
     });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('dsat_'));
+  });
+
+  it('mints a READ-scoped token when --scope READ is given', async () => {
+    process.argv = ['node', 'mint-api-token.ts', '--user', 'user-1', '--name', 'mcp-readonly', '--scope', 'READ'];
+    userFindUnique.mockResolvedValue({ id: 'user-1', githubLogin: 'acme' });
+    apiTokenCreate.mockResolvedValue({ id: 'token-db-3', name: 'mcp-readonly', scope: 'READ', createdAt: new Date('2026-07-01T00:00:00Z') });
+
+    await main();
+
+    expect(apiTokenCreate).toHaveBeenCalledWith({
+      data: {
+        userId: 'user-1',
+        token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
+        name: 'mcp-readonly',
+        scope: 'READ',
+      },
+      select: { id: true, name: true, scope: true, createdAt: true },
+    });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('scope=READ'));
   });
 
   it('derives a default cli-<date> label when --name is omitted', async () => {
@@ -136,8 +180,9 @@ describe('main — success path', () => {
         userId: 'user-1',
         token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
         name: 'cli-2026-07-01',
+        scope: 'WRITE',
       },
-      select: { id: true, name: true, createdAt: true },
+      select: { id: true, name: true, scope: true, createdAt: true },
     });
 
     vi.useRealTimers();

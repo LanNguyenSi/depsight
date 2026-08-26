@@ -23,12 +23,27 @@ const { resolveRequestUserMock, listPoliciesMock, createPolicyMock } = vi.hoiste
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({
-  resolveRequestUser: resolveRequestUserMock,
-  // Real implementation (not itself under test here — see auth-api.test.ts):
-  // scope === 'WRITE' grants write access.
-  hasWriteScope: (user: { scope: string }) => user.scope === 'WRITE',
-}));
+// hasWriteScope is the real implementation here (not itself under test in
+// this file, see auth-api.test.ts), pulled in via vi.importActual so a
+// regression in the actual predicate is caught by these route tests too,
+// not just by a hand-copied stand-in that could silently drift from it.
+vi.mock('@/lib/auth-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth-api')>('@/lib/auth-api');
+  return {
+    resolveRequestUser: resolveRequestUserMock,
+    hasWriteScope: actual.hasWriteScope,
+  };
+});
+// Stubs so the real @/lib/auth-api module (loaded above via importActual,
+// purely to get its real hasWriteScope) can load without crashing: its own
+// top-level imports (./auth -> next-auth, next/headers, ./prisma) would
+// otherwise execute for real during that import. hasWriteScope itself is a
+// pure function on user.scope and never touches any of these, so the stub
+// values are never exercised; the "(real auth-api composition)" block below
+// overrides these same specifiers with its own vi.doMock for its own tests.
+vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
+vi.mock('next/headers', () => ({ headers: vi.fn() }));
+vi.mock('@/lib/prisma', () => ({ prisma: { apiToken: { findUnique: vi.fn(), update: vi.fn() } } }));
 vi.mock('@/lib/policy/service', () => ({
   listPolicies: listPoliciesMock,
   createPolicy: createPolicyMock,

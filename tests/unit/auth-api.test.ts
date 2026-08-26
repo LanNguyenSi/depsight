@@ -128,6 +128,39 @@ describe('resolveRequestUser', () => {
     });
   });
 
+  // Pins that resolveRequestUser forwards record.scope exactly as-is: a
+  // token row with no scope value at all (undefined) resolves to scope
+  // undefined, NOT a defaulted 'WRITE'. Combined with hasWriteScope's own
+  // fail-closed test above, this proves the "existing tokens keep write
+  // access" guarantee lives only in the schema's @default(WRITE) applied by
+  // `prisma db push`, never in a defensive fallback here that could mask a
+  // migration that failed to backfill it.
+  it('does not default a missing scope to WRITE (forwards undefined, fails closed downstream)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(
+      buildHeaders({ authorization: 'Bearer dsat_no_scope' }),
+    );
+    apiTokenFindUnique.mockResolvedValue({
+      id: 'tok-3',
+      revokedAt: null,
+      scope: undefined,
+      user: {
+        id: 'user-4',
+        githubLogin: 'agent3',
+        githubToken: 'gh_token_agent3',
+      },
+    });
+
+    const result = await resolveRequestUser();
+    expect(result).toEqual({
+      id: 'user-4',
+      githubLogin: 'agent3',
+      githubToken: 'gh_token_agent3',
+      scope: undefined,
+    });
+    expect(result && hasWriteScope(result)).toBe(false);
+  });
+
   it('returns null when the bearer token is not dsat_ prefixed', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(
@@ -192,5 +225,16 @@ describe('hasWriteScope', () => {
 
   it('returns false for a READ-scoped user', () => {
     expect(hasWriteScope({ ...baseUser, scope: 'READ' })).toBe(false);
+  });
+
+  // Pins fail-closed behaviour: a record with no scope value at all (e.g. a
+  // row the schema default somehow did not reach) must NOT be treated as
+  // WRITE. There is no `?? 'WRITE'` fallback anywhere in this predicate or
+  // in resolveRequestUser() (see the resolveRequestUser test below); adding
+  // one later would silently reopen full access for exactly the rows this
+  // task's default is meant to protect.
+  it('returns false (fails closed) for a user with an undefined scope, not WRITE', () => {
+    const noScopeUser = { ...baseUser, scope: undefined as unknown as ResolvedUser['scope'] };
+    expect(hasWriteScope(noScopeUser)).toBe(false);
   });
 });

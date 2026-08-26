@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveRequestUser } from '@/lib/auth-api';
+import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { scanDependencies } from '@/lib/deps/scanner';
 
@@ -19,11 +19,16 @@ function isDependencyScanCandidate(scan: {
     && scan.licenses.length === 0;
 }
 
-// POST /api/deps — trigger dependency age analysis
+// POST /api/deps: trigger dependency age analysis. Persists scan results
+// and spends the owner's GitHub API quota, so it requires the WRITE scope
+// (a READ-scoped dsat_ token gets 403); GET below stays open to both scopes.
 export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!hasWriteScope(user)) {
+    return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
   const body = await req.json() as { repoId?: string };

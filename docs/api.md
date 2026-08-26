@@ -1,6 +1,6 @@
 # API reference
 
-All endpoints except `GET /api/health` require authentication via NextAuth session or Bearer token.
+All endpoints except `GET /api/health` require authentication via NextAuth session or Bearer token. A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` accepts an optional `scope` body field, defaulting to `WRITE`); a `READ` token gets 403 on `POST /api/policies`, `PUT`/`DELETE /api/policies/[id]`, and the three scan-triggering POSTs (`/api/scan`, `/api/license`, `/api/deps`); all other endpoints work with either scope.
 
 This table is a curated subset; the app exposes more route handlers (e.g. `/api/me`, `/api/repos`, `/api/tokens`, `/api/webhooks`, `/api/slack`, `/api/history`, `/api/overview`, `/api/pr-scan`, `/api/ci/analytics/*`) than are listed here.
 

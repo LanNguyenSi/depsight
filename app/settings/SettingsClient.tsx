@@ -42,7 +42,7 @@ export function SettingsClient() {
   const [tokens, setTokens] = useState<TokenRow[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [name, setName] = useState('');
-  const [scope, setScope] = useState<TokenScope>('WRITE');
+  const [scope, setScope] = useState<TokenScope>('READ');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
@@ -147,7 +147,7 @@ export function SettingsClient() {
       const data = (await res.json()) as { token: string };
       setRevealed(data.token);
       setName('');
-      setScope('WRITE');
+      setScope('READ');
       setCopied(false);
       await loadTokens();
     } catch {
@@ -392,8 +392,8 @@ export function SettingsClient() {
               aria-label={t['token.scope']}
               className="rounded-md border border-gray-800 bg-gray-900 px-2 py-1.5 text-sm text-gray-200 focus:border-gray-600 focus:outline-none"
             >
-              <option value="WRITE">{t['token.scopeWrite']}</option>
               <option value="READ">{t['token.scopeRead']}</option>
+              <option value="WRITE">{t['token.scopeWrite']}</option>
             </select>
             <button
               type="submit"

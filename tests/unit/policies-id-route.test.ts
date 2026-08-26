@@ -23,12 +23,27 @@ const { resolveRequestUserMock, getPolicyByIdMock, updatePolicyMock, deletePolic
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({
-  resolveRequestUser: resolveRequestUserMock,
-  // Real implementation (not itself under test here — see auth-api.test.ts):
-  // scope === 'WRITE' grants write access.
-  hasWriteScope: (user: { scope: string }) => user.scope === 'WRITE',
-}));
+// hasWriteScope is the real implementation here (not itself under test in
+// this file, see auth-api.test.ts), pulled in via vi.importActual so a
+// regression in the actual predicate is caught by these route tests too,
+// not just by a hand-copied stand-in that could silently drift from it.
+vi.mock('@/lib/auth-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth-api')>('@/lib/auth-api');
+  return {
+    resolveRequestUser: resolveRequestUserMock,
+    hasWriteScope: actual.hasWriteScope,
+  };
+});
+// Stubs so the real @/lib/auth-api module (loaded above via importActual,
+// purely to get its real hasWriteScope) can load without crashing: its own
+// top-level imports (./auth -> next-auth, next/headers, ./prisma) would
+// otherwise execute for real during that import. hasWriteScope itself is a
+// pure function on user.scope and never touches any of these, so the stub
+// values are never exercised; the "(real auth-api composition)" block below
+// overrides these same specifiers with its own vi.doMock for its own tests.
+vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
+vi.mock('next/headers', () => ({ headers: vi.fn() }));
+vi.mock('@/lib/prisma', () => ({ prisma: { apiToken: { findUnique: vi.fn(), update: vi.fn() } } }));
 vi.mock('@/lib/policy/service', () => ({
   getPolicyById: getPolicyByIdMock,
   updatePolicy: updatePolicyMock,
@@ -696,5 +711,46 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
 
     expect(res.status).toBe(403);
     expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(17) DELETE returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { DELETE } = await import('@/app/api/policies/[id]/route');
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(deletePolicyMock).not.toHaveBeenCalled();
+  });
+
+  // Pins that a legacy/malformed token record without a `scope` value fails
+  // CLOSED on writes rather than defaulting to WRITE. resolveRequestUser()
+  // forwards record.scope as-is (no `?? 'WRITE'` fallback), so
+  // hasWriteScope(user), which only returns true on the literal string
+  // 'WRITE', is false for undefined, and the write route 403s. A `?? 'WRITE'`
+  // fallback introduced later, however well-intentioned, would silently
+  // reopen exactly the gap this task closes for any row missing the column.
+  it('(18) DELETE returns 403 for a dsat_ token record with no scope set (fails closed, no WRITE fallback)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_no_scope' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-no-scope',
+      revokedAt: null,
+      scope: undefined,
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { DELETE } = await import('@/app/api/policies/[id]/route');
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(deletePolicyMock).not.toHaveBeenCalled();
   });
 });

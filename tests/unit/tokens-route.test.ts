@@ -222,7 +222,7 @@ describe('POST /api/tokens', () => {
 
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
-    expect(body.error).toBe('invalid scope');
+    expect(body.error).toBe('Invalid token scope (expected READ or WRITE)');
     expect(apiTokenCreate).not.toHaveBeenCalled();
   });
 

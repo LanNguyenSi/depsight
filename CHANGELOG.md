@@ -13,20 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `scope` (`ApiTokenScope.READ` or `WRITE`), defaulting to `WRITE` so
   every pre-existing token keeps today's full-access behaviour once the
   field is deployed (`prisma db push` backfills the column with its
-  default — this repo has no migrations directory, so there is no
+  default, this repo has no migrations directory, so there is no
   separate migration to check). `resolveRequestUser()` (`lib/auth-api.ts`)
   now returns the resolved scope (a browser session always resolves to
   `WRITE`), and the policy CRUD write operations (`POST /api/policies`,
   `PUT /api/policies/[id]`, `DELETE /api/policies/[id]`) require `WRITE`,
   returning 403 for a `READ`-scoped token; the read operations (`GET`) are
-  unaffected. `POST /api/tokens` accepts an optional `scope` in the
-  request body (still defaulting to `WRITE` when omitted, so callers that
-  don't send it keep minting full-access tokens as before), and the
-  Settings token UI lets the user choose the scope when creating a token
-  and shows each existing token's scope in its list. This closes the gap
-  where a leaked dsat_ token could delete or disable the policies that
-  gate CI decisions (`LICENSE_DENY`, `CVE_MIN_SEVERITY`), even when the
-  token was only meant to read.
+  unaffected. The scan-triggering POSTs `/api/scan`, `/api/license`, and
+  `/api/deps` require `WRITE` too, since each persists scan results and
+  spends the repo owner's GitHub API quota; their `GET` counterparts stay
+  open to both scopes. `POST /api/tokens` accepts an optional `scope` in
+  the request body (still defaulting to `WRITE` when omitted, so callers
+  that don't send it keep minting full-access tokens as before, and
+  returning 400 for anything other than `READ`/`WRITE`), and the Settings
+  token UI's create-token selector now defaults to `READ` (listed first)
+  so a user who doesn't touch it mints a least-privilege token, and shows
+  each existing token's scope in its list. `scripts/mint-api-token.ts`
+  gained a matching `--scope READ|WRITE` flag (default `WRITE`, for
+  compatibility with existing usage). This closes the gap where a leaked
+  dsat_ token could delete or disable the policies that gate CI decisions
+  (`LICENSE_DENY`, `CVE_MIN_SEVERITY`), or trigger scans that spend the
+  owner's GitHub quota, even when the token was only meant to read.
 - **`DEPENDENCY_MIN_VERSION` policy type:** expresses a per-package minimum
   version floor (rule shape `{ package: string, minVersion: string }`). The
   evaluator compares each matching dependency's installed version from the
