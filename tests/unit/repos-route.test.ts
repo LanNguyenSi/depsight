@@ -1,5 +1,7 @@
 // Route-level tests for GET /api/repos.
-// Covers 401, 400 for missing/falsy githubToken, 200 happy path, and 500 path.
+// Covers 401, 400 for missing/falsy githubToken, 200 happy path, 500 path,
+// the archived-by-default filter (including a payload without the field) and
+// the exact `includeArchived=true` opt-out.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -28,11 +30,16 @@ vi.mock('@/lib/github', () => ({
 // Imports AFTER mocks
 // ---------------------------------------------------------------------------
 import { GET } from '@/app/api/repos/route';
+import { NextRequest } from 'next/server';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+
+function makeGetRequest(query?: string): NextRequest {
+  return new NextRequest(`http://localhost/api/repos${query ? `?${query}` : ''}`);
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -46,7 +53,7 @@ describe('GET /api/repos', () => {
 
   it('returns 401 when unauthenticated', async () => {
     resolveRequestUserMock.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(makeGetRequest());
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
@@ -54,7 +61,7 @@ describe('GET /api/repos', () => {
 
   it('returns 400 when user.githubToken is an empty string', async () => {
     resolveRequestUserMock.mockResolvedValue({ id: 'user-1', githubLogin: 'octocat', githubToken: '' });
-    const res = await GET();
+    const res = await GET(makeGetRequest());
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('No GitHub token found');
@@ -62,7 +69,7 @@ describe('GET /api/repos', () => {
 
   it('returns 400 when user.githubToken is null', async () => {
     resolveRequestUserMock.mockResolvedValue({ id: 'user-1', githubLogin: 'octocat', githubToken: null });
-    const res = await GET();
+    const res = await GET(makeGetRequest());
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('No GitHub token found');
@@ -70,11 +77,11 @@ describe('GET /api/repos', () => {
 
   it('returns 200 with repos list and verifies getUserRepos called with githubToken', async () => {
     const mockRepos = [
-      { id: 1, full_name: 'octocat/hello-world', private: false },
-      { id: 2, full_name: 'octocat/fork', private: true },
+      { id: 1, full_name: 'octocat/hello-world', private: false, archived: false },
+      { id: 2, full_name: 'octocat/fork', private: true, archived: false },
     ];
     getUserReposMock.mockResolvedValue(mockRepos);
-    const res = await GET();
+    const res = await GET(makeGetRequest());
     expect(res.status).toBe(200);
     const body = await res.json() as { repos: typeof mockRepos };
     expect(body.repos).toEqual(mockRepos);
@@ -83,10 +90,58 @@ describe('GET /api/repos', () => {
 
   it('returns 500 with generic message when getUserRepos throws', async () => {
     getUserReposMock.mockRejectedValue(new Error('GitHub API unreachable'));
-    const res = await GET();
+    const res = await GET(makeGetRequest());
     expect(res.status).toBe(500);
     const body = await res.json() as { error: string };
     // Route returns a static message, not the underlying error
     expect(body.error).toBe('Failed to fetch repositories');
+  });
+
+  it('filters out archived repos by default', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false, archived: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual([mockRepos[0]]);
+  });
+
+  it('includes archived repos when includeArchived=true is passed', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false, archived: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest('includeArchived=true'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual(mockRepos);
+  });
+
+  it('keeps repos whose payload lacks the archived field (fail-open, mirrors the sync rule)', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest());
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual([mockRepos[0]]);
+  });
+
+  it('treats any spelling other than includeArchived=true as the default (archived filtered)', async () => {
+    const mockRepos = [
+      { id: 1, full_name: 'octocat/hello-world', private: false, archived: false },
+      { id: 2, full_name: 'octocat/old-project', private: false, archived: true },
+    ];
+    getUserReposMock.mockResolvedValue(mockRepos);
+    const res = await GET(makeGetRequest('includeArchived=1'));
+    expect(res.status).toBe(200);
+    const body = await res.json() as { repos: typeof mockRepos };
+    expect(body.repos).toEqual([mockRepos[0]]);
   });
 });

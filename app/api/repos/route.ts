@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getUserRepos } from '@/lib/github';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const user = await resolveRequestUser();
 
   if (!user) {
@@ -14,7 +14,9 @@ export async function GET() {
   }
 
   try {
-    const repos = await getUserRepos(user.githubToken);
+    const allRepos = await getUserRepos(user.githubToken);
+    const includeArchived = req.nextUrl.searchParams.get('includeArchived') === 'true';
+    const repos = includeArchived ? allRepos : allRepos.filter((repo) => !repo.archived);
     return NextResponse.json({ repos });
   } catch (error) {
     console.error('Failed to fetch repos:', error);
