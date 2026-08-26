@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   repos "no longer on GitHub" and untracks them via the same removal
   path, independent of the `archived` flag.
 
+- **`GET /api/repos` and `POST /api/dependabot/enable-all` now respect
+  the archived/untracked state that the repo sync fix above already
+  applies:** `GET /api/repos` (the live GitHub list, also what the
+  `depsight_list_repos` MCP tool surfaces) filters out repos where
+  GitHub reports `archived: true`; pass `?includeArchived=true` to get
+  the unfiltered list back. `POST /api/dependabot/enable-all` now scopes
+  its repo lookup to `tracked: true`, so a `repoId` for an archived
+  (and thus untracked) repo is silently skipped instead of attempting
+  to enable Dependabot on it.
+
 ### Added
 
 - **`ApiToken` scope (READ vs. WRITE):** a dsat_ token now carries a

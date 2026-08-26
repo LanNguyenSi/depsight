@@ -103,9 +103,38 @@ describe('POST /api/dependabot/enable-all', () => {
     expect(body.enabled).toBe(2);
     expect(body.failed).toBe(0);
     expect(repoFindMany).toHaveBeenCalledWith({
-      where: { id: { in: ['r1', 'r2'] }, userId: 'user-1' },
+      where: { id: { in: ['r1', 'r2'] }, userId: 'user-1', tracked: true },
       select: { id: true, owner: true, name: true },
     });
+  });
+
+  it('(4b) scopes the findMany where clause to tracked: true, so an untracked repo id is silently skipped', async () => {
+    authMock.mockResolvedValue(SESSION);
+    // Simulate Prisma's `tracked: true` filter excluding an untracked repo:
+    // the mock only returns the repos that would actually match the where
+    // clause, so this fails if the route stops passing `tracked: true`.
+    repoFindMany.mockImplementation(async ({ where }: { where: { id: { in: string[] }; userId: string; tracked?: boolean } }) => {
+      const allRepos = [
+        { id: 'r1', owner: 'acme', name: 'api', tracked: true },
+        { id: 'r2', owner: 'acme', name: 'archived-repo', tracked: false },
+      ];
+      return allRepos.filter(
+        (r) =>
+          where.id.in.includes(r.id) &&
+          r.tracked === where.tracked,
+      );
+    });
+    enableDependabotAlertsMock.mockResolvedValue(true);
+
+    const res = await POST(makePostRequest({ repoIds: ['r1', 'r2'] }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { enabled: number; failed: number };
+    // Only r1 (tracked) is processed; r2 (untracked) never reaches enableDependabotAlerts.
+    expect(body.enabled).toBe(1);
+    expect(body.failed).toBe(0);
+    expect(enableDependabotAlertsMock).toHaveBeenCalledTimes(1);
+    expect(enableDependabotAlertsMock).toHaveBeenCalledWith('tok-123', 'acme', 'api');
   });
 
   it('(5) returns 200 with correct failed count when enableDependabotAlerts returns false', async () => {

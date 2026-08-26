@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   }
 
   const repos = await prisma.repo.findMany({
-    where: { id: { in: repoIds }, userId: session.user.id },
+    where: { id: { in: repoIds }, userId: session.user.id, tracked: true },
     select: { id: true, owner: true, name: true },
   });
 
