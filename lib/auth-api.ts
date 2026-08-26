@@ -1,11 +1,21 @@
 import { headers } from 'next/headers';
 import { auth } from './auth';
 import { prisma } from './prisma';
+import type { ApiTokenScope } from '@prisma/client';
 
 export interface ResolvedUser {
   id: string;
   githubLogin: string | null;
   githubToken: string;
+  // WRITE grants both read and write; READ is a dsat_ token restricted to
+  // read-only routes. A browser session user always resolves to WRITE
+  // (unaffected by this field, same as before it existed).
+  scope: ApiTokenScope;
+}
+
+/** True when the resolved user's scope allows write operations (WRITE). */
+export function hasWriteScope(user: ResolvedUser): boolean {
+  return user.scope === 'WRITE';
 }
 
 /**
@@ -29,6 +39,9 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
       // githubToken may be "" for dev-login; callers that need GitHub
       // access must handle that.
       githubToken: session.user.githubToken ?? '',
+      // A logged-in browser user always has full access, same as before
+      // ApiToken.scope existed.
+      scope: 'WRITE',
     };
   }
 
@@ -61,5 +74,6 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
     id: record.user.id,
     githubLogin: record.user.githubLogin,
     githubToken: record.user.githubToken,
+    scope: record.scope,
   };
 }

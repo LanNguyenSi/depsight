@@ -60,14 +60,21 @@ Both env vars are **required**; the server aborts on startup otherwise.
 
 ## Minting a token
 
-API tokens live in the `ApiToken` Prisma model and are scoped to a single depsight user. Inside the depsight repo:
+API tokens live in the `ApiToken` Prisma model, are scoped to a single depsight user, and each carries a `READ` or `WRITE` scope. Inside the depsight repo:
 
 ```bash
 # ensure DATABASE_URL is set in your shell
-npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop
+
+# READ token: everything except depsight_rescan (recommended default for most agents)
+npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop --scope READ
+
+# WRITE token: also allows depsight_rescan (only needed if the agent triggers scans)
+npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop --scope WRITE
 ```
 
-The raw `dsat_…` value is printed **once**. Store it in your agent config (env var, secret manager) — there is no retrieve-existing endpoint. To rotate, mint a new one and `UPDATE "ApiToken" SET "revokedAt" = NOW() WHERE id = '…';` on the old row.
+`--scope` defaults to `WRITE` when omitted, matching this script's behaviour from before the scope field existed; pass `--scope READ` explicitly for a read-only token. Every tool in the table above except `depsight_rescan` works with a `READ` token; `depsight_rescan` (`POST /api/scan`) requires `WRITE` and returns a 403 for a `READ` token. Since v1 does not expose policy mutation or webhook management (see Scope / limitations below), no other shipped tool needs `WRITE` today.
+
+The raw `dsat_…` value is printed **once**. Store it in your agent config (env var, secret manager); there is no retrieve-existing endpoint. To rotate, mint a new one and `UPDATE "ApiToken" SET "revokedAt" = NOW() WHERE id = '…';` on the old row.
 
 All data is scoped to the minting user: tools only see repos that user owns.
 
@@ -110,7 +117,7 @@ HTTP errors carry the upstream status code and response body so you can tell a 4
 ## Scope / limitations
 
 - Read-only except `depsight_rescan` (scan trigger). v1 intentionally omits the other write operations (webhook management, policy mutation, Slack config).
-- No per-tool ACL. A token with the `dsat_` prefix can call any read tool for its user's data.
+- Per-token ACL via `ApiToken.scope`: a `READ` token can call every read tool, but `depsight_rescan` (the one write tool) requires a `WRITE` token and 403s for a `READ` token. There is still no finer-grained per-tool ACL beyond the read/write split.
 - No pagination beyond what the underlying REST endpoints already expose. Very large repos may produce large JSON responses.
 - Tokens never expire automatically. Operators must rotate manually.
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveRequestUser } from '@/lib/auth-api';
+import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { listPolicies, createPolicy } from '@/lib/policy/service';
 import { validateDependencyMinVersionRule } from '@/lib/policy/engine';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
@@ -12,6 +12,10 @@ export const dynamic = 'force-dynamic';
 // manage policies without a browser session. A dsat_ token carries the same
 // authority as the user it belongs to, so this only widens what an
 // already-valid token can do, not who can act.
+//
+// The write operation (POST) additionally requires the WRITE scope: a
+// READ-scoped dsat_ token can list policies but not create one, so a leaked
+// read-only token cannot touch the policies that gate CI decisions.
 
 // GET /api/policies — list user's policies
 export async function GET() {
@@ -29,6 +33,9 @@ export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!hasWriteScope(user)) {
+    return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
   const body = await req.json() as {

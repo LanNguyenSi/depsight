@@ -156,15 +156,29 @@ model Policy {
 }
 
 model ApiToken {
-  id          String    @id @default(cuid())
+  id          String        @id @default(cuid())
   userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  token       String    @unique
+  token       String        @unique
   name        String
+  // Default WRITE preserves today's behaviour for every token that existed
+  // before this field was added: `db push` backfills WRITE onto existing
+  // rows, so a pre-existing dsat_ token keeps full read+write access after
+  // this deploys (no silent outage). New tokens can opt into READ from the
+  // token UI or the token-creation API.
+  scope       ApiTokenScope @default(WRITE)
   revokedAt   DateTime?
   lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime      @default(now())
+}
+
+// WRITE implies read access too (there is no write-without-read tier);
+// READ is the restricted tier that cannot reach write operations such as
+// the policy CRUD write routes.
+enum ApiTokenScope {
+  READ
+  WRITE
 }
 
 enum ScanStatus {

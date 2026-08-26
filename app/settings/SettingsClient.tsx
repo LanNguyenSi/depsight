@@ -5,9 +5,12 @@ import { AppShell } from '@/components/AppShell';
 import { useLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 
+type TokenScope = 'READ' | 'WRITE';
+
 interface TokenRow {
   id: string;
   name: string;
+  scope: TokenScope;
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
@@ -39,6 +42,7 @@ export function SettingsClient() {
   const [tokens, setTokens] = useState<TokenRow[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [name, setName] = useState('');
+  const [scope, setScope] = useState<TokenScope>('READ');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
@@ -137,12 +141,13 @@ export function SettingsClient() {
       const res = await fetch('/api/tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({ name: trimmed, scope }),
       });
       if (!res.ok) throw new Error('create failed');
       const data = (await res.json()) as { token: string };
       setRevealed(data.token);
       setName('');
+      setScope('READ');
       setCopied(false);
       await loadTokens();
     } catch {
@@ -381,6 +386,15 @@ export function SettingsClient() {
               maxLength={100}
               className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none"
             />
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value as TokenScope)}
+              aria-label={t['token.scope']}
+              className="rounded-md border border-gray-800 bg-gray-900 px-2 py-1.5 text-sm text-gray-200 focus:border-gray-600 focus:outline-none"
+            >
+              <option value="READ">{t['token.scopeRead']}</option>
+              <option value="WRITE">{t['token.scopeWrite']}</option>
+            </select>
             <button
               type="submit"
               disabled={creating}
@@ -407,6 +421,9 @@ export function SettingsClient() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-gray-200 truncate">{tk.name}</span>
+                        <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-700 rounded px-1 py-0.5">
+                          {tk.scope === 'READ' ? t['token.scopeRead'] : t['token.scopeWrite']}
+                        </span>
                         {tk.revokedAt && (
                           <span className="text-[10px] uppercase tracking-wide text-red-400 border border-red-900/60 rounded px-1 py-0.5">
                             {t['token.revoked']}

@@ -23,7 +23,27 @@ const { resolveRequestUserMock, listPoliciesMock, createPolicyMock } = vi.hoiste
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
+// hasWriteScope is the real implementation here (not itself under test in
+// this file, see auth-api.test.ts), pulled in via vi.importActual so a
+// regression in the actual predicate is caught by these route tests too,
+// not just by a hand-copied stand-in that could silently drift from it.
+vi.mock('@/lib/auth-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth-api')>('@/lib/auth-api');
+  return {
+    resolveRequestUser: resolveRequestUserMock,
+    hasWriteScope: actual.hasWriteScope,
+  };
+});
+// Stubs so the real @/lib/auth-api module (loaded above via importActual,
+// purely to get its real hasWriteScope) can load without crashing: its own
+// top-level imports (./auth -> next-auth, next/headers, ./prisma) would
+// otherwise execute for real during that import. hasWriteScope itself is a
+// pure function on user.scope and never touches any of these, so the stub
+// values are never exercised; the "(real auth-api composition)" block below
+// overrides these same specifiers with its own vi.doMock for its own tests.
+vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
+vi.mock('next/headers', () => ({ headers: vi.fn() }));
+vi.mock('@/lib/prisma', () => ({ prisma: { apiToken: { findUnique: vi.fn(), update: vi.fn() } } }));
 vi.mock('@/lib/policy/service', () => ({
   listPolicies: listPoliciesMock,
   createPolicy: createPolicyMock,
@@ -55,7 +75,8 @@ function validPolicyBody() {
   };
 }
 
-const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
+const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
 
 // ---------------------------------------------------------------------------
 // Tests — GET /api/policies
@@ -90,6 +111,16 @@ describe('GET /api/policies', () => {
     expect(body.policies).toHaveLength(1);
     expect(listPoliciesMock).toHaveBeenCalledWith('user-1');
   });
+
+  it('(2b) returns 200 for a READ-scoped token (read is allowed on both scopes)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    listPoliciesMock.mockResolvedValue([]);
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(listPoliciesMock).toHaveBeenCalledWith('user-1');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -110,6 +141,17 @@ describe('POST /api/policies', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('(3b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 
   it('(4) returns 400 when name is missing', async () => {
@@ -422,12 +464,13 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     createPolicyMock.mockReset();
   });
 
-  it('(2c) returns 200 for a valid dsat_ token with no session', async () => {
+  it('(2c) returns 200 for a valid READ-scoped dsat_ token with no session', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'READ',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     listPoliciesMock.mockResolvedValue([]);
@@ -445,6 +488,7 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-revoked',
       revokedAt: new Date('2026-01-01T00:00:00Z'),
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
 
@@ -455,12 +499,13 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     expect(listPoliciesMock).not.toHaveBeenCalled();
   });
 
-  it('(2e) POST returns 201 for a valid dsat_ token with no session, and creates the policy for the token owner', async () => {
+  it('(2e) POST returns 201 for a valid WRITE-scoped dsat_ token with no session, and creates the policy for the token owner', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     createPolicyMock.mockResolvedValue({ id: 'pol-new', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
@@ -470,5 +515,22 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
 
     expect(res.status).toBe(201);
     expect(createPolicyMock).toHaveBeenCalledWith('user-9', expect.anything());
+  });
+
+  it('(2f) POST returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { POST } = await import('@/app/api/policies/route');
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(403);
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 });

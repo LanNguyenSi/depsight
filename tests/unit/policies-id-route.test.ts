@@ -23,7 +23,27 @@ const { resolveRequestUserMock, getPolicyByIdMock, updatePolicyMock, deletePolic
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
+// hasWriteScope is the real implementation here (not itself under test in
+// this file, see auth-api.test.ts), pulled in via vi.importActual so a
+// regression in the actual predicate is caught by these route tests too,
+// not just by a hand-copied stand-in that could silently drift from it.
+vi.mock('@/lib/auth-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth-api')>('@/lib/auth-api');
+  return {
+    resolveRequestUser: resolveRequestUserMock,
+    hasWriteScope: actual.hasWriteScope,
+  };
+});
+// Stubs so the real @/lib/auth-api module (loaded above via importActual,
+// purely to get its real hasWriteScope) can load without crashing: its own
+// top-level imports (./auth -> next-auth, next/headers, ./prisma) would
+// otherwise execute for real during that import. hasWriteScope itself is a
+// pure function on user.scope and never touches any of these, so the stub
+// values are never exercised; the "(real auth-api composition)" block below
+// overrides these same specifiers with its own vi.doMock for its own tests.
+vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
+vi.mock('next/headers', () => ({ headers: vi.fn() }));
+vi.mock('@/lib/prisma', () => ({ prisma: { apiToken: { findUnique: vi.fn(), update: vi.fn() } } }));
 vi.mock('@/lib/policy/service', () => ({
   getPolicyById: getPolicyByIdMock,
   updatePolicy: updatePolicyMock,
@@ -59,7 +79,8 @@ function makeDeleteRequest(id: string): NextRequest {
   return new NextRequest(`http://localhost/api/policies/${id}`, { method: 'DELETE' });
 }
 
-const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
+const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
 
 // ---------------------------------------------------------------------------
 // Tests — GET /api/policies/[id]
@@ -112,6 +133,17 @@ describe('GET /api/policies/[id]', () => {
     expect(body.policy).toMatchObject({ id: 'pol-1', name: 'Block GPL' });
     expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
   });
+
+  it('(3b) returns 200 for a READ-scoped token (read is allowed on both scopes)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await GET(makeGetRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -133,6 +165,17 @@ describe('PUT /api/policies/[id]', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('(4b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await PUT(makePutRequest('pol-1', { name: 'Updated' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 
   it('(5) returns 400 when type is an invalid enum value', async () => {
@@ -523,6 +566,17 @@ describe('DELETE /api/policies/[id]', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
+  it('(11b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(deletePolicyMock).not.toHaveBeenCalled();
+  });
+
   it('(12) returns 404 when deletePolicy returns false (policy not found)', async () => {
     resolveRequestUserMock.mockResolvedValue(mockUser);
     deletePolicyMock.mockResolvedValue(false);
@@ -601,12 +655,13 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
     deletePolicyMock.mockReset();
   });
 
-  it('(14) returns 200 for a valid dsat_ token with no session', async () => {
+  it('(14) returns 200 for a valid READ-scoped dsat_ token with no session', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'READ',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     getPolicyByIdMock.mockResolvedValue({
@@ -630,6 +685,7 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-revoked',
       revokedAt: new Date('2026-01-01T00:00:00Z'),
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
 
@@ -638,5 +694,63 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
 
     expect(res.status).toBe(401);
     expect(getPolicyByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('(16) PUT returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { PUT } = await import('@/app/api/policies/[id]/route');
+    const res = await PUT(makePutRequest('pol-1', { name: 'Updated' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(17) DELETE returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { DELETE } = await import('@/app/api/policies/[id]/route');
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(deletePolicyMock).not.toHaveBeenCalled();
+  });
+
+  // Pins that a legacy/malformed token record without a `scope` value fails
+  // CLOSED on writes rather than defaulting to WRITE. resolveRequestUser()
+  // forwards record.scope as-is (no `?? 'WRITE'` fallback), so
+  // hasWriteScope(user), which only returns true on the literal string
+  // 'WRITE', is false for undefined, and the write route 403s. A `?? 'WRITE'`
+  // fallback introduced later, however well-intentioned, would silently
+  // reopen exactly the gap this task closes for any row missing the column.
+  it('(18) DELETE returns 403 for a dsat_ token record with no scope set (fails closed, no WRITE fallback)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_no_scope' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-no-scope',
+      revokedAt: null,
+      scope: undefined,
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { DELETE } = await import('@/app/api/policies/[id]/route');
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(deletePolicyMock).not.toHaveBeenCalled();
   });
 });

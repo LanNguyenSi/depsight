@@ -24,7 +24,7 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { resolveRequestUser } from '@/lib/auth-api';
+import { resolveRequestUser, hasWriteScope, type ResolvedUser } from '@/lib/auth-api';
 
 function buildHeaders(map: Record<string, string>) {
   return {
@@ -56,11 +56,14 @@ describe('resolveRequestUser', () => {
       id: 'user-1',
       githubLogin: 'octocat',
       githubToken: 'gh_session_token',
+      // A browser session always resolves to full access, regardless of
+      // ApiToken.scope (which only applies to Bearer dsat_ tokens).
+      scope: 'WRITE',
     });
     expect(apiTokenFindUnique).not.toHaveBeenCalled();
   });
 
-  it('falls back to the Bearer dsat_ token when no session is present', async () => {
+  it('falls back to the Bearer dsat_ token when no session is present, and carries its READ scope', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(
       buildHeaders({ authorization: 'Bearer dsat_valid_token' }),
@@ -68,6 +71,7 @@ describe('resolveRequestUser', () => {
     apiTokenFindUnique.mockResolvedValue({
       id: 'tok-1',
       revokedAt: null,
+      scope: 'READ',
       user: {
         id: 'user-2',
         githubLogin: 'agent',
@@ -80,6 +84,7 @@ describe('resolveRequestUser', () => {
       id: 'user-2',
       githubLogin: 'agent',
       githubToken: 'gh_token_agent',
+      scope: 'READ',
     });
     expect(apiTokenFindUnique).toHaveBeenCalledWith({
       where: { token: 'dsat_valid_token' },
@@ -96,6 +101,64 @@ describe('resolveRequestUser', () => {
         data: expect.objectContaining({ lastUsedAt: expect.any(Date) }),
       }),
     );
+  });
+
+  it('carries a WRITE-scoped dsat_ token through as scope WRITE', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(
+      buildHeaders({ authorization: 'Bearer dsat_full_access' }),
+    );
+    apiTokenFindUnique.mockResolvedValue({
+      id: 'tok-2',
+      revokedAt: null,
+      scope: 'WRITE',
+      user: {
+        id: 'user-3',
+        githubLogin: 'agent2',
+        githubToken: 'gh_token_agent2',
+      },
+    });
+
+    const result = await resolveRequestUser();
+    expect(result).toEqual({
+      id: 'user-3',
+      githubLogin: 'agent2',
+      githubToken: 'gh_token_agent2',
+      scope: 'WRITE',
+    });
+  });
+
+  // Pins that resolveRequestUser forwards record.scope exactly as-is: a
+  // token row with no scope value at all (undefined) resolves to scope
+  // undefined, NOT a defaulted 'WRITE'. Combined with hasWriteScope's own
+  // fail-closed test above, this proves the "existing tokens keep write
+  // access" guarantee lives only in the schema's @default(WRITE) applied by
+  // `prisma db push`, never in a defensive fallback here that could mask a
+  // migration that failed to backfill it.
+  it('does not default a missing scope to WRITE (forwards undefined, fails closed downstream)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(
+      buildHeaders({ authorization: 'Bearer dsat_no_scope' }),
+    );
+    apiTokenFindUnique.mockResolvedValue({
+      id: 'tok-3',
+      revokedAt: null,
+      scope: undefined,
+      user: {
+        id: 'user-4',
+        githubLogin: 'agent3',
+        githubToken: 'gh_token_agent3',
+      },
+    });
+
+    const result = await resolveRequestUser();
+    expect(result).toEqual({
+      id: 'user-4',
+      githubLogin: 'agent3',
+      githubToken: 'gh_token_agent3',
+      scope: undefined,
+    });
+    expect(result && hasWriteScope(result)).toBe(false);
   });
 
   it('returns null when the bearer token is not dsat_ prefixed', async () => {
@@ -145,5 +208,33 @@ describe('resolveRequestUser', () => {
     const result = await resolveRequestUser();
     expect(result).toBeNull();
     expect(apiTokenUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasWriteScope', () => {
+  const baseUser: ResolvedUser = {
+    id: 'user-1',
+    githubLogin: 'octocat',
+    githubToken: 'gh_tok',
+    scope: 'WRITE',
+  };
+
+  it('returns true for a WRITE-scoped user', () => {
+    expect(hasWriteScope({ ...baseUser, scope: 'WRITE' })).toBe(true);
+  });
+
+  it('returns false for a READ-scoped user', () => {
+    expect(hasWriteScope({ ...baseUser, scope: 'READ' })).toBe(false);
+  });
+
+  // Pins fail-closed behaviour: a record with no scope value at all (e.g. a
+  // row the schema default somehow did not reach) must NOT be treated as
+  // WRITE. There is no `?? 'WRITE'` fallback anywhere in this predicate or
+  // in resolveRequestUser() (see the resolveRequestUser test below); adding
+  // one later would silently reopen full access for exactly the rows this
+  // task's default is meant to protect.
+  it('returns false (fails closed) for a user with an undefined scope, not WRITE', () => {
+    const noScopeUser = { ...baseUser, scope: undefined as unknown as ResolvedUser['scope'] };
+    expect(hasWriteScope(noScopeUser)).toBe(false);
   });
 });

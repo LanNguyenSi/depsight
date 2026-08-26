@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveRequestUser } from '@/lib/auth-api';
+import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanRepository, ScanAccessError } from '@/lib/cve/scanner';
 
 export const dynamic = 'force-dynamic';
 
-// POST /api/scan — trigger a CVE scan for a repository
+// POST /api/scan: trigger a CVE scan for a repository. Persists scan
+// results and spends the owner's GitHub API quota, so it requires the
+// WRITE scope (a READ-scoped dsat_ token gets 403); GET below stays open
+// to both scopes.
 export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!hasWriteScope(user)) {
+    return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
   const body = await req.json() as { repoId?: string };
