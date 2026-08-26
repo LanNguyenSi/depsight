@@ -135,7 +135,7 @@ export async function evaluatePolicies(
     prisma.scan.findFirst({
       where: {
         id: scanId,
-        repo: { userId },
+        repo: { userId, tracked: true },
       },
       include: {
         licenses: true,

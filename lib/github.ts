@@ -26,6 +26,7 @@ export async function getUserRepos(accessToken: string) {
     defaultBranch: repo.default_branch,
     updatedAt: repo.updated_at,
     language: repo.language,
+    archived: repo.archived,
     owner: {
       login: repo.owner.login,
       avatarUrl: repo.owner.avatar_url,

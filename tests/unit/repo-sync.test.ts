@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getRemovedGithubRepoIds, syncUserRepos, type GitHubRepoSyncRecord } from '@/lib/repos/sync';
+import {
+  getRemovedGithubRepoIds,
+  partitionArchivedRepos,
+  syncUserRepos,
+  type GitHubRepoSyncRecord,
+} from '@/lib/repos/sync';
 
 function makeGitHubRepo(overrides: Partial<GitHubRepoSyncRecord> = {}): GitHubRepoSyncRecord {
   return {
@@ -10,6 +15,25 @@ function makeGitHubRepo(overrides: Partial<GitHubRepoSyncRecord> = {}): GitHubRe
     defaultBranch: overrides.defaultBranch ?? 'main',
     language: overrides.language ?? 'TypeScript',
     owner: overrides.owner ?? { login: 'acme' },
+    archived: overrides.archived,
+  };
+}
+
+function makeDb(existingTracked: Array<{ githubId: number }>) {
+  const findMany = vi.fn().mockResolvedValue(existingTracked);
+  const upsert = vi.fn().mockImplementation((args) => args);
+  const updateMany = vi.fn().mockImplementation((args) => args);
+  const transaction = vi.fn().mockResolvedValue(undefined);
+
+  return {
+    db: {
+      repo: { findMany, upsert, updateMany },
+      $transaction: transaction,
+    },
+    findMany,
+    upsert,
+    updateMany,
+    transaction,
   };
 }
 
@@ -84,7 +108,7 @@ describe('repo sync', () => {
     });
 
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ syncedCount: 1, removedCount: 1 });
+    expect(result).toEqual({ syncedCount: 1, removedCount: 1, archivedCount: 0 });
   });
 
   it('skips the untrack update when nothing was removed', async () => {
@@ -106,6 +130,92 @@ describe('repo sync', () => {
 
     expect(updateMany).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ syncedCount: 1, removedCount: 0 });
+    expect(result).toEqual({ syncedCount: 1, removedCount: 0, archivedCount: 0 });
+  });
+
+  it('partitions an archived repo away from an active repo', () => {
+    const active = makeGitHubRepo({ id: 101, archived: false });
+    const archivedRepo = makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: true });
+
+    const result = partitionArchivedRepos([active, archivedRepo]);
+
+    expect(result.active).toEqual([active]);
+    expect(result.archived).toEqual([archivedRepo]);
+  });
+
+  it('untracks a previously-tracked repo that GitHub now reports as archived, without deleting scan history', async () => {
+    const { db, upsert, updateMany, transaction } = makeDb([{ githubId: 101 }, { githubId: 202 }]);
+
+    // repo 202 (boardflow) is still returned by the GitHub sync, but now archived=true.
+    const result = await syncUserRepos(db, 'user-1', [
+      makeGitHubRepo({ id: 101, archived: false }),
+      makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: true }),
+    ]);
+
+    // Only the active repo is upserted; the archived repo is never re-created or updated.
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_githubId: { userId: 'user-1', githubId: 101 } },
+    }));
+
+    // The archived repo is untracked via the same updateMany path used for
+    // repos that disappeared from GitHub: no delete, only tracked: false.
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', githubId: { in: [202] }, tracked: true },
+      data: { tracked: false },
+    });
+
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ syncedCount: 1, removedCount: 1, archivedCount: 1 });
+  });
+
+  it('fail-safe: keeps a repo tracked when the archived field is missing from the GitHub response', async () => {
+    const { db, upsert, updateMany } = makeDb([{ githubId: 101 }]);
+
+    // No `archived` key at all (as if the GitHub API response omitted it).
+    const repoWithoutArchivedField = makeGitHubRepo({ id: 101 });
+    delete (repoWithoutArchivedField as { archived?: boolean }).archived;
+
+    const result = await syncUserRepos(db, 'user-1', [repoWithoutArchivedField]);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ tracked: true }),
+    }));
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ syncedCount: 1, removedCount: 0, archivedCount: 0 });
+  });
+
+  it('re-tracks a repo on the sync after it is unarchived on GitHub', async () => {
+    // The repo is currently untracked (it was archived on a previous sync),
+    // so it is not in the existing-tracked set.
+    const { db, upsert, updateMany } = makeDb([]);
+
+    const result = await syncUserRepos(db, 'user-1', [
+      makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: false }),
+    ]);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_githubId: { userId: 'user-1', githubId: 202 } },
+      update: expect.objectContaining({ tracked: true }),
+      create: expect.objectContaining({ tracked: true }),
+    }));
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ syncedCount: 1, removedCount: 0, archivedCount: 0 });
+  });
+
+  it('short-circuits without a transaction call when every incoming repo is archived and none were previously tracked', async () => {
+    const { db, upsert, updateMany, transaction } = makeDb([]);
+
+    const result = await syncUserRepos(db, 'user-1', [
+      makeGitHubRepo({ id: 202, name: 'boardflow', fullName: 'acme/boardflow', archived: true }),
+      makeGitHubRepo({ id: 303, name: 'agent-control', fullName: 'acme/agent-control', archived: true }),
+    ]);
+
+    expect(upsert).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(result).toEqual({ syncedCount: 0, removedCount: 0, archivedCount: 2 });
   });
 });

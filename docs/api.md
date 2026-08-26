@@ -11,7 +11,7 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
 | `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |
 | `POST` | `/api/export` | Export CVE, license and dependency results as a zip archive (body: `{ repoId }`) |
-| `POST` | `/api/repos/sync` | Sync repositories from GitHub |
+| `POST` | `/api/repos/sync` | Sync repositories from GitHub; archived repos are excluded and untracked; response `{ synced, removed, archived }` |
 | `GET` | `/api/policies` | List policy rules |
 | `POST` | `/api/policies` | Create or update a policy rule (`LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE`, `DEPENDENCY_MIN_VERSION`) |
 | `POST` | `/api/dependabot` | Enable Dependabot alerts for a repo (body: `{ repoId }`) |
