@@ -23,7 +23,12 @@ const { resolveRequestUserMock, listPoliciesMock, createPolicyMock } = vi.hoiste
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
+vi.mock('@/lib/auth-api', () => ({
+  resolveRequestUser: resolveRequestUserMock,
+  // Real implementation (not itself under test here — see auth-api.test.ts):
+  // scope === 'WRITE' grants write access.
+  hasWriteScope: (user: { scope: string }) => user.scope === 'WRITE',
+}));
 vi.mock('@/lib/policy/service', () => ({
   listPolicies: listPoliciesMock,
   createPolicy: createPolicyMock,
@@ -55,7 +60,8 @@ function validPolicyBody() {
   };
 }
 
-const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
+const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
 
 // ---------------------------------------------------------------------------
 // Tests — GET /api/policies
@@ -90,6 +96,16 @@ describe('GET /api/policies', () => {
     expect(body.policies).toHaveLength(1);
     expect(listPoliciesMock).toHaveBeenCalledWith('user-1');
   });
+
+  it('(2b) returns 200 for a READ-scoped token (read is allowed on both scopes)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    listPoliciesMock.mockResolvedValue([]);
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(listPoliciesMock).toHaveBeenCalledWith('user-1');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -110,6 +126,17 @@ describe('POST /api/policies', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('(3b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 
   it('(4) returns 400 when name is missing', async () => {
@@ -422,12 +449,13 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     createPolicyMock.mockReset();
   });
 
-  it('(2c) returns 200 for a valid dsat_ token with no session', async () => {
+  it('(2c) returns 200 for a valid READ-scoped dsat_ token with no session', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'READ',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     listPoliciesMock.mockResolvedValue([]);
@@ -445,6 +473,7 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-revoked',
       revokedAt: new Date('2026-01-01T00:00:00Z'),
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
 
@@ -455,12 +484,13 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     expect(listPoliciesMock).not.toHaveBeenCalled();
   });
 
-  it('(2e) POST returns 201 for a valid dsat_ token with no session, and creates the policy for the token owner', async () => {
+  it('(2e) POST returns 201 for a valid WRITE-scoped dsat_ token with no session, and creates the policy for the token owner', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     createPolicyMock.mockResolvedValue({ id: 'pol-new', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
@@ -470,5 +500,22 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
 
     expect(res.status).toBe(201);
     expect(createPolicyMock).toHaveBeenCalledWith('user-9', expect.anything());
+  });
+
+  it('(2f) POST returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { POST } = await import('@/app/api/policies/route');
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(403);
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 });

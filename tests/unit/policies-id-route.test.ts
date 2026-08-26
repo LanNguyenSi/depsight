@@ -23,7 +23,12 @@ const { resolveRequestUserMock, getPolicyByIdMock, updatePolicyMock, deletePolic
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-vi.mock('@/lib/auth-api', () => ({ resolveRequestUser: resolveRequestUserMock }));
+vi.mock('@/lib/auth-api', () => ({
+  resolveRequestUser: resolveRequestUserMock,
+  // Real implementation (not itself under test here — see auth-api.test.ts):
+  // scope === 'WRITE' grants write access.
+  hasWriteScope: (user: { scope: string }) => user.scope === 'WRITE',
+}));
 vi.mock('@/lib/policy/service', () => ({
   getPolicyById: getPolicyByIdMock,
   updatePolicy: updatePolicyMock,
@@ -59,7 +64,8 @@ function makeDeleteRequest(id: string): NextRequest {
   return new NextRequest(`http://localhost/api/policies/${id}`, { method: 'DELETE' });
 }
 
-const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok' };
+const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
+const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
 
 // ---------------------------------------------------------------------------
 // Tests — GET /api/policies/[id]
@@ -112,6 +118,17 @@ describe('GET /api/policies/[id]', () => {
     expect(body.policy).toMatchObject({ id: 'pol-1', name: 'Block GPL' });
     expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
   });
+
+  it('(3b) returns 200 for a READ-scoped token (read is allowed on both scopes)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1', name: 'Block GPL', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true,
+    });
+
+    const res = await GET(makeGetRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -133,6 +150,17 @@ describe('PUT /api/policies/[id]', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('(4b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await PUT(makePutRequest('pol-1', { name: 'Updated' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 
   it('(5) returns 400 when type is an invalid enum value', async () => {
@@ -523,6 +551,17 @@ describe('DELETE /api/policies/[id]', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
+  it('(11b) returns 403 when the token has READ scope only (no write access)', async () => {
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+
+    const res = await DELETE(makeDeleteRequest('pol-1'), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('This token does not have write access');
+    expect(deletePolicyMock).not.toHaveBeenCalled();
+  });
+
   it('(12) returns 404 when deletePolicy returns false (policy not found)', async () => {
     resolveRequestUserMock.mockResolvedValue(mockUser);
     deletePolicyMock.mockResolvedValue(false);
@@ -601,12 +640,13 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
     deletePolicyMock.mockReset();
   });
 
-  it('(14) returns 200 for a valid dsat_ token with no session', async () => {
+  it('(14) returns 200 for a valid READ-scoped dsat_ token with no session', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_live_token' }));
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-live',
       revokedAt: null,
+      scope: 'READ',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
     getPolicyByIdMock.mockResolvedValue({
@@ -630,6 +670,7 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
     apiTokenFindUniqueMock.mockResolvedValue({
       id: 'tok-revoked',
       revokedAt: new Date('2026-01-01T00:00:00Z'),
+      scope: 'WRITE',
       user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
     });
 
@@ -638,5 +679,22 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
 
     expect(res.status).toBe(401);
     expect(getPolicyByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('(16) PUT returns 403 for a valid but READ-scoped dsat_ token with no session (end-to-end through the real resolveRequestUser)', async () => {
+    authMock.mockResolvedValue(null);
+    headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_readonly' }));
+    apiTokenFindUniqueMock.mockResolvedValue({
+      id: 'tok-readonly',
+      revokedAt: null,
+      scope: 'READ',
+      user: { id: 'user-9', githubLogin: 'agent', githubToken: 'gh_agent' },
+    });
+
+    const { PUT } = await import('@/app/api/policies/[id]/route');
+    const res = await PUT(makePutRequest('pol-1', { name: 'Updated' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(403);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 });

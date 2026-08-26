@@ -75,7 +75,7 @@ Queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-
 
 ## Settings
 
-- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page.
+- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only) or `WRITE` (read and write, the default) scope at creation time; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`).
 - **UI language switch:** English / German.
 
 ## Operational
