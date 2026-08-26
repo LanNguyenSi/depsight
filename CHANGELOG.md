@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
+  (`lib/repos/sync.ts`, used by `POST /api/repos/sync`) reads GitHub's
+  `archived` flag and excludes archived repos from the active sync set,
+  so they fall through the same "no longer tracked" path already used
+  for repos that disappeared from GitHub: `tracked` flips to `false` on
+  the next sync, scan history is never deleted, and once untracked the
+  repo is excluded from scans and policy evaluation (every scan/policy
+  read already filters on `repo.tracked`). Fail-safe: a repo whose
+  `archived` field is missing or undefined from the GitHub API response
+  is treated as not archived and stays tracked, so a partial API
+  response or schema drift never silently untracks a repo; likewise, an
+  API/network error during sync throws before any DB write, so nothing
+  changes. No new Prisma column: the existing `tracked` boolean already
+  drives every scan/policy read, so no `prisma db push` is required for
+  this change. `POST /api/repos/sync` also reports `archived` (repo
+  count) alongside `synced`/`removed`. Fixes the flotte-wide
+  `DEPENDENCY_MIN_VERSION` sweep reporting violations against archived,
+  read-only repos (`LanNguyenSi/boardflow`,
+  `LanNguyenSi/agent-control`), where no fix can ever be pushed.
+  Untracking those two specific repos still requires the operator
+  account's GitHub token (the sync runs per authenticated user): sign in
+  to the depsight dashboard as the operator and click "Sync" — the next
+  sync run will untrack both automatically since GitHub already reports
+  them as archived.
+
 ### Added
 
 - **`ApiToken` scope (READ vs. WRITE):** a dsat_ token now carries a

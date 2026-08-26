@@ -73,14 +73,15 @@ describe('POST /api/repos/sync', () => {
   it('(2) returns 200 {synced, removed} on happy path', async () => {
     authMock.mockResolvedValue(SESSION);
     getUserReposMock.mockResolvedValue(GITHUB_REPOS);
-    syncUserReposMock.mockResolvedValue({ syncedCount: 5, removedCount: 1 });
+    syncUserReposMock.mockResolvedValue({ syncedCount: 5, removedCount: 1, archivedCount: 2 });
 
     const res = await POST();
 
     expect(res.status).toBe(200);
-    const body = await res.json() as { synced: number; removed: number };
+    const body = await res.json() as { synced: number; removed: number; archived: number };
     expect(body.synced).toBe(5);
     expect(body.removed).toBe(1);
+    expect(body.archived).toBe(2);
     expect(getUserReposMock).toHaveBeenCalledWith('tok-123');
     // syncUserRepos is called with prisma, userId, and the github repos
     expect(syncUserReposMock).toHaveBeenCalledWith(

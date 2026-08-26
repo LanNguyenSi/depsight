@@ -16,7 +16,11 @@ export async function POST() {
   try {
     const githubRepos = await getUserRepos(session.user.githubToken);
     const result = await syncUserRepos(prisma, session.user.id, githubRepos);
-    return NextResponse.json({ synced: result.syncedCount, removed: result.removedCount });
+    return NextResponse.json({
+      synced: result.syncedCount,
+      removed: result.removedCount,
+      archived: result.archivedCount,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Sync failed';
     return NextResponse.json({ error: message }, { status: 500 });

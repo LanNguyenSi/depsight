@@ -10,6 +10,11 @@ export interface GitHubRepoSyncRecord {
   owner: {
     login: string;
   };
+  // GitHub's `archived` flag. Optional and fail-safe: a repo whose archived
+  // status could not be determined (field missing from the GitHub API
+  // response) is treated as `false` (not archived) and stays tracked, so a
+  // schema change or partial API response never silently untracks a repo.
+  archived?: boolean;
 }
 
 interface RepoTransactionClient {
@@ -57,22 +62,48 @@ export function getRemovedGithubRepoIds(
   return existingTrackedRepoGithubIds.filter((repoId) => !syncedRepoIds.has(repoId));
 }
 
+// Splits a GitHub repo list into repos to keep syncing (not archived, or
+// archived-status unknown — fail-safe default) and repos GitHub reports as
+// archived. Only an explicit `archived === true` counts as archived; a
+// missing/undefined field keeps the repo in the active set.
+export function partitionArchivedRepos(githubRepos: GitHubRepoSyncRecord[]) {
+  const active: GitHubRepoSyncRecord[] = [];
+  const archived: GitHubRepoSyncRecord[] = [];
+
+  for (const repo of githubRepos) {
+    if (repo.archived === true) {
+      archived.push(repo);
+    } else {
+      active.push(repo);
+    }
+  }
+
+  return { active, archived };
+}
+
 export async function syncUserRepos(
   db: RepoTransactionClient,
   userId: string,
   githubRepos: GitHubRepoSyncRecord[],
 ) {
+  const { active, archived } = partitionArchivedRepos(githubRepos);
+
   const existingTrackedRepos = await db.repo.findMany({
     where: { userId, tracked: true },
     select: { githubId: true },
   });
 
+  // Archived repos are excluded from `active`, so they fall out of
+  // `syncedRepoIds` here just like a repo that disappeared from GitHub —
+  // if they were tracked, the removedRepoIds branch below untracks them via
+  // the same updateMany that already handles "repo no longer on GitHub".
+  // Scan history is never deleted, only the `tracked` flag flips to false.
   const removedRepoIds = getRemovedGithubRepoIds(
     existingTrackedRepos.map((repo) => repo.githubId),
-    githubRepos,
+    active,
   );
 
-  const operations: Prisma.PrismaPromise<unknown>[] = githubRepos.map((repo) =>
+  const operations: Prisma.PrismaPromise<unknown>[] = active.map((repo) =>
     db.repo.upsert({
       where: {
         userId_githubId: {
@@ -121,7 +152,8 @@ export async function syncUserRepos(
   }
 
   return {
-    syncedCount: githubRepos.length,
+    syncedCount: active.length,
     removedCount: removedRepoIds.length,
+    archivedCount: archived.length,
   };
 }
