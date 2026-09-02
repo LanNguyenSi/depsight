@@ -46,6 +46,7 @@
     "vitest": "^4.1.2"
   },
   "overrides": {
+    "deepmerge-ts": "^8.0.0",
     "effect": ">=3.20.0",
     "defu": ">=6.1.5",
     "postcss": "^8.5.18",
