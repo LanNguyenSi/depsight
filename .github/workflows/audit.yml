@@ -105,13 +105,23 @@ jobs:
             # outage marker, so a real finding can never be misread as
             # an outage, even if the log also happens to contain an
             # outage-like word (e.g. a package literally named
-            # "network").
-            grep -qE '[0-9]+ vulnerabilit|[0-9]+ (low|moderate|high|critical) severity' "$1"
+            # "network"). The count must be non-zero: a log that carries
+            # "found 0 vulnerabilities" next to some other error is not
+            # a finding. This parses npm's human-readable summary (same
+            # wording in npm 9, 10 and 11); if npm ever rewords it, the
+            # wording-independent alternative is `npm audit --json` and
+            # its .metadata.vulnerabilities counts.
+            grep -qE '[1-9][0-9]* vulnerabilit|[1-9][0-9]* (low|moderate|high|critical) severity' "$1"
           }
 
           has_outage_marker() {
             # $1: path to captured npm audit output (stdout+stderr).
-            grep -qE 'audit endpoint returned an error|Invalid package tree|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up|ERR_SOCKET_TIMEOUT|network|E[45][0-9]{2}' "$1"
+            # Transient registry-side and network failures only. HTTP 4xx
+            # codes other than 429 (E401/E403/E404: credentials, scope,
+            # wrong registry URL) are deliberately NOT here; they fall
+            # through to the UNCLASSIFIED branch below, because "retry
+            # later" is the wrong advice for a configuration error.
+            grep -qE 'audit endpoint returned an error|Invalid package tree|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up|ERR_SOCKET_TIMEOUT|network|E5[0-9]{2}|E429' "$1"
           }
 
           LOG="$(mktemp)"
