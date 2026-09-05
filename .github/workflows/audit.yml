@@ -18,6 +18,21 @@ name: Audit
 #
 # Registering this job as a required status check in branch protection
 # is a separate operator action, out of scope here.
+#
+# Gate step outage handling (incident 2026-09-04: the registry's
+# advisories/bulk endpoint stopped answering for hours; npm's own client
+# applies no timeout to that call and just hangs). The gate step below
+# has two distinct failure outcomes, never conflated:
+#   - exit 2, OUTAGE: the audit endpoint did not answer (a registry-side
+#     problem, npm error text, or the local timeout below firing). This
+#     is NOT an advisory finding; do not silence it with `|| true`, the
+#     fix is to retry the job later once the endpoint is back.
+#   - exit 1, FINDINGS: the endpoint answered and returned a HIGH or
+#     CRITICAL advisory. Read the report step above.
+# A vulnerability summary in the output always wins over any outage-like
+# text also present, so a real finding can never be misread as an
+# outage; only a genuinely empty or error-only result is classified as
+# an outage.
 
 on:
   pull_request:
@@ -49,7 +64,66 @@ jobs:
           node-version: "20"
       - name: npm audit (full report, non-blocking)
         working-directory: ${{ matrix.working-directory }}
-        run: npm audit || true
+        run: npm audit --no-fund || true
       - name: npm audit gate (high/critical fail)
         working-directory: ${{ matrix.working-directory }}
-        run: npm audit --audit-level=high
+        # Per-step bound so a hanging endpoint cannot eat the whole job's
+        # timeout-minutes budget; kept well under it.
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+
+          # Bound on the audit call itself: npm's implicit HTTP client
+          # applies no timeout of its own to the advisories/bulk request
+          # (observed: it hangs indefinitely against a black-holed
+          # endpoint, with zero output). This local bound lets the gate
+          # notice that case at all instead of running out the step budget.
+          AUDIT_TIMEOUT_SECS=60
+
+          classify_audit_outage() {
+            # $1: path to captured npm audit output (stdout+stderr).
+            local log="$1"
+            # A vulnerability summary means the endpoint answered and
+            # returned a real report; that wins over any outage marker
+            # that might also appear in it (e.g. a package literally
+            # named "network").
+            if grep -qE 'found [0-9]+ vulnerabilit|[0-9]+ (low|moderate|high|critical) severity' "$log"; then
+              return 1
+            fi
+            grep -qE 'audit endpoint returned an error|Invalid package tree|ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up|ERR_SOCKET_TIMEOUT|network|E[45][0-9]{2}' "$log"
+          }
+
+          LOG="$(mktemp)"
+          # GitHub Actions runs `run:` steps as `bash -eo pipefail`;
+          # without this guard, `set -e` would kill the script right at
+          # this pipeline on any non-zero exit (findings, outage, or a
+          # timeout alike), before the classification below ever runs.
+          set +e
+          timeout "${AUDIT_TIMEOUT_SECS}s" npm audit --audit-level=high --no-fund 2>&1 | tee "$LOG"
+          STATUS=$?
+          set -e
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "npm audit gate: endpoint answered, no HIGH or CRITICAL advisories."
+            rm -f "$LOG"
+            exit 0
+          fi
+
+          if [ "$STATUS" -eq 124 ]; then
+            # A hang produces zero output (npm never gets a chance to
+            # print anything before the local timeout kills it), so
+            # classify_audit_outage would see an empty log; feed it an
+            # equivalent marker of our own so the same single classifier
+            # decides every non-zero path.
+            echo "ERR_SOCKET_TIMEOUT: npm audit did not return within ${AUDIT_TIMEOUT_SECS}s" >> "$LOG"
+          fi
+
+          if classify_audit_outage "$LOG"; then
+            echo "::error::npm audit gate: the audit endpoint did not answer (registry outage), this is NOT an advisory finding; retry the job later"
+            rm -f "$LOG"
+            exit 2
+          fi
+
+          echo "::error::npm audit gate: HIGH or CRITICAL advisories reported (endpoint answered); read the report step above"
+          rm -f "$LOG"
+          exit 1
