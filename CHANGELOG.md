@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **CVE sweep 2026-09-09** (task `e8b5849a`): closed five advisories across
+  six vulnerable packages (npm audit's count of 6) on the root lockfile by
+  regenerating it within existing `package.json` ranges; no dependency
+  range change was required for the fix:
+  - `next` 15.5.21 -> 15.5.25 (GHSA-p293-qw3h-jr36, critical,
+    unauthenticated RCE on windows-hosted servers; GHSA-2xp9-vwfh-vxw4,
+    critical, RCE in the Image Optimization API via AVIF files), already
+    within the `^15.5.15` range in `package.json`.
+  - `sharp` 0.35.3 -> 0.35.4 (GHSA-rgj7-g3m4-5g8c, high, libheif
+    vulnerabilities): 0.35.4 was already inside the existing `^0.35.3`
+    override (semver `>=0.35.3 <0.36.0-0`), the lockfile was simply stale;
+    the override floor was raised to `^0.35.4` deliberately as a regression
+    guard, not because the fix needed it. `next` 15.5.25 itself now declares
+    `sharp: ^0.34.3 || ^0.35.4`, so the override no longer gates the fixed
+    version.
+  - `js-yaml` 4.3.1 -> 4.3.2 (GHSA-2883-xcg3-v3hh, high, `maxTotalMergeKeys`
+    does not limit CPU use for empty merge sources): a transitive
+    dependency of `@eslint/eslintrc`, already within its declared
+    `^4.3.0` range, no override needed.
+  - `vitest` / `@vitest/mocker` / `@vitest/coverage-v8` 4.1.2 -> 4.1.11
+    (GHSA-82fw-gwwq-j7x9, moderate, path traversal / arbitrary file read
+    via `@vitest/mocker`'s redirect mock), already within the `^4.1.2`
+    devDependency ranges.
+
+  Lockfile regenerated with `npm update next sharp js-yaml vitest
+  @vitest/mocker @vitest/coverage-v8 --package-lock-only` under npm
+  10.8.2 (Node 20.20.2, nvm); no npm 11 fallback was needed, the
+  `edgesOut` crash reported in earlier sweeps for lockfile-only resolves
+  with `@vitest/coverage-v8` in the graph did not reproduce here. Side
+  effects visible in the lockfile diff (13 entries added, 3 removed, 66
+  changed, none across a major), among them: `vite` 8.0.16 -> 8.2.2 and
+  `rolldown` 1.0.3 -> 1.2.7 (vitest's internal toolchain), the nested
+  `picomatch` under `node_modules/vite` 4.0.4 -> 4.0.7 (the hoisted copy
+  unchanged), `vite` now nesting its own `lightningcss` copy instead of
+  sharing the hoisted one, `@oxc-project/types` 0.133.0 -> 0.148.0,
+  `@emnapi/runtime` 1.10.0 -> 1.11.3 (its nested copy under
+  `@img/sharp-wasm32` removed), `@img/sharp-libvips-*` 1.3.2 -> 1.3.3
+  across the platform entries, `@rolldown/binding-wasm32-wasi` removed and
+  `@rolldown/binding-android-arm-eabi` added.
+  `mcp/` was not touched: its own audit gate (moderate-only, `hono` and
+  the same `@vitest/mocker` advisory) was already green under
+  `--audit-level=high` before this change and stays that way.
+
 ### Fixed
 
 - **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
