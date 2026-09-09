@@ -52,6 +52,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the same `@vitest/mocker` advisory) was already green under
   `--audit-level=high` before this change and stays that way.
 
+- **CVE sweep 2026-09-09, `mcp/` lockfile** (task `105be32b`): closed the
+  four remaining moderate Dependabot alerts on `mcp/package-lock.json`
+  left open after the root sweep above (the `Audit (mcp)` gate stayed
+  green throughout, since it fails only on high/critical):
+  - `hono` 4.13.0 -> 4.13.7 (GHSA-crvj-82cr-hjcx, query parser reads
+    parameters after the URL fragment; GHSA-g6gw-c38x-mqfc, unbounded
+    dot-notation nesting in `parseBody()`; GHSA-gqvv-2mrq-wpjv,
+    incomplete fix for CVE-2026-39408, `toSSG()` still writes files
+    outside the output directory), a transitive dependency of
+    `@modelcontextprotocol/sdk` (`^4.11.4`), already within that range,
+    no override needed.
+  - `vitest` / `@vitest/mocker` / `@vitest/coverage-v8` 4.1.8 -> 4.1.11
+    (GHSA-82fw-gwwq-j7x9, path traversal / arbitrary file read via
+    `@vitest/mocker`'s redirect mock): `npm update` alone left these at
+    4.1.8 despite the `^4.1.8` devDependency ranges admitting 4.1.11, so
+    `vitest` and `@vitest/coverage-v8` were installed explicitly at
+    4.1.11, which raised their declared ranges to `^4.1.11`; `@vitest/mocker`
+    followed as a nested dependency of `vitest`.
+
+  Lockfile regenerated in two steps under npm 11.19.1 (`npx npm@11`,
+  Node 22.23.2 via nvm) after npm 10.8.2's `npm update` hit the known
+  `Cannot read properties of null (reading 'edgesOut')` crash on this
+  graph: `npm update hono vitest @vitest/mocker @vitest/coverage-v8
+  --package-lock-only`, then `npm install vitest@4.1.11
+  @vitest/coverage-v8@4.1.11 --package-lock-only`; verified afterwards
+  with `npm ci` and `npm audit` under npm 10.8.2 (Node 20.20.2). No
+  dependency crossed a major version. Lockfile delta: 1 entry added, 7
+  removed, 47 changed, all `vitest`'s and `rolldown`'s own internal
+  toolchain and platform binaries (`vite`, `rolldown`,
+  `@oxc-project/types`, `lightningcss-*`, `@rolldown/binding-*`) plus
+  `hono` itself; the `wasm32`/`emnapi` fallback entries for
+  `@rolldown/binding-wasm32-wasi` were dropped and
+  `@rolldown/binding-android-arm-eabi` was added by the newer
+  `rolldown` release's platform matrix. Root `package.json` and
+  `package-lock.json` were not touched.
+
 ### Fixed
 
 - **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
