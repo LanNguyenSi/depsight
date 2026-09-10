@@ -19,7 +19,7 @@ export function registerCiTools(
         .string()
         .optional()
         .describe(
-          "Optional: the depsight repo ID. Omit to get cross-repo summaries.",
+          "Optional: the depsight repo ID (repoId field, not id). Omit to get cross-repo summaries.",
         ),
       type: z
         .enum(["fail-rate", "build-times", "flaky", "bottleneck"])

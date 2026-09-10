@@ -14,7 +14,7 @@ export function registerLicenseTools(
       repoId: z
         .string()
         .min(1)
-        .describe("The depsight repo ID. Get it from depsight_list_repos."),
+        .describe("The depsight repo ID. Get it from depsight_list_repos (repoId field, not id)."),
     },
     async ({ repoId }) => {
       try {

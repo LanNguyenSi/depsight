@@ -90,6 +90,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`depsight_list_repos` now carries depsight's own `repoId` alongside
+  GitHub's numeric `id`** (task `33e80873`): the MCP tool returned only
+  GitHub's numeric repo id, while `depsight_rescan` / `depsight_get_cves`
+  (and every other `repoId`-taking tool) expect depsight's own id, only
+  previously obtainable from `depsight_get_overview`; a caller piping
+  the list output straight into `depsight_rescan` got a 404 "Repository
+  not found" (reproduced against the live server before the fix).
+  `mcp/src/tools/repos.ts` now fetches `/api/overview` alongside
+  `/api/repos` and merges each overview entry's `repoId` into the
+  matching list entry by `fullName`; GitHub's `id` is left untouched. An
+  entry depsight tracks (added by the dashboard's Sync action or the sync
+  cron; no scan required) carries `repoId`; an entry without `repoId` is
+  not tracked yet and can only be added through depsight's own sync, not
+  through `depsight_rescan` (`POST /api/scan` requires an existing
+  `repoId`). The overview fetch is capped with a 5s timeout so a slow
+  `/api/overview` degrades to "no `repoId` added" through the same path as
+  an overview fetch failure, rather than stalling the whole list. Additive
+  only: no existing field was renamed, and every other `depsight_*` tool's
+  behavior is unchanged.
+
+  `fullName` is a mutable, non-unique join key (depsight's `Repo` model is
+  unique on `userId`+`githubId`; `fullName` only refreshes at sync, and the
+  overview response carries no `githubId` today to join on instead, so the
+  server-side fix is a separate follow-up, out of this task's scope). Round
+  2 hardens the client-side join: when two overview entries share the same
+  `fullName`, neither attaches a `repoId` to the matching list entry (never
+  last-write-wins), and the match is case-sensitive (a case-differing
+  `fullName` does not match). The tool description and README row now say
+  so, plus the caveat that `repoId` is matched by full name at the time of
+  depsight's last sync, so a rename-and-recreate on GitHub can leave it
+  stale until the next sync. Round 3 makes the degrade observable: when the
+  `/api/overview` leg failed, timed out, or came back in an unrecognised
+  shape, the returned list now carries a top-level
+  `repoIdMergeUnavailable: true` so a caller can tell "not tracked" apart
+  from "the overview leg didn't run this call" instead of confusing the
+  two; the key is absent when the merge ran normally. An ambiguous
+  `fullName` still yields no `repoId` but is not flagged this way (the
+  overview leg itself succeeded); the tool description and README row
+  say so and point callers at `depsight_get_overview` to confirm either
+  case. A malformed entry in
+  `/api/repos`'s own `repos` array (`null` or a non-object) is now also
+  returned unchanged instead of throwing inside the merge or being spread
+  into character keys.
+
 - **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
   (`lib/repos/sync.ts`, used by `POST /api/repos/sync`) reads GitHub's
   `archived` flag and excludes archived repos from the active sync set,

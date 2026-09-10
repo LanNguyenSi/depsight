@@ -8,7 +8,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 
 | Name | Purpose |
 |---|---|
-| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded (GitHub ids, not depsight `repoId` values; those come from `depsight_get_overview`) |
+| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded. Also calls `/api/overview` and, for repos depsight tracks (added by the dashboard's Sync action or the sync cron; no scan required), merges in depsight's own `repoId` by full name alongside GitHub's numeric `id`; pass `repoId`, not `id`, to every other `depsight_*` tool below. An entry with no `repoId` is either not tracked yet (can only be added through depsight's own sync, not `depsight_rescan`) or its overview leg was unavailable for this call (`/api/overview` failed, exceeded its 5s bound, or came back in an unrecognised shape), flagged by the response's top-level `repoIdMergeUnavailable: true`. A `fullName` ambiguous across two tracked repos also yields no `repoId` but is NOT flagged that way. In both cases, confirm with `depsight_get_overview` before treating an entry as untracked. |
 | `depsight_get_overview` | Team-health dashboard summary across all tracked repos |
 | `depsight_get_cves` | Get the latest CVE scan for a repo, with optional min-severity / since-date filters |
 | `depsight_get_license_report` | Per-package license compatibility + policy violations |
