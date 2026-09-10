@@ -90,6 +90,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`depsight_list_repos` now carries depsight's own `repoId` alongside
+  GitHub's numeric `id`** (task `33e80873`): the MCP tool returned only
+  GitHub's numeric repo id, while `depsight_rescan` / `depsight_get_cves`
+  (and every other `repoId`-taking tool) expect depsight's own id, only
+  previously obtainable from `depsight_get_overview`; a caller piping
+  the list output straight into `depsight_rescan` got a 404 "Repository
+  not found" (reproduced against the live server before the fix).
+  `mcp/src/tools/repos.ts` now fetches `/api/overview` alongside
+  `/api/repos` and merges each overview entry's `repoId` into the
+  matching list entry by `fullName`; GitHub's `id` is left untouched. A
+  repo GitHub reports but depsight has not tracked/scanned yet has no
+  overview entry and so gets no `repoId` field; it stays resolvable via
+  the pre-existing `depsight_get_overview` path once tracked. An
+  overview fetch failure degrades to the list without `repoId` rather
+  than failing `depsight_list_repos` outright. Additive only: no
+  existing field was renamed, and every other `depsight_*` tool's
+  behavior is unchanged.
+
 - **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
   (`lib/repos/sync.ts`, used by `POST /api/repos/sync`) reads GitHub's
   `archived` flag and excludes archived repos from the active sync set,

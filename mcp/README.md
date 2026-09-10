@@ -8,7 +8,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 
 | Name | Purpose |
 |---|---|
-| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded (GitHub ids, not depsight `repoId` values; those come from `depsight_get_overview`) |
+| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded. Each entry keeps GitHub's numeric `id` and, for repos depsight has already tracked/scanned, also carries depsight's own `repoId`; pass `repoId`, not `id`, to every other `depsight_*` tool below. An entry with no `repoId` (not yet tracked) can still be resolved via `depsight_get_overview` once it is. |
 | `depsight_get_overview` | Team-health dashboard summary across all tracked repos |
 | `depsight_get_cves` | Get the latest CVE scan for a repo, with optional min-severity / since-date filters |
 | `depsight_get_license_report` | Per-package license compatibility + policy violations |
