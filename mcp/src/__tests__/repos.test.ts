@@ -98,6 +98,16 @@ describe("withDepsightRepoIds", () => {
     expect("repoIdMergeUnavailable" in merged).toBe(false);
   });
 
+  it("treats an empty overview repos array as a usable answer (nothing tracked, no repoId anywhere, no unavailable marker)", () => {
+    const merged = withDepsightRepoIds(GITHUB_LIST, { repos: [] }) as {
+      repos: Array<Record<string, unknown>>;
+    };
+
+    expect(merged.repos[0]).toEqual(GITHUB_LIST.repos[0]);
+    expect(merged.repos[1]).toEqual(GITHUB_LIST.repos[1]);
+    expect("repoIdMergeUnavailable" in merged).toBe(false);
+  });
+
   it("returns the input unchanged when the list itself has an unrecognized shape", () => {
     const weird = { notRepos: [] };
     expect(withDepsightRepoIds(weird, OVERVIEW)).toBe(weird);
@@ -149,6 +159,9 @@ describe("withDepsightRepoIds", () => {
       fullName: "acme/widgets",
       name: "widgets",
     });
+    // An ambiguous fullName yields no repoId but the overview leg itself
+    // succeeded, so it must NOT be conflated with an unavailable merge.
+    expect("repoIdMergeUnavailable" in (merged as Record<string, unknown>)).toBe(false);
   });
 
   it("does not match a case-differing fullName", () => {

@@ -124,8 +124,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `/api/overview` leg failed, timed out, or came back in an unrecognised
   shape, the returned list now carries a top-level
   `repoIdMergeUnavailable: true` so a caller can tell "not tracked" apart
-  from "the repoId merge didn't run this call" instead of confusing the
-  two; the key is absent when the merge ran normally. A malformed entry in
+  from "the overview leg didn't run this call" instead of confusing the
+  two; the key is absent when the merge ran normally. An ambiguous
+  `fullName` still yields no `repoId` but is not flagged this way (the
+  overview leg itself succeeded); the tool description and README row
+  say so and point callers at `depsight_get_overview` to confirm either
+  case. A malformed entry in
   `/api/repos`'s own `repos` array (`null` or a non-object) is now also
   returned unchanged instead of throwing inside the merge or being spread
   into character keys.
