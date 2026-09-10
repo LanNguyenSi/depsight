@@ -21,7 +21,11 @@ export class DepsightClient {
   private async request<T>(
     method: "GET" | "POST",
     path: string,
-    init?: { body?: unknown; query?: Record<string, string | number | undefined> },
+    init?: {
+      body?: unknown;
+      query?: Record<string, string | number | undefined>;
+      signal?: AbortSignal;
+    },
   ): Promise<T> {
     const url = new URL(this.config.gatewayUrl + path);
     if (init?.query) {
@@ -39,6 +43,7 @@ export class DepsightClient {
         Authorization: `Bearer ${this.config.apiToken}`,
       },
       body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: init?.signal,
     });
 
     const text = await res.text();
@@ -62,8 +67,8 @@ export class DepsightClient {
     return this.request("GET", "/api/repos");
   }
 
-  getOverview(): Promise<unknown> {
-    return this.request("GET", "/api/overview");
+  getOverview(signal?: AbortSignal): Promise<unknown> {
+    return this.request("GET", "/api/overview", { signal });
   }
 
   getScan(repoId: string): Promise<unknown> {

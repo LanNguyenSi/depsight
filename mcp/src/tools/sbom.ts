@@ -15,7 +15,7 @@ export function registerSbomTools(
         .string()
         .min(1)
         .describe(
-          "The depsight repo ID. Obtain it from depsight_list_repos (id field).",
+          "The depsight repo ID. Obtain it from depsight_list_repos (repoId field).",
         ),
     },
     async ({ repoId }) => {

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { registerRepoTools, withDepsightRepoIds } from "../tools/repos.js";
+import {
+  registerRepoTools,
+  withDepsightRepoIds,
+  fetchOverviewWithTimeout,
+} from "../tools/repos.js";
 import { registerRescanTools } from "../tools/rescan.js";
 import { registerCveTools } from "../tools/cves.js";
 import type { DepsightClient } from "../client.js";
@@ -36,19 +40,18 @@ function parseToolText(result: ToolResult): unknown {
 // Fixture shaped like the real depsight API: /api/repos wraps entries in
 // `{ repos: [...] }` and uses GitHub's numeric `id`; /api/overview wraps its
 // per-repo health summaries the same way and keys them by depsight's own
-// `repoId`, matched here by `fullName` (reproduced against the live server
-// 2026-09-10: depsight_list_repos returned GitHub numeric ids only, and
-// depsight_rescan with one of those ids 404'd "Repository not found").
+// `repoId`, matched here by `fullName`. Values are neutral placeholders, not
+// real repos; provenance for the bug this fixture pins is in CHANGELOG.md.
 const GITHUB_LIST = {
   repos: [
-    { id: 1193429543, fullName: "LanNguyenSi/depsight", name: "depsight" },
-    { id: 999999999, fullName: "LanNguyenSi/untracked-repo", name: "untracked-repo" },
+    { id: 10001001, fullName: "acme/widgets", name: "widgets" },
+    { id: 20002002, fullName: "acme/untracked-repo", name: "untracked-repo" },
   ],
 };
 
 const OVERVIEW = {
   repos: [
-    { repoId: "cmn9yluwe0002pe01eu6uhpu2", fullName: "LanNguyenSi/depsight" },
+    { repoId: "repo-cuid-1", fullName: "acme/widgets" },
   ],
   aggregate: { totalRepos: 1 },
 };
@@ -60,14 +63,14 @@ describe("withDepsightRepoIds", () => {
     };
 
     expect(merged.repos[0]).toEqual({
-      id: 1193429543,
-      fullName: "LanNguyenSi/depsight",
-      name: "depsight",
-      repoId: "cmn9yluwe0002pe01eu6uhpu2",
+      id: 10001001,
+      fullName: "acme/widgets",
+      name: "widgets",
+      repoId: "repo-cuid-1",
     });
     expect(merged.repos[1]).toEqual({
-      id: 999999999,
-      fullName: "LanNguyenSi/untracked-repo",
+      id: 20002002,
+      fullName: "acme/untracked-repo",
       name: "untracked-repo",
     });
     expect("repoId" in merged.repos[1]).toBe(false);
@@ -77,7 +80,7 @@ describe("withDepsightRepoIds", () => {
     const merged = withDepsightRepoIds(GITHUB_LIST, OVERVIEW) as {
       repos: Array<Record<string, unknown>>;
     };
-    expect(merged.repos[0].id).toBe(1193429543);
+    expect(merged.repos[0].id).toBe(10001001);
   });
 
   it("returns the list unchanged when overview has an unrecognized shape", () => {
@@ -95,9 +98,9 @@ describe("withDepsightRepoIds", () => {
       repos: [
         null,
         "not-an-object",
-        { fullName: "LanNguyenSi/depsight" }, // repoId missing
+        { fullName: "acme/widgets" }, // repoId missing
         { repoId: "some-id" }, // fullName missing
-        { repoId: 42, fullName: "LanNguyenSi/depsight" }, // repoId wrong type
+        { repoId: 42, fullName: "acme/widgets" }, // repoId wrong type
       ],
     };
 
@@ -117,6 +120,49 @@ describe("withDepsightRepoIds", () => {
 
     expect(merged.repos[0]).toEqual({ id: 1, name: "no-fullname" });
   });
+
+  it("attaches no repoId when two overview entries share a fullName (never last-write-wins)", () => {
+    const ambiguousOverview = {
+      repos: [
+        { repoId: "repo-cuid-1", fullName: "acme/widgets" },
+        { repoId: "repo-cuid-2", fullName: "acme/widgets" },
+      ],
+    };
+
+    const merged = withDepsightRepoIds(GITHUB_LIST, ambiguousOverview) as {
+      repos: Array<Record<string, unknown>>;
+    };
+
+    expect("repoId" in merged.repos[0]).toBe(false);
+    expect(merged.repos[0]).toEqual({
+      id: 10001001,
+      fullName: "acme/widgets",
+      name: "widgets",
+    });
+  });
+
+  it("does not match a case-differing fullName", () => {
+    const caseDifferentOverview = {
+      repos: [{ repoId: "repo-cuid-1", fullName: "Acme/Widgets" }],
+    };
+
+    const merged = withDepsightRepoIds(GITHUB_LIST, caseDifferentOverview) as {
+      repos: Array<Record<string, unknown>>;
+    };
+
+    expect("repoId" in merged.repos[0]).toBe(false);
+  });
+
+  it("preserves a top-level key beside `repos` on the list response", () => {
+    const listWithSiblingKey = { repos: GITHUB_LIST.repos, cursor: "next-page-token" };
+
+    const merged = withDepsightRepoIds(listWithSiblingKey, OVERVIEW) as {
+      repos: Array<Record<string, unknown>>;
+      cursor: string;
+    };
+
+    expect(merged.cursor).toBe("next-page-token");
+  });
 });
 
 describe("depsight_list_repos tool", () => {
@@ -132,12 +178,12 @@ describe("depsight_list_repos tool", () => {
     expect(parseToolText(result)).toEqual({
       repos: [
         {
-          id: 1193429543,
-          fullName: "LanNguyenSi/depsight",
-          name: "depsight",
-          repoId: "cmn9yluwe0002pe01eu6uhpu2",
+          id: 10001001,
+          fullName: "acme/widgets",
+          name: "widgets",
+          repoId: "repo-cuid-1",
         },
-        { id: 999999999, fullName: "LanNguyenSi/untracked-repo", name: "untracked-repo" },
+        { id: 20002002, fullName: "acme/untracked-repo", name: "untracked-repo" },
       ],
     });
   });
@@ -172,6 +218,30 @@ describe("depsight_list_repos tool", () => {
       error: "gateway down",
     });
   });
+});
+
+describe("fetchOverviewWithTimeout", () => {
+  it(
+    "resolves to undefined within its own timeout when the overview call never settles",
+    async () => {
+      // Mirrors what a real `fetch` does on AbortSignal.timeout: the
+      // request never resolves on its own, only rejects once the signal
+      // fires. If the timeout wrap is dropped, this promise (and the
+      // test) hangs until vitest's own per-test timeout below kills it,
+      // so a missing timeout fails loudly instead of hanging the suite.
+      const client: Partial<DepsightClient> = {
+        getOverview: (signal?: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      };
+
+      const result = await fetchOverviewWithTimeout(client as DepsightClient, 50);
+
+      expect(result).toBeUndefined();
+    },
+    1000,
+  );
 });
 
 describe("depsight_get_overview tool", () => {
@@ -228,8 +298,8 @@ describe("round trip: depsight_list_repos -> depsight_rescan -> depsight_get_cve
     const list = parseToolText(listResult) as {
       repos: Array<{ id: number; repoId?: string; fullName: string }>;
     };
-    const depsightEntry = list.repos.find((r) => r.fullName === "LanNguyenSi/depsight");
-    expect(depsightEntry?.repoId).toBe("cmn9yluwe0002pe01eu6uhpu2");
+    const depsightEntry = list.repos.find((r) => r.fullName === "acme/widgets");
+    expect(depsightEntry?.repoId).toBe("repo-cuid-1");
     const repoId = depsightEntry!.repoId!;
 
     // Using the GitHub id instead would be the exact bug this task fixes;
