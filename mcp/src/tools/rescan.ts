@@ -15,7 +15,7 @@ export function registerRescanTools(
         .string()
         .min(1)
         .describe(
-          "The depsight repo ID to scan. Get it from depsight_list_repos. An all-repos mode is not supported — scan each repo individually.",
+          "The depsight repo ID to scan. Get it from depsight_list_repos (repoId field, not id). An all-repos mode is not supported; scan each repo individually.",
         ),
     },
     async ({ repoId }) => {

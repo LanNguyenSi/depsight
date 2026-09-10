@@ -120,7 +120,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `fullName` does not match). The tool description and README row now say
   so, plus the caveat that `repoId` is matched by full name at the time of
   depsight's last sync, so a rename-and-recreate on GitHub can leave it
-  stale until the next sync.
+  stale until the next sync. Round 3 makes the degrade observable: when the
+  `/api/overview` leg failed, timed out, or came back in an unrecognised
+  shape, the returned list now carries a top-level
+  `repoIdMergeUnavailable: true` so a caller can tell "not tracked" apart
+  from "the repoId merge didn't run this call" instead of confusing the
+  two; the key is absent when the merge ran normally. A malformed entry in
+  `/api/repos`'s own `repos` array (`null` or a non-object) is now also
+  returned unchanged instead of throwing inside the merge or being spread
+  into character keys.
 
 - **Repo sync now untracks archived GitHub repos:** the GitHub repo sync
   (`lib/repos/sync.ts`, used by `POST /api/repos/sync`) reads GitHub's

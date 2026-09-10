@@ -22,15 +22,25 @@ interface ListReposResponseLike {
  * health summaries (the only place depsight's Next.js API exposes that id
  * today). Matching is best-effort: a repo GitHub reports but depsight has
  * not tracked/scanned yet (so it has no overview entry) keeps its GitHub
- * `id` only and gets no `repoId` field. Unrecognized shapes are returned
- * unchanged rather than throwing, so a shape drift in either endpoint
- * degrades to "no repoId added" instead of failing the whole list.
+ * `id` only and gets no `repoId` field. A malformed entry in the list's own
+ * `repos` array (not an object, or `null`) is returned unchanged rather than
+ * throwing or being spread into character keys.
  *
  * `fullName` is a case-sensitive exact match and is not a stable key: it is
  * only refreshed by depsight's own sync, so a rename-and-recreate on GitHub
  * can leave it stale until the next sync. If two overview entries collide on
  * the same `fullName`, that name is ambiguous and no `repoId` is attached to
  * the matching list entry at all, never a last-write-wins guess.
+ *
+ * When the `overview` argument itself is not a recognisable overview
+ * (undefined, because `/api/overview` failed, timed out, or came back in an
+ * unrecognised shape), the repoId merge could not run at all: no entry gets
+ * a `repoId`, indistinguishable from "not tracked yet" unless callers can
+ * tell the two cases apart. The returned list then carries a top-level
+ * `repoIdMergeUnavailable: true` marker so a caller can tell "not tracked"
+ * from "the merge didn't run this call" and confirm with
+ * `depsight_get_overview`. When the overview is usable the key is omitted
+ * entirely (never emitted as `false`).
  */
 export function withDepsightRepoIds(
   listResponse: unknown,
@@ -44,13 +54,14 @@ export function withDepsightRepoIds(
     return listResponse;
   }
 
-  const repoIdByFullName = new Map<string, string>();
-  const ambiguousFullNames = new Set<string>();
-  if (
+  const overviewUsable =
     typeof overview === "object" &&
     overview !== null &&
-    Array.isArray((overview as OverviewLike).repos)
-  ) {
+    Array.isArray((overview as OverviewLike).repos);
+
+  const repoIdByFullName = new Map<string, string>();
+  const ambiguousFullNames = new Set<string>();
+  if (overviewUsable) {
     for (const entry of (overview as { repos: unknown[] }).repos) {
       if (typeof entry !== "object" || entry === null) continue;
       const { repoId, fullName } = entry as RepoHealthSummaryLike;
@@ -68,14 +79,24 @@ export function withDepsightRepoIds(
   }
 
   const repos = (
-    (listResponse as { repos: unknown[] }).repos as Array<Record<string, unknown>>
+    (listResponse as { repos: unknown[] }).repos as Array<unknown>
   ).map((repo) => {
-    const fullName = typeof repo.fullName === "string" ? repo.fullName : undefined;
+    if (typeof repo !== "object" || repo === null) return repo;
+    const repoRecord = repo as Record<string, unknown>;
+    const fullName =
+      typeof repoRecord.fullName === "string" ? repoRecord.fullName : undefined;
     const repoId = fullName !== undefined ? repoIdByFullName.get(fullName) : undefined;
-    return repoId !== undefined ? { ...repo, repoId } : { ...repo };
+    return repoId !== undefined ? { ...repoRecord, repoId } : { ...repoRecord };
   });
 
-  return { ...(listResponse as Record<string, unknown>), repos };
+  const merged: Record<string, unknown> = {
+    ...(listResponse as Record<string, unknown>),
+    repos,
+  };
+  if (!overviewUsable) {
+    merged.repoIdMergeUnavailable = true;
+  }
+  return merged;
 }
 
 /** How long depsight_list_repos waits on /api/overview before giving up on
@@ -103,7 +124,7 @@ export function registerRepoTools(
 ): void {
   server.tool(
     "depsight_list_repos",
-    "List the GitHub repositories the authenticated user has access to (via their GitHub token). This is the live GitHub list, not depsight's tracked-repo set. Archived repos are excluded, matching depsight's own tracked repos, which are untracked (and excluded from scan/policy evaluation) once GitHub reports them as archived. Each entry's `id` is GitHub's numeric repo id, kept unchanged; entries depsight tracks (added by the dashboard's Sync action or the sync cron; no scan required) also carry `repoId`, depsight's own id. Pass that value, not `id`, to depsight_rescan / depsight_get_cves / depsight_get_deps / etc. An entry with no `repoId` is not tracked yet; it can only be added through depsight's own sync, not through depsight_rescan (`POST /api/scan` requires an existing `repoId`). `repoId` is matched by full name at the time of depsight's last sync, so after a rename-and-recreate on GitHub the value can be stale until the next sync.",
+    "List the GitHub repositories the authenticated user has access to (via their GitHub token). This is the live GitHub list, not depsight's tracked-repo set. Archived repos are excluded, matching depsight's own tracked repos, which are untracked (and excluded from scan/policy evaluation) once GitHub reports them as archived. Each entry's `id` is GitHub's numeric repo id, kept unchanged; entries depsight tracks (added by the dashboard's Sync action or the sync cron; no scan required) also carry `repoId`, depsight's own id. Pass that value, not `id`, to depsight_rescan / depsight_get_cves / depsight_get_deps / etc. `repoId` is matched by full name at the time of depsight's last sync, so after a rename-and-recreate on GitHub the value can be stale until the next sync. An entry with no `repoId` is EITHER not yet tracked (can only be added through depsight's own sync, not through depsight_rescan, which requires an existing `repoId`) OR the repoId merge was unavailable for this call: the `/api/overview` leg failed, exceeded its 5s bound, or a `fullName` was ambiguous across two tracked repos. When the response carries a top-level `repoIdMergeUnavailable: true`, treat every entry without `repoId` as unknown, not confirmed untracked, and confirm with depsight_get_overview.",
     {},
     async () => {
       try {

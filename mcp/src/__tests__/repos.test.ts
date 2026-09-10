@@ -83,9 +83,19 @@ describe("withDepsightRepoIds", () => {
     expect(merged.repos[0].id).toBe(10001001);
   });
 
-  it("returns the list unchanged when overview has an unrecognized shape", () => {
+  it("marks repoIdMergeUnavailable when overview has an unrecognized shape (repos unchanged, no repoId)", () => {
     const merged = withDepsightRepoIds(GITHUB_LIST, { unexpected: true });
-    expect(merged).toEqual(GITHUB_LIST);
+    expect(merged).toEqual({ ...GITHUB_LIST, repoIdMergeUnavailable: true });
+  });
+
+  it("marks repoIdMergeUnavailable when overview is undefined", () => {
+    const merged = withDepsightRepoIds(GITHUB_LIST, undefined);
+    expect(merged).toEqual({ ...GITHUB_LIST, repoIdMergeUnavailable: true });
+  });
+
+  it("omits repoIdMergeUnavailable entirely (never `false`) when overview is usable", () => {
+    const merged = withDepsightRepoIds(GITHUB_LIST, OVERVIEW) as Record<string, unknown>;
+    expect("repoIdMergeUnavailable" in merged).toBe(false);
   });
 
   it("returns the input unchanged when the list itself has an unrecognized shape", () => {
@@ -153,6 +163,24 @@ describe("withDepsightRepoIds", () => {
     expect("repoId" in merged.repos[0]).toBe(false);
   });
 
+  it("returns a null or primitive entry in the list's own repos array unchanged, without throwing or reshaping it", () => {
+    const messyList = {
+      repos: [null, "oops", { id: 1, fullName: "acme/widgets" }],
+    };
+
+    const merged = withDepsightRepoIds(messyList, OVERVIEW) as {
+      repos: Array<unknown>;
+    };
+
+    expect(merged.repos[0]).toBeNull();
+    expect(merged.repos[1]).toBe("oops");
+    expect(merged.repos[2]).toEqual({
+      id: 1,
+      fullName: "acme/widgets",
+      repoId: "repo-cuid-1",
+    });
+  });
+
   it("preserves a top-level key beside `repos` on the list response", () => {
     const listWithSiblingKey = { repos: GITHUB_LIST.repos, cursor: "next-page-token" };
 
@@ -188,7 +216,7 @@ describe("depsight_list_repos tool", () => {
     });
   });
 
-  it("still returns the list when the overview fetch fails (repoId omitted, not an error)", async () => {
+  it("still returns the list when the overview fetch fails (repoId omitted, repoIdMergeUnavailable set, not an error)", async () => {
     const handlers = captureRepoHandlers({
       listRepos: async () => GITHUB_LIST,
       getOverview: async () => {
@@ -199,7 +227,10 @@ describe("depsight_list_repos tool", () => {
     const result = await handlers["depsight_list_repos"]({});
 
     expect(result.isError).toBeUndefined();
-    expect(parseToolText(result)).toEqual(GITHUB_LIST);
+    expect(parseToolText(result)).toEqual({
+      ...GITHUB_LIST,
+      repoIdMergeUnavailable: true,
+    });
   });
 
   it("converts a client throw into an isError result", async () => {
@@ -239,6 +270,15 @@ describe("fetchOverviewWithTimeout", () => {
       const result = await fetchOverviewWithTimeout(client as DepsightClient, 50);
 
       expect(result).toBeUndefined();
+
+      // Feeding that `undefined` into the merge (what depsight_list_repos
+      // does) must surface as repoIdMergeUnavailable, not a silent "not
+      // tracked" result.
+      const merged = withDepsightRepoIds(GITHUB_LIST, result) as Record<
+        string,
+        unknown
+      >;
+      expect(merged.repoIdMergeUnavailable).toBe(true);
     },
     1000,
   );

@@ -8,7 +8,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 
 | Name | Purpose |
 |---|---|
-| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded. Also calls `/api/overview` and, for repos depsight tracks (added by the dashboard's Sync action or the sync cron; no scan required), merges in depsight's own `repoId` by full name alongside GitHub's numeric `id`; pass `repoId`, not `id`, to every other `depsight_*` tool below. An entry with no `repoId` is not tracked yet and can only be added through depsight's own sync, not `depsight_rescan`. |
+| `depsight_list_repos` | List the user's live GitHub repos, archived ones excluded. Also calls `/api/overview` and, for repos depsight tracks (added by the dashboard's Sync action or the sync cron; no scan required), merges in depsight's own `repoId` by full name alongside GitHub's numeric `id`; pass `repoId`, not `id`, to every other `depsight_*` tool below. An entry with no `repoId` is either not tracked yet (can only be added through depsight's own sync, not `depsight_rescan`) or the merge was unavailable for this call (`/api/overview` failed, exceeded its 5s bound, or an ambiguous `fullName`), check the response's top-level `repoIdMergeUnavailable: true` and confirm with `depsight_get_overview` before treating an entry as untracked. |
 | `depsight_get_overview` | Team-health dashboard summary across all tracked repos |
 | `depsight_get_cves` | Get the latest CVE scan for a repo, with optional min-severity / since-date filters |
 | `depsight_get_license_report` | Per-package license compatibility + policy violations |
