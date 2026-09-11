@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **CVE sweep 2026-09-11** (task `729402b7-12a7-4075-8802-89b41be000c0`):
+  closed a manifest-floor false-positive reported by depsight's own OSV
+  channel: `postcss` GHSA-fxqj-rqcc-2cmp / CVE-2026-69153 (fixed 8.5.23)
+  was flagged even though the root lockfile already resolved `postcss`
+  8.5.23, because the OSV channel reads the declared manifest range, not
+  the resolved lock version. `postcss`'s `devDependencies` range and the
+  top-level `overrides.postcss` floor were both raised from `^8.5.18` to
+  `^8.5.23` in `package.json`, then `package-lock.json` was regenerated
+  with `npm install --package-lock-only` under npm 10.8.2 (Node 20.20.2,
+  nvm); the `edgesOut` crash reported in earlier sweeps did not reproduce
+  here, so no npm 11 fallback was needed. The only lockfile change is the
+  mirrored `postcss` range string on the root package entry; the resolved
+  `node_modules/postcss` version stays 8.5.23 and no nested record was
+  added or removed. `mcp/` was not touched: its own lockfile has no direct
+  `postcss` entry and its nested copy (`^8.5.26`) was already current;
+  `npm audit --audit-level=moderate` stayed clean on both trees before and
+  after.
+
 - **CVE sweep 2026-09-09** (task `e8b5849a`): closed five advisories across
   six vulnerable packages (npm audit's count of 6) on the root lockfile by
   regenerating it within existing `package.json` ranges; no dependency
