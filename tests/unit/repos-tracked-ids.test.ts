@@ -1,4 +1,4 @@
-// Unit tests for lib/repos/tracked-ids.ts — getTrackedRepoIds.
+// Unit tests for lib/repos/tracked-ids.ts -- getTrackedRepoIds.
 // Prisma is mocked at the module boundary; no DB access.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 

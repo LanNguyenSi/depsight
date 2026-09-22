@@ -209,8 +209,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
   What the list call now saves, counted from `getTeamHealthOverview`'s
   code path and measured on the live account (three sequential GETs each,
-  34 tracked repos, warm server: `/api/overview` 0.79-1.19s vs. `/api/repos`
-  0.47-0.71s): the old merge's `/api/overview` fetch ran that function's full aggregation
+  34 tracked repos, warm server): the `/api/overview` leg the list call no
+  longer makes cost 0.79-1.19s, against 0.47-0.71s for the plain `/api/repos`
+  leg that runs either way; the new tracked-ids leg is one `repo.findMany` and
+  was not measured before deployment. The old merge's `/api/overview` fetch ran that function's full aggregation
   -- 5 aggregate Prisma calls (`repo.findMany`, three `scan.findMany`
   queries for the latest CVE/license/deps scan per repo, and one
   `dependency.groupBy` for outdated counts) plus one `getCIPenalty`
