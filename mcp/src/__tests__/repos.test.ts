@@ -6,6 +6,7 @@ import {
 } from "../tools/repos.js";
 import { registerRescanTools } from "../tools/rescan.js";
 import { registerCveTools } from "../tools/cves.js";
+import { HttpError } from "../client.js";
 import type { DepsightClient } from "../client.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "../tools/shared.js";
@@ -252,6 +253,23 @@ describe("depsight_list_repos tool", () => {
     expect(parseToolText(result)).toEqual({
       success: false,
       error: "gateway down",
+    });
+  });
+
+  it("degrades to repoIdMergeUnavailable, without throwing, when the tracked-ids endpoint 404s (an older depsight server without this route)", async () => {
+    const handlers = captureRepoHandlers({
+      listRepos: async () => GITHUB_LIST,
+      getTrackedRepoIds: async () => {
+        throw new HttpError(404, "/api/repos/tracked-ids", { error: "Not found" });
+      },
+    });
+
+    const result = await handlers["depsight_list_repos"]({});
+
+    expect(result.isError).toBeUndefined();
+    expect(parseToolText(result)).toEqual({
+      ...GITHUB_LIST,
+      repoIdMergeUnavailable: true,
     });
   });
 });

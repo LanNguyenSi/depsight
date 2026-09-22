@@ -147,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `fullName` still yields no `repoId` but is not flagged this way (the
   overview leg itself succeeded); the tool description and README row
   say so and point callers at `depsight_get_overview` to confirm either
-  case. A malformed entry in
+  case. Superseded by the `githubId` join of task `ed7ddf84` below,
+  before release. A malformed entry in
   `/api/repos`'s own `repos` array (`null` or a non-object) is now also
   returned unchanged instead of throwing inside the merge or being spread
   into character keys.
@@ -207,8 +208,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   calls `/api/overview` for the full team-health dashboard.
 
   What the list call now saves, counted from `getTeamHealthOverview`'s
-  code path (no live-account measurement available to this change): the
-  old merge's `/api/overview` fetch ran that function's full aggregation
+  code path and measured on the live account (three sequential GETs each,
+  34 tracked repos, warm server: `/api/overview` 0.79-1.19s vs. `/api/repos`
+  0.47-0.71s): the old merge's `/api/overview` fetch ran that function's full aggregation
   -- 5 aggregate Prisma calls (`repo.findMany`, three `scan.findMany`
   queries for the latest CVE/license/deps scan per repo, and one
   `dependency.groupBy` for outdated counts) plus one `getCIPenalty`
