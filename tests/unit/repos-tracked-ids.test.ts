@@ -42,6 +42,8 @@ describe('getTrackedRepoIds', () => {
       where: { userId: 'user-1', tracked: true },
       select: { id: true, githubId: true },
     });
+
+    expect(repoFindMany).toHaveBeenCalledTimes(1);
   });
 
   it('maps each row\'s id to repoId and keeps githubId', async () => {
