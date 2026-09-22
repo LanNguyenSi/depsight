@@ -255,6 +255,52 @@ describe("DepsightClient", () => {
     }
   });
 
+  it("getTrackedRepoIds hits GET /api/repos/tracked-ids with Bearer auth and no query params", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        makeResponse({ repos: [{ repoId: "repo-cuid-1", githubId: 10001001 }] }),
+      );
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    const result = await client.getTrackedRepoIds();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("https://depsight.example.com/api/repos/tracked-ids");
+    expect(init?.method).toBe("GET");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer dsat_test");
+    expect(result).toEqual({ repos: [{ repoId: "repo-cuid-1", githubId: 10001001 }] });
+  });
+
+  it("getTrackedRepoIds throws HttpError carrying status and parsed body on non-2xx", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      makeResponse({ error: "Internal Server Error" }, { status: 500 }),
+    );
+
+    const client = new DepsightClient({
+      gatewayUrl: "https://depsight.example.com",
+      apiToken: "dsat_test",
+    });
+
+    await expect(client.getTrackedRepoIds()).rejects.toBeInstanceOf(HttpError);
+    try {
+      await client.getTrackedRepoIds();
+      throw new Error("expected getTrackedRepoIds to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpError);
+      const e = err as HttpError;
+      expect(e.status).toBe(500);
+      expect(e.path).toBe("/api/repos/tracked-ids");
+      expect((e.body as { error: string }).error).toBe("Internal Server Error");
+    }
+  });
+
   it("getScan hits GET /api/scan?repoId=... with Bearer auth", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

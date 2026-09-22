@@ -71,6 +71,16 @@ export class DepsightClient {
     return this.request("GET", "/api/overview", { signal });
   }
 
+  /**
+   * Each tracked repo's own `repoId` paired with GitHub's numeric
+   * `githubId`, with no team-health computation. Cheap alternative to
+   * `getOverview` for callers that only need the id pair, such as
+   * `depsight_list_repos`'s repoId merge.
+   */
+  getTrackedRepoIds(signal?: AbortSignal): Promise<unknown> {
+    return this.request("GET", "/api/repos/tracked-ids", { signal });
+  }
+
   getScan(repoId: string): Promise<unknown> {
     return this.request("GET", "/api/scan", { query: { repoId } });
   }

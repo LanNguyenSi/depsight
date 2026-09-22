@@ -185,6 +185,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (and thus untracked) repo is silently skipped instead of attempting
   to enable Dependabot on it.
 
+- **`depsight_list_repos`'s `repoId` merge now joins on GitHub's numeric
+  id, and no longer pays for a full team-health computation to get it**
+  (task `ed7ddf84`): the merge added by the `repoId` fix above (task
+  `33e80873`) used `/api/overview` as its only source for depsight's own
+  `repoId`, joined by `fullName` -- a mutable, non-unique key that two
+  tracked repos can legitimately share, in which case neither got a
+  `repoId` (never last-write-wins). A new cheap endpoint, `GET
+  /api/repos/tracked-ids` (`lib/repos/tracked-ids.ts`), returns only each
+  tracked repo's own `repoId` and GitHub's numeric `githubId` -- no CVE,
+  license, dependency, or CI joins, and no call into
+  `getTeamHealthOverview` (`lib/overview/team-health.ts`). `depsight_list_repos`
+  now calls this endpoint instead of `/api/overview` and joins on
+  `githubId`, depsight's `Repo` model's per-user-unique column, so two
+  tracked repos sharing one `fullName` now each resolve to their own
+  `repoId` instead of neither getting one. The 5s bound on the lookup and
+  the `repoIdMergeUnavailable: true` degrade marker (set when the lookup
+  fails, times out, or comes back in an unrecognised shape) are
+  unchanged; existing response keys of both `/api/repos` and the MCP
+  list tool are unchanged. `depsight_get_overview` is untouched and still
+  calls `/api/overview` for the full team-health dashboard.
+
+  What the list call now saves, counted from `getTeamHealthOverview`'s
+  code path (no live-account measurement available to this change): the
+  old merge's `/api/overview` fetch ran that function's full aggregation
+  -- 5 aggregate Prisma calls (`repo.findMany`, three `scan.findMany`
+  queries for the latest CVE/license/deps scan per repo, and one
+  `dependency.groupBy` for outdated counts) plus one `getCIPenalty`
+  call per tracked repo (a `repo.findUnique` with a nested
+  `workflows -> runs -> jobs` include, run in parallel via
+  `Promise.all`) -- on every `depsight_list_repos` call, even though
+  the list tool only ever read `repoId` and `fullName` off the result.
+  The new endpoint runs exactly one `repo.findMany` regardless of
+  tracked-repo count.
+
 ### Added
 
 - **`ApiToken` scope (READ vs. WRITE):** a dsat_ token now carries a
