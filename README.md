@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/api/scan \
   -d '{"repoId": "<repo-id>"}'
 ```
 
-A bearer token comes from `POST /api/tokens`; the dashboard UI covers the same actions without one. Full endpoint list in [docs/api.md](docs/api.md).
+Create an API token on the Settings page (or via `POST /api/tokens` from a signed-in session); triggering scans needs the default WRITE scope. The dashboard UI covers the same actions without a token. Full endpoint list in [docs/api.md](docs/api.md).
 
 ## Documentation
 
@@ -67,13 +67,13 @@ A bearer token comes from `POST /api/tokens`; the dashboard UI covers the same a
 
 ```bash
 npm install
-npx prisma generate    # required before build on a fresh clone
+npx prisma generate   # required before build on a fresh clone
 npm run build
-npm test                # vitest
-npm run lint             # eslint
+npm test              # vitest
+npm run lint          # eslint
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR workflow and dev container setup.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR workflow and the Docker Compose dev setup.
 
 ## License
 
