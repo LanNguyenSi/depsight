@@ -3,7 +3,7 @@ type: invariant
 title: "Severity signals: three separate paths, not one gate"
 description: a CVE finding reaches a person or a webhook through three separate paths, each with its own severity check, not one ranking; a MEDIUM/LOW finding is filtered out of the cve.critical/cve.high/Slack path by a hardcoded CRITICAL/HIGH prefilter before either of the file's own severity rankings ever runs, but the same MEDIUM finding still reaches scan.completed webhook subscribers as a policy violation, because that webhook fires on every scan regardless of severity.
 tags: [severity, cve, notifications, policy]
-timestamp: 2026-09-27T14:34:51Z
+timestamp: 2026-09-27T14:58:04Z
 sources:
   - lib/policy/engine.ts
   - lib/alerts/notifier.ts

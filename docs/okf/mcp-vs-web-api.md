@@ -3,7 +3,7 @@ type: overview
 title: MCP server versus the web API - a thin proxy, narrower than the dashboard
 description: every MCP tool calls the same authenticated REST API the dashboard uses, through one HTTP client with no direct database access; only one tool (depsight_rescan) writes, and the MCP surface has no equivalent for policy CRUD, tokens, webhooks, Slack config, Dependabot enable, repo sync, PR-triggered scans, CI sync, or export.
 tags: [mcp, api, surface]
-timestamp: 2026-09-27T14:34:51Z
+timestamp: 2026-09-27T14:58:04Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts

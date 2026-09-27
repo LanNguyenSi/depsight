@@ -3,7 +3,7 @@ type: invariant
 title: Policy rule evaluation - every type silently no-matches on a bad rule shape
 description: evaluatePolicies dispatches per PolicyType with a break on a failed type guard for every one of the five policy types, not only DEPENDENCY_MIN_VERSION; only DEPENDENCY_MIN_VERSION's rule shape is validated at creation/update time, and only its evaluation loop logs a warning, so the other four types can persist a malformed rule that reports clean forever with no signal anywhere.
 tags: [policy, silent-failure, validation]
-timestamp: 2026-09-27T14:34:51Z
+timestamp: 2026-09-27T14:58:04Z
 sources:
   - lib/policy/engine.ts
   - app/api/policies/route.ts
