@@ -3,7 +3,7 @@ type: invariant
 title: License classification - five independent copies, three different fallback lists
 description: classifyLicense and its COPYLEFT_LICENSES set are defined separately in detector.ts (npm) and each of php.ts, java.ts, python.ts, and rust.ts, not shared from one location; the SPDX copyleft sets currently agree, but the "needs review" fallback list is not one shared list either; it has three different variants across the five files, and java.ts additionally matches full license names by substring, so none of the five is a drop-in stand-in for another. go.ts skips classification entirely by documented design.
 tags: [licenses, ecosystems, duplication]
-timestamp: 2026-09-27T15:08:02Z
+timestamp: 2026-09-27T15:13:26Z
 sources:
   - lib/license/detector.ts
   - lib/license/go.ts

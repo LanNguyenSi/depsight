@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
+  `severity-signals.md` names the two notification-side rankings, notes the
+  MCP `depsight_get_cves` filter's own ranking, and gives each notification
+  path its own reachability rule; `rescan-and-staleness.md` states what the
+  export loaders treat as a missing scan; `license-classification.md`
+  qualifies Rust's dual-license reduction by `PERMISSIVE_RANK` and adds
+  npm's repository-level license classification. Re-verified and re-stamped.
+
 - 2026-09-27T15:08:02Z, second fact-check pass: `license-classification.md` now
   describes how Rust (dual-license reduction) and PHP (first array entry)
   prepare the license string before `classifyLicense`;
