@@ -7,11 +7,21 @@ timestamp: 2026-09-27T14:34:51Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts
+  - mcp/src/tools/ci.ts
+  - mcp/src/tools/cves.ts
+  - mcp/src/tools/deps.ts
+  - mcp/src/tools/history.ts
+  - mcp/src/tools/license.ts
   - mcp/src/tools/policy.ts
+  - mcp/src/tools/repos.ts
   - mcp/src/tools/rescan.ts
+  - mcp/src/tools/sbom.ts
   - app/api/policies/route.ts
   - app/api/policies/[id]/route.ts
   - app/api/policies/evaluate/route.ts
+  - app/api/license/route.ts
+  - app/api/deps/route.ts
+  - app/api/scan/route.ts
   - docs/api.md
   - docs/features.md
 ---
@@ -38,8 +48,8 @@ sources:
 
 ## Exactly one tool writes; the other POST does not
 
-`depsight_rescan` is the only tool that mutates state: its `POST /api/scan` triggers the same scan pipeline the dashboard's own rescan action uses. `depsight_evaluate_policy` is also a `POST`, but its own description says "Read-only, does not mutate state" (`mcp/src/tools/policy.ts:26`), and the route it calls, `app/api/policies/evaluate/route.ts`, only calls `evaluatePolicies()` and returns the resulting JSON; no Prisma write call appears anywhere in that route. This confirms the "read-only apart from the scan trigger" framing in the MCP server sections of `docs/features.md` and `docs/api.md` precisely: it means read-only apart from the one tool that scans, not "every POST is a write."
+`depsight_rescan` is the only tool that mutates state: its `POST /api/scan` triggers `scanRepository()`, the CVE scan pipeline (`app/api/scan/route.ts:30`), the same one the dashboard's own rescan action uses. It refreshes CVE data only: neither the license scan (`scanLicenses`) nor the dependency-age scan (`scanDependencies`) runs as part of it, so a call to `depsight_get_deps` or `depsight_get_license_report` right after `depsight_rescan` can still return data from before that call, unchanged. `depsight_evaluate_policy` is also a `POST`, but its own description says "Read-only, does not mutate state" (`mcp/src/tools/policy.ts:26`), and the route it calls, `app/api/policies/evaluate/route.ts`, only calls `evaluatePolicies()` and returns the resulting JSON; no Prisma write call appears anywhere in that route. This confirms the "read-only apart from the scan trigger" framing in the MCP server sections of `docs/features.md` and `docs/api.md` precisely: it means read-only apart from the one tool that scans, not "every POST is a write."
 
 ## What the web API can do that MCP cannot
 
-The MCP surface has no tool for: creating, updating, or deleting a policy (`POST`/`PUT`/`DELETE` on `/api/policies` and `/api/policies/[id]`, MCP only lists and evaluates); API token management (`/api/tokens`); webhook configuration (`/api/webhooks`); Slack configuration (`/api/slack`); enabling Dependabot, singly or in bulk (`/api/dependabot`, `/api/dependabot/enable-all`); manually triggering a repo sync (`/api/repos/sync`) or CI sync (`/api/ci/sync`); a PR-triggered scan (`/api/pr-scan`); or a repository export bundle (`/api/export`). An agent restricted to the MCP tools can read an existing policy and evaluate it against a scan, but cannot author or change one.
+The MCP surface has no tool for: creating, updating, or deleting a policy (`POST`/`PUT`/`DELETE` on `/api/policies` and `/api/policies/[id]`, MCP only lists and evaluates); API token management (`/api/tokens`); webhook configuration (`/api/webhooks`); Slack configuration (`/api/slack`); enabling Dependabot, singly or in bulk (`/api/dependabot`, `/api/dependabot/enable-all`); manually triggering a repo sync (`/api/repos/sync`) or CI sync (`/api/ci/sync`); a PR-triggered scan (`/api/pr-scan`); triggering a license scan directly (`POST /api/license`, `app/api/license/route.ts:13`) or a dependency-age scan directly (`POST /api/deps`, `app/api/deps/route.ts:25`); or a repository export bundle (`/api/export`). An agent restricted to the MCP tools can read an existing policy and evaluate it against a scan, but cannot author or change one; the same gap applies to license and dependency data, where `depsight_rescan`'s CVE-only scope means the MCP surface has no tool that can force either one fresh.

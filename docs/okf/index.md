@@ -14,10 +14,11 @@ them.
   zero violations on a malformed rule shape, and why only
   `DEPENDENCY_MIN_VERSION`'s shape is ever validated before it can be
   persisted.
-- [Severity signals](severity-signals.md), the two independently-defined
-  severity rankings (policy evaluation, notification event selection) and
-  the third, unranked hardcoded filter that decides whether a Slack or
-  webhook notification fires at all.
+- [Severity signals](severity-signals.md), the three separate paths a CVE
+  finding can reach a person or a webhook through, each gated by its own
+  severity check, and why a MEDIUM finding is unreachable on two of the
+  three paths but still reaches `scan.completed` webhook subscribers as a
+  policy violation.
 - [Dependency age scanning](dependency-age-scanning.md), the shared
   per-ecosystem scanner contract and npm's inline exception, plus why the
   `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
@@ -29,11 +30,12 @@ them.
 
 ## Modules
 
-- [Rescan and staleness](rescan-and-staleness.md), the two trigger paths
+- [Rescan and staleness](rescan-and-staleness.md), the three trigger paths
   into the same scan pipeline, why staleness is computed rather than
-  stored, and why one shared timestamp field written by three independent
-  scanners can hide a persistently failing scanner from the staleness
-  gate.
+  stored, and why one shared timestamp field written by both the three
+  individual scanners and the cron loop itself can advance with zero
+  successful scans, hiding a persistently failing scanner behind a fresh
+  "last scanned" time rather than stopping its rescans.
 
 ## Overview
 

@@ -12,6 +12,7 @@ sources:
   - lib/deps/php.ts
   - lib/deps/python.ts
   - lib/deps/rust.ts
+  - lib/manifest-discovery.ts
   - lib/policy/engine.ts
   - prisma/schema.prisma
 ---
