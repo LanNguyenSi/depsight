@@ -3,7 +3,7 @@ type: module
 title: Rescan and staleness - one shared timestamp, four independent writers
 description: staleness has no dedicated field on Repo or Scan; it is computed fresh each cron cycle from Repo.lastScannedAt, a single field written both by the three individual scanners on success and, separately, by the cron loop itself after every non-rate-limited attempt regardless of whether any scanner succeeded, so lastScannedAt can advance with zero successful scans; a persistently failing scanner keeps being retried at the same cadence as a healthy repo, but its stale deps/license/CVE data hides behind a lastScannedAt that always looks current in surfaces like the dashboard and RepoComparisonTable.
 tags: [cron, scan, staleness, mcp]
-timestamp: 2026-09-27T14:58:04Z
+timestamp: 2026-09-27T15:08:02Z
 sources:
   - lib/cron/auto-scan.ts
   - lib/cve/scanner.ts
