@@ -14,11 +14,12 @@ them.
   zero violations on a malformed rule shape, and why only
   `DEPENDENCY_MIN_VERSION`'s shape is ever validated before it can be
   persisted.
-- [Severity signals](severity-signals.md), the three separate paths a CVE
-  finding can reach a person or a webhook through, each gated by its own
-  severity check, and why a MEDIUM finding is unreachable on two of the
-  three paths but still reaches `scan.completed` webhook subscribers as a
-  policy violation.
+- [Severity signals](severity-signals.md), the three notification paths a
+  CVE finding can reach a person or a webhook through (cve.critical/cve.high
+  events, Slack, scan.completed), why a MEDIUM finding is unreachable on the
+  first two, and when it still reaches `scan.completed` subscribers as a
+  policy violation (an enabled `CVE_MIN_SEVERITY` policy at MEDIUM or
+  below).
 - [Dependency age scanning](dependency-age-scanning.md), the shared
   per-ecosystem scanner contract and npm's inline exception, plus why the
   `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
@@ -30,8 +31,8 @@ them.
 
 ## Modules
 
-- [Rescan and staleness](rescan-and-staleness.md), the three trigger paths
-  into the same scan pipeline, why staleness is computed rather than
+- [Rescan and staleness](rescan-and-staleness.md), the paths that trigger
+  scans (including export, which only fills missing scans), why staleness is computed rather than
   stored, and why one shared timestamp field written by both the three
   individual scanners and the cron loop itself can advance with zero
   successful scans, hiding a persistently failing scanner behind a fresh
@@ -43,4 +44,5 @@ them.
   mapped to the REST endpoints they proxy, confirmation that only one tool
   writes, and the web API capabilities (policy CRUD, tokens, webhooks,
   Slack, Dependabot enable, repo sync, PR-triggered scans, CI sync,
-  export) that have no MCP equivalent.
+  export, direct license and dependency-age scans) that have no MCP
+  equivalent.

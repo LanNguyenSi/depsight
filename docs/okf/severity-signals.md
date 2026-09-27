@@ -1,7 +1,7 @@
 ---
 type: invariant
 title: "Severity signals: three separate paths, not one gate"
-description: a CVE finding reaches a person or a webhook through three separate paths, each with its own severity check, not one ranking; a MEDIUM/LOW finding is filtered out of the cve.critical/cve.high/Slack path by a hardcoded CRITICAL/HIGH prefilter before either of the file's own severity rankings ever runs, but the same MEDIUM finding still reaches scan.completed webhook subscribers as a policy violation, because that webhook fires on every scan regardless of severity.
+description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook), not one ranking; the first two sit behind a hardcoded CRITICAL/HIGH prefilter that runs before either of the codebase's severity rankings, Slack is additionally gated by SlackConfig.minSeverity, and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
 timestamp: 2026-09-27T14:58:04Z
 sources:
@@ -29,10 +29,10 @@ Neither ranking gates whether `notifyForScan` is called in the first place. `lib
 
 ## A third path bypasses the prefilter: `scan.completed`
 
-`runPostScanHooks` (`lib/cve/scanner.ts:147`, called unconditionally on every CVE scan, not only ones that pass the CRITICAL/HIGH prefilter) runs `evaluatePolicies` and then `notifyScanCompleted` (`lib/alerts/post-scan.ts:13-32`, `lib/alerts/notifier.ts:212-242`). `notifyScanCompleted` delivers a `scan.completed` webhook event to every subscriber, carrying the scan's `policyViolations` array, with no severity filter of its own. A `CVE_MIN_SEVERITY` policy configured to flag `MEDIUM` and above therefore does reach `scan.completed` webhook subscribers for a `MEDIUM` finding, through this path, even though the same finding never reaches the `cve.critical`/`cve.high`/Slack path above.
+`runPostScanHooks` (`lib/cve/scanner.ts:147`, called on every CVE scan that completes, not only ones that pass the CRITICAL/HIGH prefilter; a scan that returns early because one is already running (`:53-55`) or throws (`:158-168`) never reaches it) runs `evaluatePolicies` and then `notifyScanCompleted` (`lib/alerts/post-scan.ts:13-32`, `lib/alerts/notifier.ts:212-242`). `notifyScanCompleted` delivers a `scan.completed` webhook event to every subscriber, carrying the scan's `policyViolations` array, with no severity filter of its own. A `CVE_MIN_SEVERITY` policy configured to flag `MEDIUM` and above therefore does reach `scan.completed` webhook subscribers for a `MEDIUM` finding, through this path, even though the same finding never reaches the `cve.critical`/`cve.high`/Slack path above.
 
 ## Consequence: three paths, three different reachability rules
 
 `depsight_evaluate_policy` / `POST /api/policies/evaluate` reports a `CVE_MIN_SEVERITY` violation at whatever threshold the policy is configured to, with no floor of its own beyond the user's setting. Whether that same finding also reaches a human depends on which path is asked: the `cve.critical`/`cve.high` webhook events and Slack are unreachable below `HIGH` because of the scanner's own prefilter, regardless of `SlackConfig.minSeverity`; the `scan.completed` webhook has no such floor and carries policy violations at whatever severity the policy itself was configured for.
 
-This covers only these three paths (`CVE_MIN_SEVERITY` evaluation, the `cve.critical`/`cve.high`/Slack path, the `scan.completed` webhook); it does not claim to be every place severity is read. A rendering-only surface like `components/AdvisoryList.tsx`'s severity filter chips is a literal string-array UI filter, not ranking logic, and gates nothing server-side.
+This covers only these three notification paths (the `cve.critical`/`cve.high` webhook events, Slack, the `scan.completed` webhook) plus the `CVE_MIN_SEVERITY` evaluation that feeds the third; it does not claim to be every place severity is read. A rendering-only surface like `components/AdvisoryList.tsx`'s severity filter chips is a literal string-array UI filter, not ranking logic, and gates nothing server-side.
