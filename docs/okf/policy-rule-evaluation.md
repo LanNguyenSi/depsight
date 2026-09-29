@@ -25,6 +25,8 @@ sources:
 
 Rows written before write-time validation existed, or by anything other than the API routes, are not migrated or rejected. Instead `evaluatePolicies` runs `validatePolicyRule` on every enabled policy it loads and logs one `console.warn` per failing row per evaluation (`lib/policy/engine.ts:194-202`), naming the type, policy name, id and the validation message. Evaluation itself is unchanged: the case still `break`s on a failed guard, and a `DEPENDENCY_MIN_VERSION` row that passes the guard but fails the stricter package-name grammar (below) warns and still evaluates. The warning is a server-side log line, not part of the API response, the same visibility the unparseable-installed-version warning has.
 
+Known gap: a legacy `DEPENDENCY_MIN_VERSION` row whose package name carries leading or trailing whitespace (for example `" lodash"`) passes `validatePolicyRule`, because the validator trims the name, but evaluation compares the untrimmed stored name against installed dependency names. Such a row never matches and logs no warning. Only rows written before write-time trimming can have this shape.
+
 ## The other warning covers a narrower case
 
 `DEPENDENCY_MIN_VERSION` also logs mid-evaluation for a failure that happens *after* its rule has passed the type guard: an installed dependency version that isn't valid semver is skipped and counted, and if any were skipped a `console.warn` fires once per policy per scan (`lib/policy/engine.ts:311-317`). This unparseable-version skip/warning, and the requirement that `minVersion` itself be valid semver, are documented in the Policy engine section of `docs/features.md`; this doc does not repeat those two points. The same section also lists the write-time rule shapes and the stored-row warning.

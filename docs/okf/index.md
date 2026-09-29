@@ -10,10 +10,9 @@ them.
 ## Invariants
 
 - [Policy rule evaluation](policy-rule-evaluation.md), why every one of the
-  five policy types (not only `DEPENDENCY_MIN_VERSION`) silently reports
-  zero violations on a malformed rule shape, and why only
-  `DEPENDENCY_MIN_VERSION`'s shape is ever validated before it can be
-  persisted.
+  five policy types still reports zero violations on a stored malformed rule
+  shape, why every type's rule shape is now checked at create and update, and
+  how stored malformed rows are made visible with a warning at evaluation.
 - [Severity signals](severity-signals.md), the three notification paths a
   CVE finding can reach a person or a webhook through (cve.critical/cve.high
   events, Slack, scan.completed), why a MEDIUM finding is unreachable on the

@@ -15,8 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   mismatch (previously only `DEPENDENCY_MIN_VERSION` was checked). A PUT that
   sends `type` without `rule` now returns 400 when the stored rule does not fit
   the new type. Enabled policies whose stored rule fails the check (rows
-  written before this change) log a warning on every evaluation and still
-  evaluate as "no violation"; they are not migrated.
+  written before this change) log a warning on every evaluation; evaluation
+  itself is unchanged and the rows are not migrated.
 
 ### Security
 
