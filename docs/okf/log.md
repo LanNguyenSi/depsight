@@ -2,7 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
-- 2026-09-29T07:16:57Z, re-verified after the Slack Mittel and Niedrig count fields: `severity-signals.md` now says the
+- 2026-09-29T07:26:16Z, re-verified after the Slack Mittel and Niedrig count fields: `severity-signals.md` now says the
   message counts every listed row per severity (`Kritisch`, `Hoch`, `Mittel`, `Niedrig`, each only when
   present) and that a `CRITICAL` or `HIGH` setting stays byte-identical; its citations into
   `lib/alerts/notifier.ts` moved by ten lines and were re-pointed and hand-checked. `mcp-vs-web-api.md`
