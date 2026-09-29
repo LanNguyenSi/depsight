@@ -302,6 +302,9 @@ describe('notifyForScan', () => {
 
     const text = slackBodyText();
     expect(text).toContain('CVEs gefunden:* 5');
+    // Lower severities are listed as rows only, never as count fields.
+    expect(text).not.toContain('Mittel');
+    expect(text).not.toContain('Niedrig');
     // The top-3 list holds CRITICAL, then HIGH, then a MEDIUM.
     const list = text.slice(text.indexOf('Neue Schwachstellen'));
     expect(list.indexOf('pkg-CRITICAL')).toBeGreaterThan(-1);
