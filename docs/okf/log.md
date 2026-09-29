@@ -2,6 +2,15 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:43:22Z, `license-classification.md` and the `index.md` summary line re-verified
+  after the Python and Rust scanners took their displayed license and its
+  classification from one helper; citations re-pointed and re-stamped.
+
+- 2026-09-29T05:33:12Z, `license-classification.md` rewritten for the shared classifier in
+  `lib/license/classifier.ts`: one copyleft set, one needs-review list, and
+  the Java, Python and Rust preparation that runs before it. Re-verified
+  against the changed code and re-stamped.
+
 - 2026-09-29T05:31:08Z, `severity-signals.md` now describes the single shared severity
   ranking in `lib/severity.ts` used by the policy engine and the notifier
   instead of two separate constants; line citations into

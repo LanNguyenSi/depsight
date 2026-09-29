@@ -1,17 +1,11 @@
 import { createGitHubClient } from '@/lib/github';
 import { collectJavaDeps } from '@/lib/manifests/java';
 import type { LicenseEntry } from './detector';
-
-// Copyleft licenses that conflict with proprietary use
-const COPYLEFT_LICENSES = new Set([
-  'GPL-2.0', 'GPL-2.0-only', 'GPL-2.0-or-later',
-  'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
-  'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
-  'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0',
-  'MPL-2.0', 'EUPL-1.1', 'EUPL-1.2',
-  'CDDL-1.0', 'CDDL-1.1',
-  'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
-]);
+import {
+  COPYLEFT_CLASSIFICATION,
+  classifyLicense,
+  type LicenseClassification,
+} from './classifier';
 
 // Map common non-SPDX license names to copyleft detection
 const COPYLEFT_NAME_PATTERNS: ReadonlyArray<string> = [
@@ -29,29 +23,16 @@ const COPYLEFT_NAME_PATTERNS: ReadonlyArray<string> = [
   'Open Software License',
 ];
 
-function classifyLicense(license: string): { isCompatible: boolean; policyViolation: boolean; needsReview: boolean } {
-  const normalized = license.trim().toUpperCase();
-
-  // Check exact SPDX copyleft match
-  for (const l of COPYLEFT_LICENSES) {
-    if (normalized === l.toUpperCase()) {
-      return { isCompatible: false, policyViolation: true, needsReview: false };
-    }
+/**
+ * Maven <license> blocks often carry a human-readable name rather than an SPDX
+ * id, so a full-name substring match runs before the shared classifier.
+ */
+export function classifyJavaLicense(license: string): LicenseClassification {
+  const upper = license.trim().toUpperCase();
+  if (COPYLEFT_NAME_PATTERNS.some((pattern) => upper.includes(pattern.toUpperCase()))) {
+    return { ...COPYLEFT_CLASSIFICATION };
   }
-
-  // Check non-SPDX common copyleft name patterns
-  for (const pattern of COPYLEFT_NAME_PATTERNS) {
-    if (normalized.includes(pattern.toUpperCase())) {
-      return { isCompatible: false, policyViolation: true, needsReview: false };
-    }
-  }
-
-  // Unknown or empty
-  if (normalized === 'UNKNOWN' || normalized === '') {
-    return { isCompatible: true, policyViolation: false, needsReview: true };
-  }
-
-  return { isCompatible: true, policyViolation: false, needsReview: false };
+  return classifyLicense(license);
 }
 
 function parseLicenseFromPom(pomXml: string): string {
@@ -117,7 +98,7 @@ export async function scanJavaLicenses(
 
           const pomXml = await resp.text();
           const licenseName = parseLicenseFromPom(pomXml);
-          const classification = classifyLicense(licenseName);
+          const classification = classifyJavaLicense(licenseName);
 
           results.push({
             packageName,
