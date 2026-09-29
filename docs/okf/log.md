@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
+  branch: line citations into `lib/policy/engine.ts` re-pointed and verified
+  against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`
+  and `dependency-age-scanning.md`; `policy-rule-evaluation.md` records the
+  padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
+  re-verified against the policy routes and re-stamped.
+
 - 2026-09-29T05:49:15Z, failure marker limits and doc pointers: `rescan-and-staleness.md` now states
   that the CVE failure marker does not fire for a source outage (a completed
   scan with zero advisories stamps `cveScannedAt`) and re-points its overview
@@ -9,6 +16,16 @@
   Policy engine range after `docs/features.md` gained a per-scanner failure
   marker entry; `mcp-vs-web-api.md` was re-verified against the changed
   `docs/features.md` and re-stamped.
+
+- 2026-09-29T05:43:22Z, `license-classification.md` and the `index.md` summary line re-verified
+  after the Python and Rust scanners took their displayed license and its
+  classification from one helper; citations re-pointed and re-stamped.
+
+- 2026-09-29T05:43:06Z, `policy-rule-evaluation.md` states that `createPolicy` and `updatePolicy` are the
+  only paths that write a rule and `togglePolicy` flips `enabled` only; line
+  citations into `lib/policy/engine.ts` re-pointed in `policy-rule-evaluation.md`,
+  `severity-signals.md` and `dependency-age-scanning.md` after a comment edit
+  shifted them; `mcp-vs-web-api.md` re-stamped.
 
 - 2026-09-29T05:36:31Z, per-scanner freshness: `rescan-and-staleness.md` now describes the
   per-scanner success and failure columns on `Repo`, that `lastScannedAt` means
@@ -19,6 +36,24 @@
   `lib/deps/scanner.ts` and `prisma/schema.prisma` citations re-pointed after
   the line shifts; their claims were re-verified and re-stamped, and `index.md`
   carries the updated one-line summary.
+
+- 2026-09-29T05:33:12Z, `license-classification.md` rewritten for the shared classifier in
+  `lib/license/classifier.ts`: one copyleft set, one needs-review list, and
+  the Java, Python and Rust preparation that runs before it. Re-verified
+  against the changed code and re-stamped.
+
+- 2026-09-29T05:32:18Z, `policy-rule-evaluation.md` rewritten for write-time rule validation
+  of all five policy types and the per-row stored-rule warning; line citations
+  into `lib/policy/engine.ts` re-pointed in `severity-signals.md` and
+  `dependency-age-scanning.md`; `mcp-vs-web-api.md` re-verified against the
+  policy routes and `docs/features.md` (no claim changed) and re-stamped.
+
+- 2026-09-29T05:31:08Z, `severity-signals.md` now describes the single shared severity
+  ranking in `lib/severity.ts` used by the policy engine and the notifier
+  instead of two separate constants; line citations into
+  `lib/policy/engine.ts` and `lib/alerts/notifier.ts` in
+  `severity-signals.md`, `policy-rule-evaluation.md` and
+  `dependency-age-scanning.md` were re-pointed. Re-verified and re-stamped.
 
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
