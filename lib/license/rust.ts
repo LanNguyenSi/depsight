@@ -25,14 +25,14 @@ const PERMISSIVE_RANK: Record<string, number> = {
   'Zlib': 8,
 };
 
-/**
- * For dual licenses like "MIT OR Apache-2.0", pick the most permissive one.
- */
 /** A dual-license expression is reduced to its most permissive part before the shared classifier runs. */
 export function classifyRustLicense(spdxExpression: string): LicenseClassification {
   return classifyLicense(selectMostPermissive(spdxExpression));
 }
 
+/**
+ * For dual licenses like "MIT OR Apache-2.0", pick the most permissive one.
+ */
 function selectMostPermissive(spdxExpression: string): string {
   if (!spdxExpression.includes(' OR ')) return spdxExpression.trim();
 
