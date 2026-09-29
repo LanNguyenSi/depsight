@@ -3,7 +3,7 @@ type: invariant
 title: "Severity signals: three separate paths, not one gate"
 description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook); the first two rank severity through one shared constant and sit behind a hardcoded CRITICAL/HIGH prefilter that runs before the shared SEVERITY_RANK (lib/severity.ts), Slack is additionally gated by SlackConfig.minSeverity, and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
-timestamp: 2026-09-29T05:31:08Z
+timestamp: 2026-09-29T05:52:34Z
 sources:
   - lib/policy/engine.ts
   - lib/alerts/notifier.ts
@@ -21,7 +21,7 @@ sources:
 
 `lib/severity.ts` defines the single `SEVERITY_RANK` (`CRITICAL: 4` down to `UNKNOWN: 0`), `severityValue` (an unrecognised severity string ranks like `UNKNOWN`, `0`) and `severityGte` (`:5-22`). Both consumers import it, so the two cannot drift apart: adding a severity tier means editing the one map.
 
-`lib/policy/engine.ts` uses `severityGte` to evaluate a `CVE_MIN_SEVERITY` policy against a scan's advisories (`:188-194`), and its `isSeverity` type guard accepts exactly the keys of `SEVERITY_RANK` (`:20-22`). `lib/alerts/notifier.ts` uses `severityValue` and `SEVERITY_RANK.CRITICAL` inside `notifyForScan` once that function actually runs: pick which of two event names to emit, `'cve.critical'` versus `'cve.high'` (`:159-163`), and gate Slack delivery against the user's configured `SlackConfig.minSeverity` (`:199-204`).
+`lib/policy/engine.ts` uses `severityGte` to evaluate a `CVE_MIN_SEVERITY` policy against a scan's advisories (`:248-254`), and its `isSeverity` type guard accepts exactly the keys of `SEVERITY_RANK` (`:20-22`). `lib/alerts/notifier.ts` uses `severityValue` and `SEVERITY_RANK.CRITICAL` inside `notifyForScan` once that function actually runs: pick which of two event names to emit, `'cve.critical'` versus `'cve.high'` (`:159-163`), and gate Slack delivery against the user's configured `SlackConfig.minSeverity` (`:199-204`).
 
 The MCP server carries a separate ranking (`severityRank` in `mcp/src/tools/cves.ts:9-12`, used by `depsight_get_cves`'s `minSeverity` filter); it is its own package, takes no part in policy evaluation or notification and is not covered further here.
 

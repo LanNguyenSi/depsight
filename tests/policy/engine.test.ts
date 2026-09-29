@@ -383,6 +383,44 @@ describe('evaluatePolicies()', () => {
     expect(violations[0].affectedPackages[0]).toContain('postcss@1.0.0');
   });
 
+  it('warns once per stored policy whose rule does not fit its type and still evaluates the rest', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({ id: 'bad-1', name: 'Broken deny', type: PolicyType.LICENSE_DENY, rule: { deniedLicenses: 'GPL-3.0' } }),
+      makePolicy({ id: 'bad-2', name: 'Broken sev', type: PolicyType.CVE_MIN_SEVERITY, rule: { minSeverity: 'critical' } }),
+      makePolicy({ id: 'good-1', name: 'Good deny', type: PolicyType.LICENSE_DENY, rule: { deniedLicenses: ['GPL-3.0'] } }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        licenses: [{ id: 'l1', packageName: 'foo', version: '1.0.0', license: 'GPL-3.0', isCompatible: false, policyViolation: false }],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations.map((v) => v.policyId)).toEqual(['good-1']);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy.mock.calls[0][0]).toContain('bad-1');
+    expect(warnSpy.mock.calls[0][0]).toContain('malformed rule');
+    expect(warnSpy.mock.calls[1][0]).toContain('bad-2');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn for a stored policy whose rule fits its type', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({ type: PolicyType.DEPENDENCY_MAX_AGE, rule: { maxAgeDays: 365 } }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('DEPENDENCY_MIN_VERSION — warns visibly when unparseable installs are skipped, even without a violation', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockPolicyFindMany.mockResolvedValue([
