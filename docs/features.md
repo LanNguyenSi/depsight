@@ -54,7 +54,7 @@ A complete list of what depsight does today, beyond the headline value props in 
 
 - **GitHub OAuth** login and repository discovery.
 - **PR integration** with automatic CVE comments.
-- **Webhook and Slack notifications.**
+- **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories. Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings.
 - **Dependabot integration:** status check, enable per-repo, bulk-enable across all repos.
 
 ## Policy engine
