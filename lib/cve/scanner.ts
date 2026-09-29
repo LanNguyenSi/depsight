@@ -135,9 +135,9 @@ export async function scanRepository(
       });
     });
 
-    // Fire notifications for critical/high CVEs (non-blocking)
+    // Fire notifications (non-blocking); each channel applies its own severity threshold
     const savedAdvisories = await prisma.advisory.findMany({
-      where: { scanId: scan.id, severity: { in: ['CRITICAL', 'HIGH'] } },
+      where: { scanId: scan.id },
     });
     if (savedAdvisories.length > 0) {
       notifyForScan(userId, repoId, repo.fullName, scan.id, merged.riskScore, savedAdvisories).catch(

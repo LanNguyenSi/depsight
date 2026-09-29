@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:27:16Z, merged the stale-comment and null-only unknown-age change into the Slack
+  minimum-severity branch: `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
+  match master's re-pointed route citations; the `lib/policy/engine.ts` and
+  `prisma/schema.prisma` edits shift no line cited by `severity-signals.md` or
+  `rescan-and-staleness.md`. All four re-verified and re-stamped.
+
+- 2026-09-29T06:19:22Z, merged master (per-scanner freshness) into the Slack minimum-severity branch: `severity-signals.md` keeps the widened notification path, Slack minimum severity and sorted list, with its `lib/cve/scanner.ts` and `prisma/schema.prisma` citations re-pointed against the merged sources; `rescan-and-staleness.md` re-verified against the merged scanner; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified against the changed `docs/features.md`. All four re-stamped.
+
 - 2026-09-29T06:17:40Z, merged master (per-scanner freshness) into the ageInDays comment branch: the
   null-only unknown age text in `dependency-age-scanning.md` now sits on top of
   the per-scanner freshness text, with its `lib/deps/scanner.ts` and
@@ -9,6 +17,13 @@
   policies route citations in `policy-rule-evaluation.md` were re-verified;
   `severity-signals.md`, `rescan-and-staleness.md` and `mcp-vs-web-api.md`
   re-verified and re-stamped.
+
+- 2026-09-29T06:10:30Z, `severity-signals.md` now records that the Slack advisory list is sorted most
+  severe first (the message keeps the Kritisch and Hoch count fields only);
+  every line citation into `lib/alerts/notifier.ts` re-pointed against the
+  current file, including the no-webhook-without-HIGH guard.
+  `mcp-vs-web-api.md`, `policy-rule-evaluation.md` and `rescan-and-staleness.md`
+  re-verified against the changed sources and re-stamped.
 
 - 2026-09-29T06:01:14Z, merged master into the per-scanner freshness branch: citations into
   `lib/cve/scanner.ts`, `lib/deps/scanner.ts` and `prisma/schema.prisma` in
@@ -31,6 +46,13 @@
   and `dependency-age-scanning.md`; `policy-rule-evaluation.md` records the
   padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
   re-verified against the policy routes and re-stamped.
+
+- 2026-09-29T05:49:50Z, `severity-signals.md` now describes the scanner handing every saved
+  advisory to `notifyForScan`, the fixed HIGH floor of the webhook events, and
+  Slack's minimum severity taking effect for MEDIUM and LOW; line citations
+  into `lib/alerts/notifier.ts` re-pointed. `mcp-vs-web-api.md`,
+  `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified against
+  the changed sources and re-stamped.
 
 - 2026-09-29T05:49:15Z, failure marker limits and doc pointers: `rescan-and-staleness.md` now states
   that the CVE failure marker does not fire for a source outage (a completed
