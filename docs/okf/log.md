@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:43:06Z, `policy-rule-evaluation.md` states that `createPolicy` and `updatePolicy` are the
+  only paths that write a rule and `togglePolicy` flips `enabled` only; line
+  citations into `lib/policy/engine.ts` re-pointed in `policy-rule-evaluation.md`,
+  `severity-signals.md` and `dependency-age-scanning.md` after a comment edit
+  shifted them; `mcp-vs-web-api.md` re-stamped.
+
 - 2026-09-29T05:32:18Z, `policy-rule-evaluation.md` rewritten for write-time rule validation
   of all five policy types and the per-row stored-rule warning; line citations
   into `lib/policy/engine.ts` re-pointed in `severity-signals.md` and
