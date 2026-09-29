@@ -271,7 +271,7 @@ export async function evaluatePolicies(
         if (!isNumber(maxAgeDays)) break;
 
         const affected = scan.dependencies
-          .filter((d) => d.ageInDays !== null && d.ageInDays !== -1 && d.ageInDays > maxAgeDays)
+          .filter((d) => d.ageInDays !== null && d.ageInDays > maxAgeDays)
           .map((d) => `${d.name}@${d.installedVersion} (${d.ageInDays} Tage alt)`);
 
         if (affected.length > 0) {
