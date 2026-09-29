@@ -8,19 +8,19 @@
   `mcp-vs-web-api.md`, `policy-rule-evaluation.md` and `rescan-and-staleness.md`
   re-verified against the changed sources and re-stamped.
 
-- 2026-09-29T05:49:50Z, `severity-signals.md` now describes the scanner handing every saved
-  advisory to `notifyForScan`, the fixed HIGH floor of the webhook events, and
-  Slack's minimum severity taking effect for MEDIUM and LOW; line citations
-  into `lib/alerts/notifier.ts` re-pointed. `mcp-vs-web-api.md`,
-  `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified against
-  the changed sources and re-stamped.
-
 - 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
   branch: line citations into `lib/policy/engine.ts` re-pointed and verified
   against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`
   and `dependency-age-scanning.md`; `policy-rule-evaluation.md` records the
   padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
   re-verified against the policy routes and re-stamped.
+
+- 2026-09-29T05:49:50Z, `severity-signals.md` now describes the scanner handing every saved
+  advisory to `notifyForScan`, the fixed HIGH floor of the webhook events, and
+  Slack's minimum severity taking effect for MEDIUM and LOW; line citations
+  into `lib/alerts/notifier.ts` re-pointed. `mcp-vs-web-api.md`,
+  `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified against
+  the changed sources and re-stamped.
 
 - 2026-09-29T05:43:22Z, `license-classification.md` and the `index.md` summary line re-verified
   after the Python and Rust scanners took their displayed license and its
