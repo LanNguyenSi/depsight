@@ -251,4 +251,59 @@ describe('notifyForScan', () => {
     const listed = (bodyOf(high[0]).newAdvisories as Array<{ severity: string }>).map((a) => a.severity);
     expect(listed).toEqual(['HIGH']);
   });
+
+  const slackBodyText = () => {
+    const c = callsTo(SLACK_URL);
+    expect(c).toHaveLength(1);
+    return JSON.stringify(bodyOf(c[0]));
+  };
+
+  it('Slack HIGH lists only the HIGH package of a HIGH+MEDIUM scan and counts 1', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('HIGH'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-hm', 40, [adv('HIGH'), adv('MEDIUM')]);
+
+    const text = slackBodyText();
+    expect(text).toContain('pkg-HIGH');
+    expect(text).not.toContain('pkg-MEDIUM');
+    expect(text).toContain('CVEs gefunden:* 1');
+  });
+
+  it('Slack CRITICAL still lists the HIGH package of a CRITICAL+HIGH scan', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('CRITICAL'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-ch', 80, [adv('CRITICAL'), adv('HIGH')]);
+
+    const text = slackBodyText();
+    expect(text).toContain('pkg-CRITICAL');
+    expect(text).toContain('pkg-HIGH');
+    expect(text).toContain('CVEs gefunden:* 2');
+  });
+
+  it('Slack MEDIUM lists the most severe advisory first even when it arrives last', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('MEDIUM'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-mix', 70, [
+      adv('MEDIUM', 1),
+      adv('HIGH', 1),
+      adv('MEDIUM', 2),
+      adv('MEDIUM', 3),
+      adv('CRITICAL', 1),
+    ]);
+
+    const text = slackBodyText();
+    expect(text).toContain('CVEs gefunden:* 5');
+    expect(text).toContain('Mittel:* 3');
+    // The top-3 list holds CRITICAL, then HIGH, then a MEDIUM.
+    const list = text.slice(text.indexOf('Neue Schwachstellen'));
+    expect(list.indexOf('pkg-CRITICAL')).toBeGreaterThan(-1);
+    expect(list.indexOf('pkg-CRITICAL')).toBeLessThan(list.indexOf('pkg-HIGH'));
+    expect(list.indexOf('pkg-HIGH')).toBeLessThan(list.indexOf('pkg-MEDIUM'));
+  });
 });

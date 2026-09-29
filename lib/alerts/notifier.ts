@@ -83,6 +83,8 @@ async function deliverWebhook(
 function buildSlackMessage(payload: CVENotificationPayload): object {
   const criticalCount = payload.newAdvisories.filter((a) => a.severity === 'CRITICAL').length;
   const highCount = payload.newAdvisories.filter((a) => a.severity === 'HIGH').length;
+  const mediumCount = payload.newAdvisories.filter((a) => a.severity === 'MEDIUM').length;
+  const lowCount = payload.newAdvisories.filter((a) => a.severity === 'LOW').length;
 
   const emoji = criticalCount > 0 ? '🚨' : '⚠️';
   const text = `${emoji} *depsight Security Alert* — ${payload.repoFullName}`;
@@ -96,6 +98,12 @@ function buildSlackMessage(payload: CVENotificationPayload): object {
   }
   if (highCount > 0) {
     fields.push({ type: 'mrkdwn', text: `*🟠 Hoch:* ${highCount}` });
+  }
+  if (mediumCount > 0) {
+    fields.push({ type: 'mrkdwn', text: `*🟡 Mittel:* ${mediumCount}` });
+  }
+  if (lowCount > 0) {
+    fields.push({ type: 'mrkdwn', text: `*🟡 Niedrig:* ${lowCount}` });
   }
 
   // Show top 3 advisories
@@ -213,9 +221,11 @@ export async function notifyForScan(
       // HIGH, so a CRITICAL/HIGH minimum keeps listing both as before and a
       // MEDIUM/LOW minimum also lists the lower severities it asked for.
       const listFloor = Math.min(slackMin, SEVERITY_RANK.HIGH);
-      const slackAdvisories = newAdvisories.filter(
-        (a) => severityValue(a.severity) >= listFloor,
-      );
+      // Most severe first, so the top-3 list in the message never cuts a
+      // CRITICAL/HIGH row in favour of a lower one (Array.sort is stable).
+      const slackAdvisories = newAdvisories
+        .filter((a) => severityValue(a.severity) >= listFloor)
+        .sort((a, b) => severityValue(b.severity) - severityValue(a.severity));
       await deliverSlack(slack.webhookUrl, slack.channel, buildPayload(event, slackAdvisories));
     }
   }
