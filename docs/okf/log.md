@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T10:26:47Z, `rescan-and-staleness.md` re-verified: the repository lookup note now says the 409 tree read of an empty repository does not trigger it by itself, but that repository's root listing answers 404 and runs one lookup per scan, which answers 200 so the scan stays a success; no source line moved, so no citation changed.
+
 - 2026-09-29T10:18:01Z, re-verified after a whole-repository 404 became a degraded source: `rescan-and-staleness.md` now describes the repository lookup that confirms a 404 on the git tree or the root listing, its once-per-scan memoization and the `repository not readable` note, and its citations into `lib/scan/degraded.ts` and `lib/manifest-discovery.ts` were re-pointed and hand-checked; `dependency-age-scanning.md` had one citation into `lib/manifest-discovery.ts` moved by a line; `mcp-vs-web-api.md` and `policy-rule-evaluation.md` cite sections of `docs/features.md` that the added degraded-run sentence did not touch, so they are re-stamped only.
 
 - 2026-09-29T07:51:39Z, `mcp-vs-web-api.md` re-verified after `mcp/src/server.ts` changed for the depsight-mcp 0.4.0 release (only the reported server version string moved from 0.3.0 to 0.4.0); no claim in the doc names that version, re-stamped.
