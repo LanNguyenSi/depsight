@@ -1,7 +1,7 @@
 ---
 type: invariant
 title: "Severity signals: three separate paths, not one gate"
-description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook); the scanner hands every saved advisory to notifyForScan and each channel applies its own threshold with the shared SEVERITY_RANK (lib/severity.ts): the webhook events keep a fixed CRITICAL/HIGH floor, Slack follows SlackConfig.minSeverity (CRITICAL, HIGH, MEDIUM or LOW), and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
+description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook); the scanner hands every saved advisory to notifyForScan and each channel applies its own threshold with the shared SEVERITY_RANK (lib/severity.ts); the webhook events keep a fixed CRITICAL/HIGH floor, Slack follows SlackConfig.minSeverity (CRITICAL, HIGH, MEDIUM or LOW), and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
 timestamp: 2026-09-29T05:49:50Z
 sources:
