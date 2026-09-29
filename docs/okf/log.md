@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:27:16Z, merged the stale-comment and null-only unknown-age change into the Slack
+  minimum-severity branch: `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
+  match master's re-pointed route citations; the `lib/policy/engine.ts` and
+  `prisma/schema.prisma` edits shift no line cited by `severity-signals.md` or
+  `rescan-and-staleness.md`. All four re-verified and re-stamped.
+
 - 2026-09-29T06:19:22Z, merged master (per-scanner freshness) into the Slack minimum-severity branch: `severity-signals.md` keeps the widened notification path, Slack minimum severity and sorted list, with its `lib/cve/scanner.ts` and `prisma/schema.prisma` citations re-pointed against the merged sources; `rescan-and-staleness.md` re-verified against the merged scanner; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified against the changed `docs/features.md`. All four re-stamped.
 
 - 2026-09-29T06:17:40Z, merged master (per-scanner freshness) into the ageInDays comment branch: the
