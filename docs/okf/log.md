@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:17:40Z, merged master (per-scanner freshness) into the ageInDays comment branch: the
+  null-only unknown age text in `dependency-age-scanning.md` now sits on top of
+  the per-scanner freshness text, with its `lib/deps/scanner.ts` and
+  `prisma/schema.prisma` citations re-pointed against the merged sources; the
+  policies route citations in `policy-rule-evaluation.md` were re-verified;
+  `severity-signals.md`, `rescan-and-staleness.md` and `mcp-vs-web-api.md`
+  re-verified and re-stamped.
+
 - 2026-09-29T06:01:14Z, merged master into the per-scanner freshness branch: citations into
   `lib/cve/scanner.ts`, `lib/deps/scanner.ts` and `prisma/schema.prisma` in
   `severity-signals.md` and `dependency-age-scanning.md` re-pointed against the
