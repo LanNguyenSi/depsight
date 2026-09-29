@@ -83,8 +83,6 @@ async function deliverWebhook(
 function buildSlackMessage(payload: CVENotificationPayload): object {
   const criticalCount = payload.newAdvisories.filter((a) => a.severity === 'CRITICAL').length;
   const highCount = payload.newAdvisories.filter((a) => a.severity === 'HIGH').length;
-  const mediumCount = payload.newAdvisories.filter((a) => a.severity === 'MEDIUM').length;
-  const lowCount = payload.newAdvisories.filter((a) => a.severity === 'LOW').length;
 
   const emoji = criticalCount > 0 ? '🚨' : '⚠️';
   const text = `${emoji} *depsight Security Alert* — ${payload.repoFullName}`;
@@ -98,12 +96,6 @@ function buildSlackMessage(payload: CVENotificationPayload): object {
   }
   if (highCount > 0) {
     fields.push({ type: 'mrkdwn', text: `*🟠 Hoch:* ${highCount}` });
-  }
-  if (mediumCount > 0) {
-    fields.push({ type: 'mrkdwn', text: `*🟡 Mittel:* ${mediumCount}` });
-  }
-  if (lowCount > 0) {
-    fields.push({ type: 'mrkdwn', text: `*🟡 Niedrig:* ${lowCount}` });
   }
 
   // Show top 3 advisories

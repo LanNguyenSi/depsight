@@ -269,6 +269,9 @@ describe('notifyForScan', () => {
     expect(text).toContain('pkg-HIGH');
     expect(text).not.toContain('pkg-MEDIUM');
     expect(text).toContain('CVEs gefunden:* 1');
+    // No count field for lower severities appears for the default settings.
+    expect(text).not.toContain('Mittel');
+    expect(text).not.toContain('Niedrig');
   });
 
   it('Slack CRITICAL still lists the HIGH package of a CRITICAL+HIGH scan', async () => {
@@ -299,7 +302,6 @@ describe('notifyForScan', () => {
 
     const text = slackBodyText();
     expect(text).toContain('CVEs gefunden:* 5');
-    expect(text).toContain('Mittel:* 3');
     // The top-3 list holds CRITICAL, then HIGH, then a MEDIUM.
     const list = text.slice(text.indexOf('Neue Schwachstellen'));
     expect(list.indexOf('pkg-CRITICAL')).toBeGreaterThan(-1);
