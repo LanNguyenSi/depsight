@@ -41,7 +41,28 @@ model Repo {
   language      String?
 
   tracked       Boolean   @default(true)
+
+  // Freshness semantics. lastScannedAt is the last time ANY of the three
+  // scanners completed successfully (each scanner writes it on success; the
+  // cron does not write it). It says nothing about the other scanners: read
+  // the per-scanner fields below to know whether a given scan type is current.
   lastScannedAt DateTime?
+  // Last time the cron attempted this repo, whether or not a scanner
+  // succeeded. Only the cron's "is this repo due" gate reads it (together with
+  // lastScannedAt), so a failing repo is retried at the normal cadence.
+  lastScanAttemptAt DateTime?
+
+  // Per-scanner last success. Null until that scanner first succeeds after
+  // these columns were added (no backfill).
+  cveScannedAt     DateTime?
+  licenseScannedAt DateTime?
+  depsScannedAt    DateTime?
+  // Per-scanner last failure message. Set when the scanner throws, cleared
+  // (null) by its next success, so non-null means "currently failing".
+  cveScanError     String?
+  licenseScanError String?
+  depsScanError    String?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

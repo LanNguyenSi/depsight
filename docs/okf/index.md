@@ -33,10 +33,9 @@ them.
 
 - [Rescan and staleness](rescan-and-staleness.md), the paths that trigger
   scans (including export, which only fills missing scans), why staleness is computed rather than
-  stored, and why one shared timestamp field written by both the three
-  individual scanners and the cron loop itself can advance with zero
-  successful scans, hiding a persistently failing scanner behind a fresh
-  "last scanned" time rather than stopping its rescans.
+  stored, and how per-scanner success times and failure messages keep a
+  persistently failing scanner visible while `lastScannedAt` now means "any
+  scanner last succeeded" and the cron only records its own attempt.
 
 ## Overview
 

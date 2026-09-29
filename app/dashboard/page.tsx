@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/lib/auth';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { getScannerStatuses } from '@/lib/scan/freshness';
 import { DashboardClient } from './DashboardClient';
 
 interface DashboardPageProps {
@@ -63,6 +64,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         private: r.private,
         language: r.language,
         lastScannedAt: r.lastScannedAt?.toISOString() ?? null,
+        scannerStatus: getScannerStatuses(r),
         latestScan: r.scans[0]
           ? {
               id: r.scans[0].id,
