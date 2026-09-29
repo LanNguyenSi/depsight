@@ -7,7 +7,7 @@ import {
   ecosystemPrecedence,
   manifestEcosystem,
 } from '@/lib/ecosystem';
-import { isNothingThere, noteDegraded } from '@/lib/scan/degraded';
+import { confirmRepositoryReadable, isNothingThere, noteDegraded } from '@/lib/scan/degraded';
 
 export interface TreeEntry {
   path?: string;
@@ -310,6 +310,7 @@ export async function detectEcosystem(
     // (revoked token, outage) means the tree could not be read, so a monorepo's
     // nested manifests may be missing even if the root probe below works.
     if (!isNothingThere(err)) noteDegraded('GitHub git tree', err);
+    else if ((err as { status?: unknown }).status === 404) await confirmWholeRepo(octokit, owner, repo);
     needFallback = true;
   }
 
@@ -1051,6 +1052,16 @@ async function resolveDefaultBranch(
   return data.default_branch;
 }
 
+// A 404 on the tree or the root listing may mean the repository itself is gone
+// or hidden from the token; confirm once per scan with the repository lookup.
+function confirmWholeRepo(
+  octokit: ReturnType<typeof createGitHubClient>,
+  owner: string,
+  repo: string,
+): Promise<void> {
+  return confirmRepositoryReadable(() => octokit.rest.repos.get({ owner, repo }));
+}
+
 async function probeRootManifests(
   octokit: ReturnType<typeof createGitHubClient>,
   owner: string,
@@ -1068,6 +1079,7 @@ async function probeRootManifests(
     return refs;
   } catch (err) {
     if (!isNothingThere(err)) noteDegraded('GitHub root listing', err);
+    else if ((err as { status?: unknown }).status === 404) await confirmWholeRepo(octokit, owner, repo);
     return [];
   }
 }
