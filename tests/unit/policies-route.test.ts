@@ -71,9 +71,29 @@ function validPolicyBody() {
     name: 'Block GPL',
     type: 'LICENSE_DENY',
     severity: 'HIGH',
-    rule: { licenses: ['GPL-3.0'] },
+    rule: { deniedLicenses: ['GPL-3.0'] },
   };
 }
+
+const VALID_RULES: Record<string, Record<string, unknown>> = {
+  LICENSE_DENY: { deniedLicenses: ['GPL-3.0'] },
+  LICENSE_ALLOW_ONLY: { allowedLicenses: ['MIT'] },
+  CVE_MIN_SEVERITY: { minSeverity: 'HIGH' },
+  DEPENDENCY_MAX_AGE: { maxAgeDays: 365 },
+  DEPENDENCY_MIN_VERSION: { package: 'postcss', minVersion: '8.5.18' },
+};
+
+const MALFORMED_RULES: Array<[string, Record<string, unknown>]> = [
+  ['LICENSE_DENY', { deniedLicenses: 'GPL-3.0' }],
+  ['LICENSE_DENY', { licenses: ['GPL-3.0'] }],
+  ['LICENSE_ALLOW_ONLY', { allowedLicenses: [1, 2] }],
+  ['LICENSE_ALLOW_ONLY', {}],
+  ['CVE_MIN_SEVERITY', { minSeverity: 'critical' }],
+  ['CVE_MIN_SEVERITY', { minSeverity: 3 }],
+  ['DEPENDENCY_MAX_AGE', { maxAgeDays: '365' }],
+  ['DEPENDENCY_MAX_AGE', { maxAge: 365 }],
+  ['DEPENDENCY_MIN_VERSION', { package: 'postcss', minVersion: '8.5' }],
+];
 
 const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
 const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
@@ -243,7 +263,7 @@ describe('POST /api/policies', () => {
         name: 'Block GPL',
         type: 'LICENSE_DENY',
         severity: 'HIGH',
-        rule: { licenses: ['GPL-3.0'] },
+        rule: { deniedLicenses: ['GPL-3.0'] },
         enabled: true,
       }),
     );
@@ -257,13 +277,22 @@ describe('POST /api/policies', () => {
 
       // DEPENDENCY_MIN_VERSION rules are shape-validated (see the (9x) block below),
       // so this generic rule only applies to the other types.
-      const rule = type === 'DEPENDENCY_MIN_VERSION'
-        ? { package: 'postcss', minVersion: '8.5.18' }
-        : validPolicyBody().rule;
+      const rule = VALID_RULES[type];
 
       const res = await POST(makePostRequest({ ...validPolicyBody(), type, rule }));
       expect(res.status).toBe(201);
     }
+  });
+
+  it.each(MALFORMED_RULES)('(8m) returns 400 for a malformed %s rule %j and does not persist', async (type, rule) => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await POST(makePostRequest({ ...validPolicyBody(), type, rule }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
+    expect(createPolicyMock).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------

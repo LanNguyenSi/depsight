@@ -1,5 +1,5 @@
 import semver from 'semver';
-import { PolicyType, Severity } from '@prisma/client';
+import { Prisma, PolicyType, Severity } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 export interface PolicyViolation {
@@ -124,6 +124,57 @@ export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVe
   return { rule: { package: trimmedPkg, minVersion } };
 }
 
+export type PolicyRuleValidation =
+  | { error: string; rule?: undefined }
+  | { error?: undefined; rule: Prisma.InputJsonValue };
+
+// Validates a rule payload against the shape its PolicyType evaluates, using the
+// same guards evaluatePolicies applies. This runs on every policy write (create
+// and update) and on stored rows during evaluation, so a rule that would fall
+// out of its evaluation case without a violation is rejected up front instead
+// of persisting and reporting clean forever. The returned rule is the value to
+// persist (DEPENDENCY_MIN_VERSION normalizes the package name; the other types
+// return the rule unchanged).
+export function validatePolicyRule(type: PolicyType, rule: unknown): PolicyRuleValidation {
+  if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+    return { error: 'rule must be an object' };
+  }
+  const fields = rule as Record<string, unknown>;
+  const persisted = rule as Prisma.InputJsonValue;
+
+  switch (type) {
+    case PolicyType.LICENSE_DENY:
+      if (!isStringArray(fields['deniedLicenses'])) {
+        return { error: 'rule.deniedLicenses must be an array of strings' };
+      }
+      return { rule: persisted };
+    case PolicyType.LICENSE_ALLOW_ONLY:
+      if (!isStringArray(fields['allowedLicenses'])) {
+        return { error: 'rule.allowedLicenses must be an array of strings' };
+      }
+      return { rule: persisted };
+    case PolicyType.CVE_MIN_SEVERITY:
+      if (!isSeverity(fields['minSeverity'])) {
+        return {
+          error: `rule.minSeverity must be one of ${Object.keys(SEVERITY_RANK).join(', ')}`,
+        };
+      }
+      return { rule: persisted };
+    case PolicyType.DEPENDENCY_MAX_AGE:
+      if (!isNumber(fields['maxAgeDays']) || !Number.isFinite(fields['maxAgeDays'])) {
+        return { error: 'rule.maxAgeDays must be a number' };
+      }
+      return { rule: persisted };
+    case PolicyType.DEPENDENCY_MIN_VERSION: {
+      const result = validateDependencyMinVersionRule(rule);
+      if (result.error) return { error: result.error };
+      return { rule: result.rule as unknown as Prisma.InputJsonValue };
+    }
+    default:
+      return { error: 'invalid type' };
+  }
+}
+
 export async function evaluatePolicies(
   userId: string,
   scanId: string,
@@ -153,6 +204,17 @@ export async function evaluatePolicies(
 
   for (const policy of policies) {
     const rule = policy.rule as Record<string, unknown>;
+
+    // Rows stored before write-time validation existed (or written outside the
+    // API) can carry a rule that falls out of its case below without a
+    // violation. Surface each such row on every evaluation instead of letting it
+    // report clean silently. Evaluation itself is unchanged.
+    const stored = validatePolicyRule(policy.type, policy.rule);
+    if (stored.error) {
+      console.warn(
+        `[policy] ${policy.type} policy "${policy.name}" (${policy.id}) has a malformed rule and may never match: ${stored.error}`,
+      );
+    }
 
     switch (policy.type) {
       case PolicyType.LICENSE_DENY: {
