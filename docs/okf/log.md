@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:32:18Z, `policy-rule-evaluation.md` rewritten for write-time rule validation
+  of all five policy types and the per-row stored-rule warning; line citations
+  into `lib/policy/engine.ts` re-pointed in `severity-signals.md` and
+  `dependency-age-scanning.md`; `mcp-vs-web-api.md` re-verified against the
+  policy routes and `docs/features.md` (no claim changed) and re-stamped.
+
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
   MCP `depsight_get_cves` filter's own ranking, and gives each notification

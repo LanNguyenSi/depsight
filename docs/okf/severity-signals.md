@@ -3,7 +3,7 @@ type: invariant
 title: "Severity signals: three separate paths, not one gate"
 description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook), not one ranking; the first two sit behind a hardcoded CRITICAL/HIGH prefilter that runs before SEVERITY_ORDER (notifier.ts) or SEVERITY_RANK (engine.ts), Slack is additionally gated by SlackConfig.minSeverity, and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
-timestamp: 2026-09-27T15:13:26Z
+timestamp: 2026-09-29T05:32:18Z
 sources:
   - lib/policy/engine.ts
   - lib/alerts/notifier.ts
@@ -20,7 +20,7 @@ sources:
 
 The MCP server carries a third ranking (`severityRank` in `mcp/src/tools/cves.ts:9-12`, used by `depsight_get_cves`'s `minSeverity` filter); it takes no part in policy evaluation or notification and is not covered further here.
 
-`lib/policy/engine.ts:15-21` defines `SEVERITY_RANK` (`CRITICAL: 5` down to `UNKNOWN: 1`) and a `severityGte` helper (`:23-25`), used to evaluate a `CVE_MIN_SEVERITY` policy against a scan's advisories (`:200-206`).
+`lib/policy/engine.ts:15-21` defines `SEVERITY_RANK` (`CRITICAL: 5` down to `UNKNOWN: 1`) and a `severityGte` helper (`:23-25`), used to evaluate a `CVE_MIN_SEVERITY` policy against a scan's advisories (`:262-268`).
 
 `lib/alerts/notifier.ts:148-150` defines its own, separately-declared `SEVERITY_ORDER` (`CRITICAL: 4` down to `UNKNOWN: 0`): same relative ordering, different absolute numbers, a different object entirely. Inside `notifyForScan`, it does two things once that function actually runs: pick which of two event names to emit, `'cve.critical'` versus `'cve.high'` (`:162-166`), and gate Slack delivery against the user's configured `SlackConfig.minSeverity` (`:202-207`). The two constants are not derived from one another and nothing keeps them in sync; adding a severity tier to one does not add it to the other.
 

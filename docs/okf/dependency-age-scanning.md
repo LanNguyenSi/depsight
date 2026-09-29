@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract, a schema comment that no longer matches storage
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner's -1 unknown-age sentinel is converted to null before it reaches the database, so the Dependency.ageInDays schema comment ("-1 = unknown") describes the in-memory convention, not what is ever actually stored, and a policy check for -1 is effectively dead code against real scan data.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-27T14:58:04Z
+timestamp: 2026-09-29T05:32:18Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
@@ -29,4 +29,4 @@ Every scanner, the five dedicated files and the inline npm branch alike, uses `a
 
 ## A defensive check with no live target
 
-`lib/policy/engine.ts:226`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays !== -1 && d.ageInDays > maxAgeDays`. Against data written by the normal `scanDependencies` pipeline, the `!== -1` half of that check never has anything to exclude: `null` already covers every "unknown" row from that path. It would only matter for a `Dependency` row inserted by some other write path (a fixture, a script, a future ingestion route) that persists `-1` directly instead of going through `lib/deps/scanner.ts:34`'s conversion; no such path was found in this scan of the codebase.
+`lib/policy/engine.ts:288`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays !== -1 && d.ageInDays > maxAgeDays`. Against data written by the normal `scanDependencies` pipeline, the `!== -1` half of that check never has anything to exclude: `null` already covers every "unknown" row from that path. It would only matter for a `Dependency` row inserted by some other write path (a fixture, a script, a future ingestion route) that persists `-1` directly instead of going through `lib/deps/scanner.ts:34`'s conversion; no such path was found in this scan of the codebase.
