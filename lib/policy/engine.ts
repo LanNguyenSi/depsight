@@ -1,6 +1,7 @@
 import semver from 'semver';
 import { PolicyType, Severity } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { SEVERITY_RANK, severityGte } from '@/lib/severity';
 
 export interface PolicyViolation {
   policyId: string;
@@ -9,19 +10,6 @@ export interface PolicyViolation {
   severity: Severity;
   message: string;
   affectedPackages: string[];
-}
-
-// Severity ranking: CRITICAL > HIGH > MEDIUM > LOW > UNKNOWN
-const SEVERITY_RANK: Record<Severity, number> = {
-  CRITICAL: 5,
-  HIGH: 4,
-  MEDIUM: 3,
-  LOW: 2,
-  UNKNOWN: 1,
-};
-
-function severityGte(a: Severity, b: Severity): boolean {
-  return SEVERITY_RANK[a] >= SEVERITY_RANK[b];
 }
 
 // Type guards for rule shapes
