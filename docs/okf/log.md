@@ -2,6 +2,10 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:10:30Z, `severity-signals.md` no longer mentions Mittel and Niedrig count fields (the Slack message keeps
+  Kritisch and Hoch only); every line citation into `lib/alerts/notifier.ts`
+  re-pointed against the current file, including the no-webhook-without-HIGH guard.
+
 - 2026-09-29T06:00:48Z, `severity-signals.md` now records that the Slack advisory list is sorted most severe
   first and that the message carries Mittel and Niedrig count fields; line
   citations into `lib/alerts/notifier.ts` re-pointed against the merged tree.
