@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:49:15Z, failure marker limits and doc pointers: `rescan-and-staleness.md` now states
+  that the CVE failure marker does not fire for a source outage (a completed
+  scan with zero advisories stamps `cveScannedAt`) and re-points its overview
+  table citation; `policy-rule-evaluation.md` re-points its `docs/features.md`
+  Policy engine range after `docs/features.md` gained a per-scanner failure
+  marker entry; `mcp-vs-web-api.md` was re-verified against the changed
+  `docs/features.md` and re-stamped.
+
 - 2026-09-29T05:36:31Z, per-scanner freshness: `rescan-and-staleness.md` now describes the
   per-scanner success and failure columns on `Repo`, that `lastScannedAt` means
   any scanner last succeeded and is no longer written by the cron, the cron's
