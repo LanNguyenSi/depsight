@@ -1,6 +1,7 @@
 import { createGitHubClient } from '@/lib/github';
 import { collectPythonDeps } from '@/lib/manifests/python';
 import type { LicenseEntry } from './detector';
+import { COPYLEFT_LICENSES, classifyLicense, type LicenseClassification } from './classifier';
 
 interface PyPIPackageInfo {
   info?: {
@@ -9,22 +10,11 @@ interface PyPIPackageInfo {
   };
 }
 
-// Copyleft-Lizenzen, die mit proprietaerer Nutzung kollidieren
-const COPYLEFT_LICENSES = new Set([
-  'GPL-2.0', 'GPL-2.0-only', 'GPL-2.0-or-later',
-  'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
-  'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
-  'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0',
-  'MPL-2.0', 'EUPL-1.1', 'EUPL-1.2',
-  'CDDL-1.0', 'CDDL-1.1',
-  'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
-]);
-
 /**
  * Normalize common Python license strings to SPDX identifiers.
  * PyPI packages often use free-text license names instead of SPDX.
  */
-function normalizeLicense(raw: string): string {
+export function normalizeLicense(raw: string): string {
   if (!raw || raw.trim() === '') return 'UNKNOWN';
 
   const trimmed = raw.trim();
@@ -85,26 +75,9 @@ function normalizeLicense(raw: string): string {
   return LICENSE_MAP[upper] ?? trimmed;
 }
 
-function classifyLicense(license: string): { isCompatible: boolean; policyViolation: boolean; needsReview: boolean } {
-  const normalized = license.trim().toUpperCase();
-
-  // Exakte Copyleft-Pruefung
-  for (const l of COPYLEFT_LICENSES) {
-    if (normalized === l.toUpperCase()) {
-      return { isCompatible: false, policyViolation: true, needsReview: false };
-    }
-  }
-
-  // Unbekannte / benutzerdefinierte Lizenzen — kein Verstoss, aber manuelle Pruefung noetig
-  if (
-    normalized === 'UNKNOWN' ||
-    normalized === '' ||
-    normalized === 'UNLICENSED'
-  ) {
-    return { isCompatible: true, policyViolation: false, needsReview: true };
-  }
-
-  return { isCompatible: true, policyViolation: false, needsReview: false };
+/** Free-text PyPI names are normalized to SPDX ids before the shared classifier runs. */
+export function classifyPythonLicense(raw: string): LicenseClassification {
+  return classifyLicense(normalizeLicense(raw));
 }
 
 /**
@@ -156,7 +129,7 @@ export async function scanPythonLicenses(
           const data = (await resp.json()) as PyPIPackageInfo;
           const rawLicense = data.info?.license ?? '';
           const normalizedLicense = normalizeLicense(rawLicense);
-          const classification = classifyLicense(normalizedLicense);
+          const classification = classifyPythonLicense(rawLicense);
 
           licenses.push({
             packageName: name,
