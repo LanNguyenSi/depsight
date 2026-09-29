@@ -7,7 +7,9 @@
   known-limitation paragraph, and lists `lib/scan/degraded.ts`, `lib/cve/osv.ts`,
   `lib/manifest-discovery.ts` and `lib/license/detector.ts` as sources; `severity-signals.md`,
   `dependency-age-scanning.md` and `license-classification.md` had their citations into the
-  edited scanners, manifest discovery and license detector re-pointed. All four re-stamped.
+  edited scanners, manifest discovery and license detector re-pointed. All four re-stamped; `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
+  cite sections of `docs/features.md` that this change did not touch (the MCP read-only framing, the
+  Policy engine section), so their claims hold and they are re-stamped only.
 
 - 2026-09-29T06:27:16Z, merged the stale-comment and null-only unknown-age change into the Slack
   minimum-severity branch: `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
