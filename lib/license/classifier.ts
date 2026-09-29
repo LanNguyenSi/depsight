@@ -10,7 +10,7 @@ export interface LicenseClassification {
 }
 
 // Copyleft licenses that conflict with proprietary use
-export const COPYLEFT_LICENSES: ReadonlySet<string> = new Set([
+export const COPYLEFT_LICENSES = new Set([
   'GPL-2.0', 'GPL-2.0-only', 'GPL-2.0-or-later',
   'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
   'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
@@ -18,7 +18,7 @@ export const COPYLEFT_LICENSES: ReadonlySet<string> = new Set([
   'MPL-2.0', 'EUPL-1.1', 'EUPL-1.2',
   'CDDL-1.0', 'CDDL-1.1',
   'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
-]);
+]) as ReadonlySet<string>;
 
 // Unknown or custom licenses: not a violation, but they need manual review.
 // Compared against the trimmed, upper-cased input ('' is the empty string).
