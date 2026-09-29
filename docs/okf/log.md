@@ -5,7 +5,7 @@
 - 2026-09-29T05:33:12Z, `license-classification.md` rewritten for the shared classifier in
   `lib/license/classifier.ts`: one copyleft set, one needs-review list, and
   the Java, Python and Rust preparation that runs before it. Re-verified
-  against the changed code and re-stamped; `index.md` summary updated.
+  against the changed code and re-stamped.
 
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
