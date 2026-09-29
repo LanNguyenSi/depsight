@@ -14,7 +14,7 @@ interface PyPIPackageInfo {
  * Normalize common Python license strings to SPDX identifiers.
  * PyPI packages often use free-text license names instead of SPDX.
  */
-export function normalizeLicense(raw: string): string {
+function normalizeLicense(raw: string): string {
   if (!raw || raw.trim() === '') return 'UNKNOWN';
 
   const trimmed = raw.trim();
@@ -76,8 +76,13 @@ export function normalizeLicense(raw: string): string {
 }
 
 /** Free-text PyPI names are normalized to SPDX ids before the shared classifier runs. */
+function resolvePythonLicense(raw: string): { license: string; classification: LicenseClassification } {
+  const license = normalizeLicense(raw);
+  return { license, classification: classifyLicense(license) };
+}
+
 export function classifyPythonLicense(raw: string): LicenseClassification {
-  return classifyLicense(normalizeLicense(raw));
+  return resolvePythonLicense(raw).classification;
 }
 
 /**
@@ -128,14 +133,13 @@ export async function scanPythonLicenses(
 
           const data = (await resp.json()) as PyPIPackageInfo;
           const rawLicense = data.info?.license ?? '';
-          const normalizedLicense = normalizeLicense(rawLicense);
-          const classification = classifyPythonLicense(rawLicense);
+          const resolved = resolvePythonLicense(rawLicense);
 
           licenses.push({
             packageName: name,
             version: version || (data.info?.version ?? 'unknown'),
-            license: normalizedLicense,
-            ...classification,
+            license: resolved.license,
+            ...resolved.classification,
           });
         } catch {
           licenses.push({

@@ -80,8 +80,18 @@ describe('ecosystem-specific preparation runs before the shared classifier', () 
 });
 
 describe('shared lists', () => {
-  it('holds the 20 copyleft ids', () => {
-    expect(COPYLEFT_LICENSES.size).toBe(20);
+  it('holds exactly the 20 copyleft ids', () => {
+    expect([...COPYLEFT_LICENSES].sort()).toEqual(
+      [
+        'GPL-2.0', 'GPL-2.0-only', 'GPL-2.0-or-later',
+        'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
+        'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
+        'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0',
+        'MPL-2.0', 'EUPL-1.1', 'EUPL-1.2',
+        'CDDL-1.0', 'CDDL-1.1',
+        'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
+      ].sort(),
+    );
   });
 
   it('needs-review list carries UNLICENSED', () => {

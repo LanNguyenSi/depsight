@@ -26,8 +26,13 @@ const PERMISSIVE_RANK: Record<string, number> = {
 };
 
 /** A dual-license expression is reduced to its most permissive part before the shared classifier runs. */
+function resolveRustLicense(spdxExpression: string): { license: string; classification: LicenseClassification } {
+  const license = selectMostPermissive(spdxExpression);
+  return { license, classification: classifyLicense(license) };
+}
+
 export function classifyRustLicense(spdxExpression: string): LicenseClassification {
-  return classifyLicense(selectMostPermissive(spdxExpression));
+  return resolveRustLicense(spdxExpression).classification;
 }
 
 /**
@@ -98,14 +103,13 @@ export async function scanRustLicenses(
           const data = (await resp.json()) as CrateData;
           const latestVersion = data.versions.length > 0 ? data.versions[0] : undefined;
           const spdxLicense = latestVersion?.license ?? 'UNKNOWN';
-          const effectiveLicense = selectMostPermissive(spdxLicense);
-          const classification = classifyRustLicense(spdxLicense);
+          const resolved = resolveRustLicense(spdxLicense);
 
           licenses.push({
             packageName: name,
             version,
-            license: effectiveLicense,
-            ...classification,
+            license: resolved.license,
+            ...resolved.classification,
           });
         } catch {
           licenses.push({
