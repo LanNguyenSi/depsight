@@ -419,6 +419,19 @@ describe('OSV source', () => {
 
     expectDegraded('cve', /OSV.*503/s);
   });
+
+  it('a vulnerability whose OSV detail request fails outright (network error or timeout) degrades the CVE scanner', async () => {
+    seedHealthyAtT1();
+    setGitHub(withDependency);
+    setFetch({
+      querybatch: jsonResponse({ results: [{ vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] }] }),
+      vulnDetail: new Error('The operation was aborted'),
+    });
+
+    await runners.cve();
+
+    expectDegraded('cve', /OSV vulnerability detail.*aborted/s);
+  });
 });
 
 describe('manifest discovery source', () => {
