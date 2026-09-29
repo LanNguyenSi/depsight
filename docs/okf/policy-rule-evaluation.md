@@ -3,7 +3,7 @@ type: invariant
 title: Policy rule evaluation - every type is shape-checked at write time, stored rows warn at evaluation
 description: evaluatePolicies still breaks out of a PolicyType case with no violation when the stored rule fails its type guard, but validatePolicyRule now checks the rule shape of all five policy types on POST and PUT (PUT validates the resulting type and rule pair), and every evaluation logs a warning per stored row whose rule fails that check, so a malformed rule can no longer persist unnoticed through the API; rows stored before the check are not migrated.
 tags: [policy, silent-failure, validation]
-timestamp: 2026-09-29T05:32:18Z
+timestamp: 2026-09-29T05:32:33Z
 sources:
   - lib/policy/engine.ts
   - app/api/policies/route.ts
@@ -17,7 +17,7 @@ sources:
 
 ## Every type is checked before it is stored
 
-`validatePolicyRule(type, rule)` (`lib/policy/engine.ts:138-175`) is the one write-time validator: it requires `rule` to be a non-null, non-array object and then applies, per type, the same guards the evaluation cases use: `deniedLicenses` as a string array for `LICENSE_DENY`, `allowedLicenses` as a string array for `LICENSE_ALLOW_ONLY`, `minSeverity` as an uppercase `Severity` for `CVE_MIN_SEVERITY`, and `maxAgeDays` as a finite number for `DEPENDENCY_MAX_AGE`. `DEPENDENCY_MIN_VERSION` delegates to `validateDependencyMinVersionRule` (`:106`), whose messages and package-name normalization are unchanged. It returns either an `error` message or the rule to persist.
+`validatePolicyRule(type, rule)` (`lib/policy/engine.ts:138-176`) is the one write-time validator: it requires `rule` to be a non-null, non-array object and then applies, per type, the same guards the evaluation cases use: `deniedLicenses` as a string array for `LICENSE_DENY`, `allowedLicenses` as a string array for `LICENSE_ALLOW_ONLY`, `minSeverity` as an uppercase `Severity` for `CVE_MIN_SEVERITY`, and `maxAgeDays` as a finite number for `DEPENDENCY_MAX_AGE`. `DEPENDENCY_MIN_VERSION` delegates to `validateDependencyMinVersionRule` (`:106`), whose messages and package-name normalization are unchanged. It returns either an `error` message or the rule to persist.
 
 `POST /api/policies` calls it after the generic object check (`app/api/policies/route.ts:64-68`) and answers 400 with the message on failure. `PUT /api/policies/[id]` validates whenever the request changes `type` or `rule` (`app/api/policies/[id]/route.ts:102-125`): with only `rule` it validates against the stored type, with only `type` it validates the STORED rule against the new type, and with both it validates the pair without fetching; a request that changes neither (name, severity, enabled) leaves the stored rule unvalidated and unchanged. The validated rule, which is the trimmed one for `DEPENDENCY_MIN_VERSION`, is always written back into the update. `createPolicy` and `updatePolicy` in `lib/policy/service.ts` are the only policy write paths in the app, so nothing else needs to call the validator.
 
@@ -27,6 +27,6 @@ Rows written before write-time validation existed, or by anything other than the
 
 ## The other warning covers a narrower case
 
-`DEPENDENCY_MIN_VERSION` also logs mid-evaluation for a failure that happens *after* its rule has passed the type guard: an installed dependency version that isn't valid semver is skipped and counted, and if any were skipped a `console.warn` fires once per policy per scan (`lib/policy/engine.ts:326-333`). This unparseable-version skip/warning, and the requirement that `minVersion` itself be valid semver, are documented in the Policy engine section of `docs/features.md`; this doc does not repeat those two points. The same section also lists the write-time rule shapes and the stored-row warning.
+`DEPENDENCY_MIN_VERSION` also logs mid-evaluation for a failure that happens *after* its rule has passed the type guard: an installed dependency version that isn't valid semver is skipped and counted, and if any were skipped a `console.warn` fires once per policy per scan (`lib/policy/engine.ts:325-331`). This unparseable-version skip/warning, and the requirement that `minVersion` itself be valid semver, are documented in the Policy engine section of `docs/features.md`; this doc does not repeat those two points. The same section also lists the write-time rule shapes and the stored-row warning.
 
 `validateDependencyMinVersionRule` (`lib/policy/engine.ts:106-125`) also guards the package name itself before persisting a rule: it rejects a name that survives `trim()` but still carries a zero-width character (zero-width space/non-joiner/joiner, or a zero-width no-break space/BOM; `ZERO_WIDTH_RE`, `:69`) or that is not valid lowercase npm package-name grammar (`NPM_PACKAGE_NAME_RE`, `:80`), applying both checks at `:115-119`. Either defect would otherwise let a policy that looks accepted persist while never matching a real installed dependency name, the same silently-clean failure mode the semver checks exist to avoid.
