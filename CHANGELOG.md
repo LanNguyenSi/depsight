@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.6.0] - 2026-09-29
 
-**Headline: scanners now say when they cannot read their source, tokens carry a read/write scope, and the policy engine gains a version-floor type.** A scanner that could not read GitHub or OSV no longer reports a clean scan, each scanner carries its own freshness and failure marker, dsat_ tokens can be read-only, `DEPENDENCY_MIN_VERSION` policies enforce a per-package floor, Slack minimum severity MEDIUM/LOW finally delivers, and yarn.lock v1 repos are matched against resolved versions. The published MCP package is released as `@opentriologue/depsight-mcp` 0.4.0 (see the list below). depsight is deployed from `master`; this tag is deploy provenance.
+**Headline: scanners now say when they cannot read their source, tokens carry a read/write scope, and the policy engine gains a version-floor type.** A scanner that could not read GitHub or OSV no longer reports a clean scan, each scanner carries its own freshness and failure marker, dsat_ tokens can be read-only, `DEPENDENCY_MIN_VERSION` policies enforce a per-package floor, Slack minimum severity MEDIUM/LOW finally delivers, and yarn.lock v1 repos are matched against resolved versions. The deploy needs `prisma db push` (new `ApiToken.scope` column and per-scanner freshness columns). The published MCP package is released as `@opentriologue/depsight-mcp` 0.4.0 (see the list below). depsight is deployed from `master`; this tag is deploy provenance.
 
-**`@opentriologue/depsight-mcp` 0.4.0** (tag `depsight-mcp-v0.4.0`, npm trusted publishing): `depsight_list_repos` now carries depsight's own `repoId` beside GitHub's numeric `id`, joined on `githubId` through the new tracked-repo ids endpoint `GET /api/repos/tracked-ids` (#136, #138); a `repoIdMergeUnavailable: true` marker appears when that lookup did not run; `depsight_rescan` says "already in progress" when a scan is running (#93); the tool descriptions list `DEPENDENCY_MIN_VERSION` and point callers at the `repoId` field (#124, #136); `@modelcontextprotocol/sdk` floor raised to `^1.30.0` and `engines.node` to `>=20` (#102, #109); lockfile security bumps (#131, #135).
+**`@opentriologue/depsight-mcp` 0.4.0** (tag `depsight-mcp-v0.4.0`, npm trusted publishing), changes since 0.3.0: `depsight_list_repos` now carries depsight's own `repoId` beside GitHub's numeric `id`, joined on `githubId` through the new tracked-repo ids endpoint `GET /api/repos/tracked-ids`, with a `repoIdMergeUnavailable: true` marker when that lookup did not run (#136, #138); the tool descriptions list `DEPENDENCY_MIN_VERSION` and point callers at the `repoId` field (#124, #136); the `depsight_list_repos` description states that archived repos are excluded and that the returned `id` is GitHub's id (#126, #127); the server now reports version 0.4.0 in the MCP handshake. The mcp lockfile security bumps (#130, #131, #135) only touch the repository's own dev and CI install; npm consumers do not receive them.
 
 ### Added
 
@@ -83,19 +83,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   not advance its last-success time or `lastScannedAt`. A 404 for a missing
   manifest or license file, a disabled Dependabot, and a per-package
   registry miss stay successes.
-- **Slack messages show Mittel and Niedrig counts** (tasks `0de0dd3c`,
-  `dfc5302f`, #146, #150): when the channel's minimum severity is MEDIUM or
-  LOW, the message lists the most severe advisories first (so the top-3
-  slice never cuts a CRITICAL row) and carries Mittel and Niedrig count
-  fields for the rows it lists. CRITICAL/HIGH output is unchanged.
+- **Slack messages show Mittel and Niedrig counts** (task `dfc5302f`,
+  #150): when the channel's minimum severity is MEDIUM or LOW, the message
+  carries Mittel and Niedrig count fields for the rows it lists.
+- **`depsight_rescan` MCP tool** (#83, shipped in `@opentriologue/depsight-mcp`
+  0.3.0): `depsight_rescan({ repoId })` posts to `/api/scan` with the same
+  `dsat_` token the read tools use and returns `scanId` and `status`, so an
+  agent can rescan and then poll `depsight_get_cves`.
 - **Advisory source shown** (#97): `GET /api/scan` now serializes
   `Advisory.source` (`dependabot` or `osv`) and the advisory list renders a
   localized source badge per advisory; `depsight_get_cves` passes it through.
 - **Lockfile-resolved CVE matching for `yarn.lock` v1** (#110): JS repos
   with a `yarn.lock` are matched against the resolved version instead of the
   manifest floor, like the `package-lock.json` and `uv.lock`/`poetry.lock`
-  paths. When both lockfiles resolve a dependency differently the lower
-  version wins; yarn berry (v2+) lockfiles are detected by their
+  paths. When `package-lock.json` and `yarn.lock` disagree on a dependency,
+  it falls back to the manifest floor rather than trusting either lockfile; yarn berry (v2+) lockfiles are detected by their
   `__metadata` marker and skipped, degrading to the manifest floor.
   `pnpm-lock.yaml` is not covered.
 
@@ -120,6 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   LOW never delivered anything. The prefilter is gone and each channel's
   threshold is applied by `notifyForScan`. Webhooks keep today's behaviour:
   only CRITICAL/HIGH advisories, and no delivery for a scan without one.
+  The Slack message now lists advisories most severe first (stable sort) for
+  every minimum-severity setting, so the top-3 slice never drops a CRITICAL
+  or HIGH row for a lower one; the order of the rows in a CRITICAL/HIGH
+  message can therefore differ from 0.5.1.
 - **One license classifier for all ecosystems** (task `08b5630e`, #142): the
   copyleft set, the needs-review list and `classifyLicense` moved into
   `lib/license/classifier.ts`. The needs-review list is now `UNKNOWN`, empty,
@@ -166,6 +172,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **SBOM download filename** (#89): when the SBOM has no component name the
+  download was named `sbom-sbom.cdx.json`; it is now `sbom.cdx.json`.
 - **`depsight_list_repos` now carries depsight's own `repoId` alongside
   GitHub's numeric `id`** (task `33e80873`): the MCP tool returned only
   GitHub's numeric repo id, while `depsight_rescan` / `depsight_get_cves`
@@ -312,7 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Unusable manifest floors reach the ambiguous fallback** (#113): a
   non-semver spec that contains a digit (such as a git spec) no longer counts
   as a usable floor and suppresses the fallback; the guard is
-  `semver.valid(floor)`.
+  `semver.valid(floor)`, and a range spec (such as `^19`) is also accepted
+  through `semver.validRange`, using `semver.minVersion` as the floor.
 - **Unknown dependency age is `null`, not `-1`** (task `d5639a62`, #145): the
   scanner already stored `null`, so the engine's `-1` check filtered nothing;
   the check and the schema comment now say `null`, and the policies route
@@ -428,8 +437,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   and `next-auth`), npm audit findings resolved in root and
   `mcp/` (`postcss`, `next`, `sharp`, `body-parser`, `fast-uri`, `hono`,
   `brace-expansion`, `ip-address`, `undici`, `express-rate-limit`,
-  `socket.io-parser`, `qs`, `@humanfs/node`), `js-yaml` 4.3.1 (GHSA-5p4m-2wfm-xmqj)
-  with an override floor, `nanoid` 3.3.18 (GHSA-2v37-7h3g-55p8), and the
+  `socket.io-parser`, `qs`, `@humanfs/node`), `js-yaml` 4.3.1 (GHSA-5p4m-2wfm-xmqj),
+  `nanoid` 3.3.18 (GHSA-2v37-7h3g-55p8), and the
   `@hono/node-server` advisory GHSA-frvp-7c67-39w9 closed through SDK 1.30.0.
 
 ## [0.5.1] - 2026-06-25
