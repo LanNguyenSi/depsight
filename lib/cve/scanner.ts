@@ -6,7 +6,8 @@ import { mergeCveAdvisories } from './merge';
 import { notifyForScan } from '@/lib/alerts/notifier';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
-import { scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { noteDegraded, trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export class ScanAccessError extends Error {
@@ -65,24 +66,34 @@ export async function scanRepository(
   });
 
   try {
-    // Fetch Dependabot advisories (source: 'dependabot').
-    // A transient Dependabot failure no longer fails the scan because OSV is an
-    // independent source; the scan completes with whatever sources succeeded.
-    let dependabotResult: ScanResultWithStatus;
-    try {
-      dependabotResult = await fetchRepoAdvisories(accessToken, repo.owner, repo.name);
-    } catch (err) {
-      console.error('[scan] Dependabot fetch failed:', err);
-      dependabotResult = { ...buildScanResult([]), dependabotDisabled: false };
-    }
+    // Both sources are read inside a tracking scope: a source that cannot be
+    // read (revoked token, outage) must not look like "read, nothing found".
+    const {
+      value: { dependabotResult, osvAdvisories, ecosystem },
+      degraded,
+    } = await trackDegraded(async () => {
+      // Fetch Dependabot advisories (source: 'dependabot').
+      // A transient Dependabot failure no longer fails the scan because OSV is
+      // an independent source; the scan completes with whatever sources
+      // succeeded and the failure is recorded as a degraded source.
+      let dependabotResult: ScanResultWithStatus;
+      try {
+        dependabotResult = await fetchRepoAdvisories(accessToken, repo.owner, repo.name);
+      } catch (err) {
+        console.error('[scan] Dependabot fetch failed:', err);
+        noteDegraded('Dependabot alerts', err);
+        dependabotResult = { ...buildScanResult([]), dependabotDisabled: false };
+      }
 
-    // Fetch OSV advisories (never throws; source: 'osv')
-    const { advisories: osvAdvisories, ecosystem } = await fetchOsvAdvisories(
-      accessToken,
-      repo.owner,
-      repo.name,
-      repo.defaultBranch,
-    );
+      // Fetch OSV advisories (never throws; source: 'osv')
+      const { advisories: osvAdvisories, ecosystem } = await fetchOsvAdvisories(
+        accessToken,
+        repo.owner,
+        repo.name,
+        repo.defaultBranch,
+      );
+      return { dependabotResult, osvAdvisories, ecosystem };
+    });
 
     // Dedup OSV against Dependabot keyed by (identifier, packageName): an OSV
     // finding for a package Dependabot did NOT cover is preserved, and OSV
@@ -128,10 +139,11 @@ export async function scanRepository(
         },
       });
 
-      // Stamp this scanner's success (and clear its failure marker)
+      // Stamp this scanner's success (and clear its failure marker), or, when a
+      // source could not be read, record the degraded run without a success stamp
       await tx.repo.update({
         where: { id: repoId },
-        data: scanSuccessData('cve'),
+        data: degraded === null ? scanSuccessData('cve') : scanDegradedData('cve', degraded),
       });
     });
 

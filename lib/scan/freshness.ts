@@ -61,6 +61,17 @@ export function scanFailureData(scanner: ScannerKey, error: unknown) {
   }
 }
 
+/**
+ * Repo update data for a degraded scan: the scanner ran and stored what it
+ * found, but a source could not be read (revoked token, GitHub or OSV outage),
+ * so the empty or partial result is not proof that nothing is there. Records
+ * the reasons through the same failure marker a thrown scan uses and, like a
+ * failure, leaves the scanner's success timestamp and lastScannedAt alone.
+ */
+export function scanDegradedData(scanner: ScannerKey, reasons: string) {
+  return scanFailureData(scanner, `Source unreadable, result may be incomplete: ${reasons}`);
+}
+
 export function getScannerStatuses(repo: RepoScannerColumns): ScannerStatuses {
   return {
     cve: { lastSuccessAt: repo.cveScannedAt?.toISOString() ?? null, error: repo.cveScanError ?? null },

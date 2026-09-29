@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { detectLicenses } from './detector';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
-import { scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export async function scanLicenses(
@@ -20,7 +21,11 @@ export async function scanLicenses(
   });
 
   try {
-    const result = await detectLicenses(accessToken, repo.owner, repo.name, repo.defaultBranch);
+    // A source that cannot be read (revoked token, outage) must not look like
+    // "read, no manifests / no license file"; see lib/scan/degraded.ts.
+    const { value: result, degraded } = await trackDegraded(() =>
+      detectLicenses(accessToken, repo.owner, repo.name, repo.defaultBranch),
+    );
 
     await prisma.$transaction(async (tx) => {
       if (result.licenses.length > 0) {
@@ -48,7 +53,7 @@ export async function scanLicenses(
 
       await tx.repo.update({
         where: { id: repoId },
-        data: scanSuccessData('license'),
+        data: degraded === null ? scanSuccessData('license') : scanDegradedData('license', degraded),
       });
     });
 

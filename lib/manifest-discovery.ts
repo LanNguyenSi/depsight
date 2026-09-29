@@ -7,6 +7,7 @@ import {
   ecosystemPrecedence,
   manifestEcosystem,
 } from '@/lib/ecosystem';
+import { isNothingThere, noteDegraded } from '@/lib/scan/degraded';
 
 export interface TreeEntry {
   path?: string;
@@ -304,7 +305,11 @@ export async function detectEcosystem(
       observedLockfilePaths = selectLockfilePaths(tree);
     }
     if (data.truncated || refs.length === 0) needFallback = true;
-  } catch {
+  } catch (err) {
+    // A missing ref or an empty repository is "nothing to walk"; anything else
+    // (revoked token, outage) means the tree could not be read, so a monorepo's
+    // nested manifests may be missing even if the root probe below works.
+    if (!isNothingThere(err)) noteDegraded('GitHub git tree', err);
     needFallback = true;
   }
 
@@ -368,8 +373,11 @@ export async function fetchManifestContents(
             path,
             content: Buffer.from(resp.data.content, 'base64').toString('utf-8'),
           };
-        } catch {
-          // Missing or unreadable — skip it.
+        } catch (err) {
+          // Missing (404) is skipped as "not there". Unreadable for any other
+          // reason is skipped too so one bad path can't sink the scan, but it
+          // is reported so the scanner does not count the run as fully read.
+          if (!isNothingThere(err)) noteDegraded('GitHub file read', err);
         }
       }),
     );
@@ -1058,7 +1066,8 @@ async function probeRootManifests(
       if (ecosystem) refs.push({ path: f.name, ecosystem });
     }
     return refs;
-  } catch {
+  } catch (err) {
+    if (!isNothingThere(err)) noteDegraded('GitHub root listing', err);
     return [];
   }
 }

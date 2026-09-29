@@ -9,6 +9,7 @@ import { scanDependencies } from '@/lib/deps/scanner';
 import {
   failingScanners,
   getScannerStatuses,
+  scanDegradedData,
   scanFailureData,
   scanSuccessData,
 } from '@/lib/scan/freshness';
@@ -316,6 +317,34 @@ describe('freshness helpers', () => {
     expect(scanFailureData('cve', new Error('boom'))).toEqual({ cveScanError: 'boom' });
     expect(scanFailureData('license', 'plain string')).toEqual({ licenseScanError: 'plain string' });
     expect(scanFailureData('deps', new Error(''))).toEqual({ depsScanError: 'Scan failed' });
+  });
+
+  it('scanDegradedData records only the message for its scanner, names the reasons, and never a timestamp', () => {
+    for (const [scanner, field] of [
+      ['cve', 'cveScanError'],
+      ['license', 'licenseScanError'],
+      ['deps', 'depsScanError'],
+    ] as const) {
+      const data = scanDegradedData(scanner, 'GitHub file read: HTTP 401: Bad credentials');
+      expect(Object.keys(data)).toEqual([field]);
+      expect((data as Record<string, string>)[field]).toBe(
+        'Source unreadable, result may be incomplete: GitHub file read: HTTP 401: Bad credentials',
+      );
+    }
+  });
+
+  it('scanDegradedData shows up as a failing scanner without a new success time', () => {
+    const t1 = new Date('2026-07-01T12:00:00Z');
+    const statuses = getScannerStatuses({
+      cveScannedAt: t1,
+      licenseScannedAt: null,
+      depsScannedAt: null,
+      cveScanError: scanDegradedData('cve', 'OSV querybatch: HTTP 503').cveScanError,
+      licenseScanError: null,
+      depsScanError: null,
+    });
+    expect(failingScanners(statuses)).toEqual(['cve']);
+    expect(statuses.cve.lastSuccessAt).toBe(t1.toISOString());
   });
 
   it('scanFailureData truncates very long messages', () => {

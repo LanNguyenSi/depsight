@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { analyzeDepAge } from './age-checker';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
-import { scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export async function scanDependencies(
@@ -18,9 +19,14 @@ export async function scanDependencies(
 
   // Runs before the scan row exists, so a failure here has no FAILED scan to
   // show it; record it on the repo so the failure stays visible.
+  // A source that cannot be read (revoked token, outage) must not look like
+  // "read, no manifests"; see lib/scan/degraded.ts.
   let result: Awaited<ReturnType<typeof analyzeDepAge>>;
+  let degraded: string | null;
   try {
-    result = await analyzeDepAge(accessToken, repo.owner, repo.name, repo.defaultBranch);
+    ({ value: result, degraded } = await trackDegraded(() =>
+      analyzeDepAge(accessToken, repo.owner, repo.name, repo.defaultBranch),
+    ));
   } catch (error) {
     await recordScanFailure(repoId, 'deps', error);
     throw error;
@@ -57,7 +63,7 @@ export async function scanDependencies(
 
       await tx.repo.update({
         where: { id: repoId },
-        data: scanSuccessData('deps'),
+        data: degraded === null ? scanSuccessData('deps') : scanDegradedData('deps', degraded),
       });
     });
 
