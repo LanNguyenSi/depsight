@@ -2,6 +2,12 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:00:48Z, `severity-signals.md` now records that the Slack advisory list is sorted most severe
+  first and that the message carries Mittel and Niedrig count fields; line
+  citations into `lib/alerts/notifier.ts` re-pointed against the merged tree.
+  `mcp-vs-web-api.md`, `policy-rule-evaluation.md` and `rescan-and-staleness.md`
+  re-verified against the changed sources and re-stamped.
+
 - 2026-09-29T05:49:50Z, `severity-signals.md` now describes the scanner handing every saved
   advisory to `notifyForScan`, the fixed HIGH floor of the webhook events, and
   Slack's minimum severity taking effect for MEDIUM and LOW; line citations
