@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract and a null-only stored unknown age
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner uses a -1 unknown-age sentinel in memory and lib/deps/scanner.ts converts it to null before the only Dependency write, so a stored unknown age is always null, which the schema comment and the DEPENDENCY_MAX_AGE check both state.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-29T06:55:48Z
+timestamp: 2026-09-29T10:18:01Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
@@ -19,7 +19,7 @@ sources:
 
 ## One shared shape, five dedicated files, one inline fallback
 
-`DependencyInfo` (`lib/deps/age-checker.ts:17-27`) is the return shape every ecosystem scanner produces. Five non-npm ecosystems each ship a dedicated file exporting the identical signature `scan<Eco>Deps(accessToken: string, owner: string, repo: string, manifestPaths: string[] = []): Promise<DependencyInfo[]>` (`lib/deps/go.ts:91`, `lib/deps/java.ts:89`, `lib/deps/php.ts:75`, `lib/deps/python.ts:63`, `lib/deps/rust.ts:64`), each backed by its own registry (Go proxy, Maven, Packagist, PyPI, crates.io respectively). `analyzeDepAge` dispatches to the matching one by detected ecosystem (`lib/deps/age-checker.ts:99-103`). npm has no equivalent file: it is the fallback branch inlined directly in `age-checker.ts` (`lib/deps/age-checker.ts:105-178`), which reads manifests via `fetchNpmManifests`/`unionNpmDeps` (`lib/manifest-discovery.ts:1028`, `lib/manifest-discovery.ts:172`) and queries the npm registry directly rather than delegating to a per-ecosystem module.
+`DependencyInfo` (`lib/deps/age-checker.ts:17-27`) is the return shape every ecosystem scanner produces. Five non-npm ecosystems each ship a dedicated file exporting the identical signature `scan<Eco>Deps(accessToken: string, owner: string, repo: string, manifestPaths: string[] = []): Promise<DependencyInfo[]>` (`lib/deps/go.ts:91`, `lib/deps/java.ts:89`, `lib/deps/php.ts:75`, `lib/deps/python.ts:63`, `lib/deps/rust.ts:64`), each backed by its own registry (Go proxy, Maven, Packagist, PyPI, crates.io respectively). `analyzeDepAge` dispatches to the matching one by detected ecosystem (`lib/deps/age-checker.ts:99-103`). npm has no equivalent file: it is the fallback branch inlined directly in `age-checker.ts` (`lib/deps/age-checker.ts:105-178`), which reads manifests via `fetchNpmManifests`/`unionNpmDeps` (`lib/manifest-discovery.ts:1029`, `lib/manifest-discovery.ts:172`) and queries the npm registry directly rather than delegating to a per-ecosystem module.
 
 ## The `-1` sentinel never reaches the database as `-1`
 

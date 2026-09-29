@@ -20,6 +20,9 @@ A complete list of what depsight does today, beyond the headline value props in 
   The dashboard's in-page "last scanned" time is taken from completed scan
   rows, so it still moves after a degraded scan; read the marker beside it (the marker
   updates after a page reload).
+  A repository the token can no longer read (deleted, or access lost) is marked
+  degraded too: when the git tree or the root listing answers 404, one repository
+  lookup confirms whether the repository itself is gone.
   Two things stay a normal result and are not marked: a source that answered
   "nothing here" (no manifest, no license file, a repository without commits,
   Dependabot alerts not enabled) and a single package whose registry lookup
