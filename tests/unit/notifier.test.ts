@@ -274,6 +274,20 @@ describe('notifyForScan', () => {
     expect(text).not.toContain('Niedrig');
   });
 
+  it('Slack LOW lists a LOW advisory without adding count fields for MEDIUM or LOW', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('LOW'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-ml', 10, [adv('MEDIUM'), adv('LOW')]);
+
+    const text = slackBodyText();
+    expect(text).toContain('pkg-LOW');
+    expect(text).toContain('pkg-MEDIUM');
+    expect(text).not.toContain('Mittel');
+    expect(text).not.toContain('Niedrig');
+  });
+
   it('Slack CRITICAL still lists the HIGH package of a CRITICAL+HIGH scan', async () => {
     webhookConfigFindMany.mockResolvedValue([]);
     slackConfigFindUnique.mockResolvedValue(slackConfig('CRITICAL'));
