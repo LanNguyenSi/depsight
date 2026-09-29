@@ -33,7 +33,7 @@ export function classifyRustLicense(spdxExpression: string): LicenseClassificati
   return classifyLicense(selectMostPermissive(spdxExpression));
 }
 
-export function selectMostPermissive(spdxExpression: string): string {
+function selectMostPermissive(spdxExpression: string): string {
   if (!spdxExpression.includes(' OR ')) return spdxExpression.trim();
 
   const parts = spdxExpression.split(' OR ').map((s) => s.trim());
