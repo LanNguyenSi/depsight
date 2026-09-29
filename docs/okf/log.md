@@ -14,6 +14,13 @@
   `dependency-age-scanning.md`; `mcp-vs-web-api.md` re-verified against the
   policy routes and `docs/features.md` (no claim changed) and re-stamped.
 
+- 2026-09-29T05:31:08Z, `severity-signals.md` now describes the single shared severity
+  ranking in `lib/severity.ts` used by the policy engine and the notifier
+  instead of two separate constants; line citations into
+  `lib/policy/engine.ts` and `lib/alerts/notifier.ts` in
+  `severity-signals.md`, `policy-rule-evaluation.md` and
+  `dependency-age-scanning.md` were re-pointed. Re-verified and re-stamped.
+
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
   MCP `depsight_get_cves` filter's own ranking, and gives each notification

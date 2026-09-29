@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Advisory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { safeFetch, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { SEVERITY_RANK, severityValue } from '@/lib/severity';
 
 export type NotificationEvent =
   | 'cve.critical'
@@ -145,10 +146,6 @@ async function deliverSlack(
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
-const SEVERITY_ORDER: Record<string, number> = {
-  CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, UNKNOWN: 0,
-};
-
 export async function notifyForScan(
   userId: string,
   repoId: string,
@@ -160,10 +157,10 @@ export async function notifyForScan(
   if (newAdvisories.length === 0) return;
 
   const maxSeverityValue = Math.max(
-    ...newAdvisories.map((a) => SEVERITY_ORDER[a.severity] ?? 0),
+    ...newAdvisories.map((a) => severityValue(a.severity)),
   );
   const event: NotificationEvent =
-    maxSeverityValue >= SEVERITY_ORDER.CRITICAL ? 'cve.critical' : 'cve.high';
+    maxSeverityValue >= SEVERITY_RANK.CRITICAL ? 'cve.critical' : 'cve.high';
 
   const payload: CVENotificationPayload = {
     event,
@@ -200,7 +197,7 @@ export async function notifyForScan(
   });
 
   if (slack?.enabled) {
-    const slackSeverityValue = SEVERITY_ORDER[slack.minSeverity] ?? 0;
+    const slackSeverityValue = severityValue(slack.minSeverity);
     if (maxSeverityValue >= slackSeverityValue) {
       await deliverSlack(slack.webhookUrl, slack.channel, payload);
     }
