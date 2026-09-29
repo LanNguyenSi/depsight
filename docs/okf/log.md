@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T10:46:52Z, `rescan-and-staleness.md` re-verified after the stored degraded reason stopped ending in half of a surrogate pair: the sentence on `scanDegradedReason` now says it cuts to at most 500 characters without splitting a pair, and that the error column stores the same line behind a prefix; no source line moved, so no citation changed.
+
 - 2026-09-29T10:38:03Z, re-verified after the degraded reason was added to the Scan row: `rescan-and-staleness.md` now says each scanner writes the bounded reason on the scan row it completes and that the scan.completed webhook, `POST /api/scan`, `GET /api/scan` and the MCP rescan answer carry it as an additive key, with its citations into the scanners, the notifier, the post-scan hook, the freshness helpers, the scan route, the MCP rescan tool and the schema re-pointed and hand-checked; `severity-signals.md` and `dependency-age-scanning.md` had their citations into the moved lines re-pointed; `mcp-vs-web-api.md` and `policy-rule-evaluation.md` cite sections of `docs/features.md` and `docs/api.md` whose claims still hold, so they are re-stamped only.
 
 - 2026-09-29T10:26:47Z, `rescan-and-staleness.md` re-verified: the repository lookup note now says the 409 tree read of an empty repository does not trigger it by itself, but that repository's root listing answers 404 and runs one lookup per scan, which answers 200 so the scan stays a success; no source line moved, so no citation changed.
