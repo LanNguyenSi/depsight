@@ -8,16 +8,21 @@ A complete list of what depsight does today, beyond the headline value props in 
 - **License detection** and copyleft compliance checking across all supported ecosystems.
 - **Dependency age tracking** and outdated alerts.
 - **Multi-ecosystem support:** npm, Python, Go, Java, Rust, PHP.
-- **Per-scanner failure marker.** The CVE, license and dependency-age scanners each keep their own last-success time and last failure message per repository. The repository overview table and the dashboard header show a warning when a scanner is failing, naming the scanner, its error and its last success, so a scanner that keeps failing is no longer hidden behind a fresh "last scanned" time. `lastScannedAt` now means the last time any scanner succeeded (the auto-scan cron no longer sets it after a failed attempt). `GET /api/overview`, and therefore the MCP overview tool, carries an additive `scannerStatus` field per repository.
+- **Per-scanner failure marker.** The CVE, license and dependency-age scanners each keep their own last-success time and last failure message per repository. The repository overview table and the dashboard header show a warning when a scanner is failing, naming the scanner, its error and its last success, so a scanner that keeps failing is no longer hidden behind a fresh "last scanned" time. A scanner that ran but could not read its data source (a revoked GitHub token, a GitHub or OSV outage) is shown with the same marker, and its last-success time does not advance. `lastScannedAt` now means the last time any scanner succeeded (the auto-scan cron no longer sets it after a failed attempt). `GET /api/overview`, and therefore the MCP overview tool, carries an additive `scannerStatus` field per repository.
 
 ## Known limitations
 
-- **The per-scanner failure marker fires only when a scanner throws.** A
-  revoked GitHub token or an outage of GitHub or OSV makes the CVE, license
-  and dependency-age scanners complete with nothing found instead of
-  failing (their sources swallow those errors), so the marker stays clear
-  and the scan counts as a success. A marker for degraded sources is a
-  follow-up.
+- **A degraded run keeps its partial result and its marker.** When a source
+  cannot be read (a revoked GitHub token, a GitHub or OSV outage, a rate
+  limit) the scanner still stores what it did find and completes its scan
+  row, but the run is marked degraded instead of successful: the per-scanner
+  failure marker shows, and the scanner's last-success time does not advance.
+  The dashboard's in-page "last scanned" time is taken from completed scan
+  rows, so it still moves after a degraded scan; read the marker beside it.
+  Two things stay a normal result and are not marked: a source that answered
+  "nothing here" (no manifest, no license file, a repository without commits,
+  Dependabot alerts not enabled) and a single package whose registry lookup
+  failed, which stays an unknown or needs-review row for that package.
 - **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
