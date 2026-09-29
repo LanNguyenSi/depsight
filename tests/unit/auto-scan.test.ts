@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 describe('auto-scan — scan selection', () => {
-  it('queries repo.findMany scoped by userId + tracked:true + stale (null or older than the interval)', async () => {
+  it('queries repo.findMany scoped by userId + tracked:true + due (no scanner success and no cron attempt within the interval)', async () => {
     const { startAutoScan } = await loadFreshModule();
 
     startAutoScan();
@@ -106,9 +106,9 @@ describe('auto-scan — scan selection', () => {
       where: {
         userId: 'user-1',
         tracked: true,
-        OR: [
-          { lastScannedAt: null },
-          { lastScannedAt: { lt: new Date('2026-07-01T11:00:10.000Z') } },
+        AND: [
+          { OR: [{ lastScannedAt: null }, { lastScannedAt: { lt: new Date('2026-07-01T11:00:10.000Z') } }] },
+          { OR: [{ lastScanAttemptAt: null }, { lastScanAttemptAt: { lt: new Date('2026-07-01T11:00:10.000Z') } }] },
         ],
       },
       select: { id: true, fullName: true },
@@ -127,7 +127,7 @@ describe('auto-scan — scan selection', () => {
     expect(scanDependenciesMock).not.toHaveBeenCalled();
   });
 
-  it('scans each stale repo returned by repo.findMany and marks it lastScannedAt on success', async () => {
+  it('scans each stale repo returned by repo.findMany and records the attempt (not a success) on the repo', async () => {
     repoFindMany.mockResolvedValue([{ id: 'repo-1', fullName: 'acme/repo-1' }]);
     scanRepositoryMock.mockResolvedValue({ scanId: 'cve-1' });
     scanLicensesMock.mockResolvedValue({ scanId: 'lic-1' });
@@ -142,7 +142,7 @@ describe('auto-scan — scan selection', () => {
     expect(scanDependenciesMock).toHaveBeenCalledWith('user-1', 'repo-1', 'tok-abc');
     expect(repoUpdate).toHaveBeenCalledWith({
       where: { id: 'repo-1' },
-      data: { lastScannedAt: new Date('2026-07-01T12:00:10.000Z') },
+      data: { lastScanAttemptAt: new Date('2026-07-01T12:00:10.000Z') },
     });
   });
 });
@@ -151,8 +151,8 @@ describe('auto-scan — failure handling: one repo must not abort the others', (
   it('a repo whose scans all reject (non-rate-limit) does not stop the next repo from being scanned', async () => {
     // Non-rate-limit scan failures are logged (console.warn) but do not set
     // `rateLimited`, so the loop does not `break` — the next repo is still
-    // attempted. (Both repos end up lastScannedAt-stamped: the source only
-    // skips that stamp when the batch was rate-limited.)
+    // attempted. (Both repos get their attempt recorded: the source only
+    // skips that when the batch was rate-limited.)
     repoFindMany.mockResolvedValue([
       { id: 'repo-fail', fullName: 'acme/repo-fail' },
       { id: 'repo-ok', fullName: 'acme/repo-ok' },
@@ -176,7 +176,7 @@ describe('auto-scan — failure handling: one repo must not abort the others', (
     expect(scanRepositoryMock).toHaveBeenCalledWith('user-1', 'repo-ok', 'tok-abc');
     expect(repoUpdate).toHaveBeenCalledWith({
       where: { id: 'repo-ok' },
-      data: { lastScannedAt: new Date('2026-07-01T12:00:10.000Z') },
+      data: { lastScanAttemptAt: new Date('2026-07-01T12:00:10.000Z') },
     });
   });
 
