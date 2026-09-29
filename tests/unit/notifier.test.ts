@@ -269,12 +269,12 @@ describe('notifyForScan', () => {
     expect(text).toContain('pkg-HIGH');
     expect(text).not.toContain('pkg-MEDIUM');
     expect(text).toContain('CVEs gefunden:* 1');
-    // No count field for lower severities appears for the default settings.
+    // The HIGH setting never lists MEDIUM rows, so no Mittel count appears.
     expect(text).not.toContain('Mittel');
     expect(text).not.toContain('Niedrig');
   });
 
-  it('Slack LOW lists a LOW advisory without adding count fields for MEDIUM or LOW', async () => {
+  it('Slack LOW lists MEDIUM and LOW advisories with a count field for each', async () => {
     webhookConfigFindMany.mockResolvedValue([]);
     slackConfigFindUnique.mockResolvedValue(slackConfig('LOW'));
     safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
@@ -284,8 +284,8 @@ describe('notifyForScan', () => {
     const text = slackBodyText();
     expect(text).toContain('pkg-LOW');
     expect(text).toContain('pkg-MEDIUM');
-    expect(text).not.toContain('Mittel');
-    expect(text).not.toContain('Niedrig');
+    expect(text).toContain('Mittel:* 1');
+    expect(text).toContain('Niedrig:* 1');
   });
 
   it('Slack CRITICAL still lists the HIGH package of a CRITICAL+HIGH scan', async () => {
@@ -316,13 +316,122 @@ describe('notifyForScan', () => {
 
     const text = slackBodyText();
     expect(text).toContain('CVEs gefunden:* 5');
-    // Lower severities are listed as rows only, never as count fields.
-    expect(text).not.toContain('Mittel');
+    // Three MEDIUM rows are listed; no LOW advisory is in the scan.
+    expect(text).toContain('Mittel:* 3');
     expect(text).not.toContain('Niedrig');
     // The top-3 list holds CRITICAL, then HIGH, then a MEDIUM.
     const list = text.slice(text.indexOf('Neue Schwachstellen'));
     expect(list.indexOf('pkg-CRITICAL')).toBeGreaterThan(-1);
     expect(list.indexOf('pkg-CRITICAL')).toBeLessThan(list.indexOf('pkg-HIGH'));
     expect(list.indexOf('pkg-HIGH')).toBeLessThan(list.indexOf('pkg-MEDIUM'));
+  });
+  // Frozen at the state before the Mittel/Niedrig fields existed: the exact
+  // request body a CRITICAL or HIGH setting sent for each severity mix, with
+  // the timestamp replaced by a placeholder. The mixes include MEDIUM and LOW
+  // advisories that these settings never list, so no Mittel/Niedrig field may
+  // appear for them.
+  const FROZEN_DEFAULT_BODIES: Array<[string, string[], string]> = [
+    ["CRITICAL", ["CRITICAL"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["CRITICAL", ["CRITICAL", "HIGH"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 2\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\\n🟠 `pkg-HIGH-2` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["CRITICAL", ["CRITICAL", "CRITICAL", "HIGH", "HIGH", "MEDIUM", "LOW"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 4\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 2\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 2\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\\n🔴 `pkg-CRITICAL-2` — CRITICAL issue\\n🟠 `pkg-HIGH-3` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["CRITICAL", ["CRITICAL", "MEDIUM", "LOW"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["CRITICAL"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["HIGH"], "{\"text\":\"⚠️ *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"⚠️ Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🟠 `pkg-HIGH-1` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["CRITICAL", "HIGH"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 2\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\\n🟠 `pkg-HIGH-2` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["HIGH", "MEDIUM"], "{\"text\":\"⚠️ *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"⚠️ Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🟠 `pkg-HIGH-1` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["HIGH", "MEDIUM", "LOW"], "{\"text\":\"⚠️ *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"⚠️ Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🟠 `pkg-HIGH-1` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["CRITICAL", "CRITICAL", "HIGH", "HIGH", "MEDIUM", "LOW"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 4\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 2\"},{\"type\":\"mrkdwn\",\"text\":\"*🟠 Hoch:* 2\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\\n🔴 `pkg-CRITICAL-2` — CRITICAL issue\\n🟠 `pkg-HIGH-3` — HIGH issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+    ["HIGH", ["CRITICAL", "MEDIUM", "LOW"], "{\"text\":\"🚨 *depsight Security Alert* — acme/web\",\"blocks\":[{\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"🚨 Security Alert: acme/web\"}},{\"type\":\"section\",\"fields\":[{\"type\":\"mrkdwn\",\"text\":\"*CVEs gefunden:* 1\"},{\"type\":\"mrkdwn\",\"text\":\"*Risk Score:* 50/100\"},{\"type\":\"mrkdwn\",\"text\":\"*🔴 Kritisch:* 1\"}]},{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*Neue Schwachstellen:*\\n🔴 `pkg-CRITICAL-1` — CRITICAL issue\"}},{\"type\":\"context\",\"elements\":[{\"type\":\"mrkdwn\",\"text\":\"depsight · __TS__\"}]}]}"],
+  ];
+
+  it.each(FROZEN_DEFAULT_BODIES)(
+    'Slack %s message for %j is byte-identical to the frozen default',
+    async (setting, severities, frozen) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-01-02T03:04:05Z'));
+        webhookConfigFindMany.mockResolvedValue([]);
+        slackConfigFindUnique.mockResolvedValue(slackConfig(setting));
+        safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+        await notifyForScan(
+          'u',
+          'r',
+          'acme/web',
+          's',
+          50,
+          severities.map((s, i) => ({ ...adv(s, i + 1), packageName: `pkg-${s}-${i + 1}` })),
+        );
+
+        const sent = (callsTo(SLACK_URL)[0][1] as { body: string }).body;
+        const stamp = new Date('2026-01-02T03:04:05Z').toLocaleString('de-DE');
+        expect(sent).toBe(frozen.replace('__TS__', stamp));
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('Slack MEDIUM shows a Mittel count for the listed MEDIUM rows and no Niedrig field', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('MEDIUM'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-m2', 20, [adv('MEDIUM', 1), adv('MEDIUM', 2)]);
+
+    const text = slackBodyText();
+    expect(text).toContain('Mittel:* 2');
+    expect(text).not.toContain('Niedrig');
+  });
+
+  it('Slack LOW shows a Niedrig count for the listed LOW rows and no Mittel field', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('LOW'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-l2', 5, [adv('LOW', 1), adv('LOW', 2), adv('LOW', 3)]);
+
+    const text = slackBodyText();
+    expect(text).toContain('Niedrig:* 3');
+    expect(text).not.toContain('Mittel');
+  });
+
+  it('Slack LOW with MEDIUM and LOW rows shows both counts after Kritisch and Hoch', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('LOW'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-all', 60, [
+      adv('LOW', 1),
+      adv('MEDIUM', 1),
+      adv('HIGH', 1),
+      adv('CRITICAL', 1),
+    ]);
+
+    const fieldsBlock = bodyOf(callsTo(SLACK_URL)[0]).blocks as Array<{ fields?: Array<{ text: string }> }>;
+    const labels = (fieldsBlock.find((b) => b.fields)?.fields ?? []).map((f) => f.text);
+    expect(labels).toEqual([
+      '*CVEs gefunden:* 4',
+      '*Risk Score:* 60/100',
+      '*🔴 Kritisch:* 1',
+      '*🟠 Hoch:* 1',
+      '*🟡 Mittel:* 1',
+      '*🔵 Niedrig:* 1',
+    ]);
+  });
+
+  it('Slack MEDIUM counts every listed MEDIUM row, not only the three shown', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('MEDIUM'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-m4', 20, [
+      adv('MEDIUM', 1),
+      adv('MEDIUM', 2),
+      adv('MEDIUM', 3),
+      adv('MEDIUM', 4),
+    ]);
+
+    expect(slackBodyText()).toContain('Mittel:* 4');
   });
 });
