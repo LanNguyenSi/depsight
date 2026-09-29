@@ -24,6 +24,8 @@ const MAX_REASONS = 5;
 interface Tracker {
   reasons: string[];
   omitted: number;
+  /** Memoized whole-repository check: at most one probe per tracking scope. */
+  repoCheck?: Promise<void>;
 }
 
 const storage = new AsyncLocalStorage<Tracker>();
@@ -64,6 +66,29 @@ export function noteDegraded(source: string, detail: unknown): void {
     return;
   }
   tracker.reasons.push(reason);
+}
+
+/**
+ * A 404 on the git tree or the root listing is ambiguous: the repository may
+ * exist and simply have nothing there, or it may be gone (or invisible to the
+ * token) so that every read answers 404. `probe` reads the repository itself
+ * (`repos.get`); when that also answers 404 the whole repository is unreadable
+ * and is noted as degraded ("repository not readable"). A probe failure other
+ * than 404 is noted like any unreadable source. The probe runs at most once per
+ * tracking scope, however many 404 paths ask, and not at all outside a scope.
+ */
+export async function confirmRepositoryReadable(probe: () => Promise<unknown>): Promise<void> {
+  const tracker = storage.getStore();
+  if (!tracker) return;
+  tracker.repoCheck ??= (async () => {
+    try {
+      await probe();
+    } catch (err) {
+      if (statusOf(err) === 404) noteDegraded('repository not readable', err);
+      else if (!isNothingThere(err)) noteDegraded('GitHub repository check', err);
+    }
+  })();
+  await tracker.repoCheck;
 }
 
 /**

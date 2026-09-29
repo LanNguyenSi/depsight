@@ -279,6 +279,68 @@ describe('GitHub client rejecting 401 on every call', () => {
   });
 });
 
+describe('a repository the token can no longer read', () => {
+  it.each(SCANNERS)('every call answering 404, the repository lookup included, degrades the %s scanner', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHubRejectingEverything(404, 'Not Found');
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /repository not readable/);
+  });
+
+  it.each(SCANNERS)('the repository lookup runs at most once per %s scan', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHubRejectingEverything(404, 'Not Found');
+
+    await runners[scanner]();
+
+    expect(gh.reposGet.mock.calls.length).toBeLessThanOrEqual(1);
+    expect(gh.getTree).toHaveBeenCalled();
+    expect(gh.getContent).toHaveBeenCalled();
+  });
+
+  it.each(SCANNERS)('a repository that exists but has no manifests stays a success for %s (lookup 200, tree and listing 404)', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(404, 'Not Found') });
+
+    await runners[scanner]();
+
+    expectSuccess(scanner);
+  });
+
+  it.each(SCANNERS)('a repository lookup failing with 500 degrades the %s scanner under its own classification', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(404, 'Not Found') });
+    gh.reposGet.mockRejectedValue(httpError(500, 'Server Error'));
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /GitHub repository check: HTTP 500/);
+    expect(markerOf(scanner)).not.toMatch(/repository not readable/);
+  });
+
+  it.each(SCANNERS)('a tree 404 alone confirms the repository: root listing 500, lookup 404 degrades %s as not readable', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(404, 'Not Found'), files: { '': httpError(500, 'Server Error') } });
+    gh.reposGet.mockRejectedValue(httpError(404, 'Not Found'));
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /repository not readable/);
+  });
+
+  it.each(SCANNERS)('a root listing 404 alone confirms the repository: tree 500, lookup 404 degrades %s as not readable', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(500, 'Server Error') });
+    gh.reposGet.mockRejectedValue(httpError(404, 'Not Found'));
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /repository not readable/);
+  });
+});
+
 describe('a source that was read and had nothing to find is a success', () => {
   const emptyRepoFixtures: Array<[string, () => void]> = [
     [
