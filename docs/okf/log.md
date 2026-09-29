@@ -4,6 +4,14 @@
 
 - 2026-09-29T06:19:22Z, merged master (per-scanner freshness) into the Slack minimum-severity branch: `severity-signals.md` keeps the widened notification path, Slack minimum severity and sorted list, with its `lib/cve/scanner.ts` and `prisma/schema.prisma` citations re-pointed against the merged sources; `rescan-and-staleness.md` re-verified against the merged scanner; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified against the changed `docs/features.md`. All four re-stamped.
 
+- 2026-09-29T06:17:40Z, merged master (per-scanner freshness) into the ageInDays comment branch: the
+  null-only unknown age text in `dependency-age-scanning.md` now sits on top of
+  the per-scanner freshness text, with its `lib/deps/scanner.ts` and
+  `prisma/schema.prisma` citations re-pointed against the merged sources; the
+  policies route citations in `policy-rule-evaluation.md` were re-verified;
+  `severity-signals.md`, `rescan-and-staleness.md` and `mcp-vs-web-api.md`
+  re-verified and re-stamped.
+
 - 2026-09-29T06:10:30Z, `severity-signals.md` now records that the Slack advisory list is sorted most
   severe first (the message keeps the Kritisch and Hoch count fields only);
   every line citation into `lib/alerts/notifier.ts` re-pointed against the
@@ -17,6 +25,14 @@
   merged sources; `rescan-and-staleness.md` citations re-verified against the
   merged tree; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified
   against the merged `docs/features.md`. All five re-stamped.
+
+- 2026-09-29T05:59:20Z, `dependency-age-scanning.md` rewritten for the null-only unknown age: the
+  schema comment and the `DEPENDENCY_MAX_AGE` check now state `null`, the
+  `-1` sentinel stays in the scanners and is converted at the one write path.
+  Route citations in `policy-rule-evaluation.md` re-pointed after the policies
+  route comments changed; `severity-signals.md`, `rescan-and-staleness.md` and
+  `mcp-vs-web-api.md` re-verified (MCP has list and evaluate policy tools only)
+  and re-stamped; `index.md` summary updated.
 
 - 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
   branch: line citations into `lib/policy/engine.ts` re-pointed and verified

@@ -21,8 +21,8 @@ them.
   enabled `CVE_MIN_SEVERITY` policy at MEDIUM or below).
 - [Dependency age scanning](dependency-age-scanning.md), the shared
   per-ecosystem scanner contract and npm's inline exception, plus why the
-  `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
-  describes what the column actually stores.
+  `-1` unknown-age sentinel that is converted to `null` before the only
+  write, which the schema comment and the age policy check both state.
 - [License classification](license-classification.md), the one shared
   `classifyLicense`, copyleft set and needs-review list in
   `lib/license/classifier.ts` used by every ecosystem but Go, and the
