@@ -65,7 +65,7 @@ describe("createServer", () => {
   it("constructs the McpServer with the depsight name/version", () => {
     createServer(CONFIG);
 
-    expect(McpServer).toHaveBeenCalledWith({ name: "depsight", version: "0.3.0" });
+    expect(McpServer).toHaveBeenCalledWith({ name: "depsight", version: "0.4.0" });
   });
 });
 

@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T07:51:39Z, `mcp-vs-web-api.md` re-verified after `mcp/src/server.ts` changed for the depsight-mcp 0.4.0 release (only the reported server version string moved from 0.3.0 to 0.4.0); no claim in the doc names that version, re-stamped.
+
 - 2026-09-29T07:26:16Z, re-verified after the Slack Mittel and Niedrig count fields: `severity-signals.md` now says the
   message counts every listed row per severity (`Kritisch`, `Hoch`, `Mittel`, `Niedrig`, each only when
   present) and that a `CRITICAL` or `HIGH` setting stays byte-identical; its citations into
