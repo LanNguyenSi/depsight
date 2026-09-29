@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:36:31Z, per-scanner freshness: `rescan-and-staleness.md` now describes the
+  per-scanner success and failure columns on `Repo`, that `lastScannedAt` means
+  any scanner last succeeded and is no longer written by the cron, the cron's
+  own attempt marker and the due-gate that reads both, and the failure marker in
+  the overview table and the dashboard. `severity-signals.md` and
+  `dependency-age-scanning.md` had their `lib/cve/scanner.ts`,
+  `lib/deps/scanner.ts` and `prisma/schema.prisma` citations re-pointed after
+  the line shifts; their claims were re-verified and re-stamped, and `index.md`
+  carries the updated one-line summary.
+
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
   MCP `depsight_get_cves` filter's own ranking, and gives each notification
