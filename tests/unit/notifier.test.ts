@@ -81,6 +81,28 @@ describe('notifyScanCompleted', () => {
     expect(typeof body.scannedAt).toBe('string');
   });
 
+  it('carries degradedReason null by default and the given reason when the scan was degraded, other fields unchanged', async () => {
+    webhookConfigFindMany.mockResolvedValue([
+      { url: 'https://hooks.example.com/scan', secret: null, events: ['scan.completed'] },
+    ]);
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-1', 'cve', { cveCount: 0 }, []);
+    await notifyScanCompleted(
+      'user-1', 'repo-1', 'acme/web', 'scan-2', 'cve', { cveCount: 0 }, [],
+      'Dependabot alerts: HTTP 401: Bad credentials',
+    );
+
+    const healthy = JSON.parse(safeFetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+    const degraded = JSON.parse(safeFetchMock.mock.calls[1][1].body as string) as Record<string, unknown>;
+    expect(healthy.degradedReason).toBeNull();
+    expect(degraded.degradedReason).toBe('Dependabot alerts: HTTP 401: Bad credentials');
+    // every pre-existing key is still present and the only added key is degradedReason
+    expect(Object.keys(healthy).sort()).toEqual(
+      ['degradedReason', 'event', 'policyViolations', 'repoFullName', 'repoId', 'scanId', 'scanType', 'scannedAt', 'summary'],
+    );
+  });
+
   it('returns early without any fetch when no scan.completed subscribers exist', async () => {
     webhookConfigFindMany.mockResolvedValue([
       { url: 'https://hooks.example.com/cve', secret: null, events: ['cve.critical'] },

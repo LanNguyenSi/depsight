@@ -116,6 +116,39 @@ describe('POST /api/scan — route status codes', () => {
     expect(scanRepositoryMock).toHaveBeenCalled();
   });
 
+  it('exposes degradedReason: the reason of a degraded scan, null for a healthy one, existing fields unchanged', async () => {
+    scanRepositoryMock.mockResolvedValueOnce({
+      scanId: 'scan-d', dependabotDisabled: true, degradedReason: 'OSV: HTTP 500: down',
+    });
+    const degraded = await (await POST(makeRequest({ repoId: 'repo-1' }))).json();
+    expect(degraded).toEqual({
+      scanId: 'scan-d', status: 'completed', alreadyRunning: false, dependabotDisabled: true,
+      degradedReason: 'OSV: HTTP 500: down',
+    });
+
+    scanRepositoryMock.mockResolvedValueOnce({ scanId: 'scan-h', dependabotDisabled: false, degradedReason: null });
+    const healthy = await (await POST(makeRequest({ repoId: 'repo-1' }))).json();
+    expect(healthy).toEqual({
+      scanId: 'scan-h', status: 'completed', alreadyRunning: false, dependabotDisabled: false, degradedReason: null,
+    });
+
+    // an already-running short-circuit result has no reason field: null
+    scanRepositoryMock.mockResolvedValueOnce({ scanId: 'scan-r', alreadyRunning: true });
+    const running = await (await POST(makeRequest({ repoId: 'repo-1' }))).json();
+    expect(running.degradedReason).toBeNull();
+  });
+
+  it('GET returns the stored degradedReason of the latest scan', async () => {
+    scanFindFirst.mockResolvedValueOnce({
+      id: 'scan-1', scannedAt: new Date('2026-07-01T00:00:00Z'), status: 'COMPLETED',
+      degradedReason: 'OSV: HTTP 500: down', riskScore: 0, cveCount: 0, criticalCount: 0, highCount: 0,
+      mediumCount: 0, lowCount: 0, advisories: [],
+    });
+    const res = await GET(new NextRequest('http://localhost/api/scan?repoId=repo-1'));
+    const body = await res.json() as { scan: { degradedReason: string | null } };
+    expect(body.scan.degradedReason).toBe('OSV: HTTP 500: down');
+  });
+
   it('returns 404 when scanRepository throws ScanAccessError(404)', async () => {
     scanRepositoryMock.mockRejectedValue(new ScanAccessError(404, 'Repository not found'));
 

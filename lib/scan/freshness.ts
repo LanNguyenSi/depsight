@@ -72,6 +72,16 @@ export function scanDegradedData(scanner: ScannerKey, reasons: string) {
   return scanFailureData(scanner, `Source unreadable, result may be incomplete: ${reasons}`);
 }
 
+/**
+ * The value stored on a Scan row (and exposed by the scan.completed webhook,
+ * POST /api/scan and the MCP rescan answer) for a run's degraded reason: the
+ * classified reason line the degraded tracker produced, cut to the same bound
+ * as the per-scanner failure message, or null when every source was read.
+ */
+export function scanDegradedReason(degraded: string | null): string | null {
+  return degraded === null ? null : degraded.slice(0, MAX_ERROR_LENGTH);
+}
+
 export function getScannerStatuses(repo: RepoScannerColumns): ScannerStatuses {
   return {
     cve: { lastSuccessAt: repo.cveScannedAt?.toISOString() ?? null, error: repo.cveScanError ?? null },

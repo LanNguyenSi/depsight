@@ -24,13 +24,17 @@ export function registerRescanTools(
           scanId?: string;
           status?: string;
           dependabotDisabled?: boolean;
+          degradedReason?: string | null;
         } | null;
 
         const status = data?.status ?? "completed";
+        const degradedReason = data?.degradedReason ?? null;
         const message =
           status === "running"
             ? "A scan is already in progress for this repository. Call depsight_get_cves with this repoId once it completes to read updated CVE results."
-            : "Scan completed. Call depsight_get_cves with this repoId to read updated CVE results.";
+            : degradedReason !== null
+              ? "Scan completed but degraded: a source could not be read, so the result may be incomplete (see degradedReason). Call depsight_get_cves with this repoId to read the partial CVE results."
+              : "Scan completed. Call depsight_get_cves with this repoId to read updated CVE results.";
 
         return ok({
           success: true,
@@ -38,6 +42,7 @@ export function registerRescanTools(
           scanId: data?.scanId,
           status,
           dependabotDisabled: data?.dependabotDisabled ?? false,
+          degradedReason,
           message,
         });
       } catch (e) {

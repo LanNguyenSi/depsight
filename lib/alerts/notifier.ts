@@ -41,6 +41,8 @@ export interface ScanCompletedPayload {
     affectedPackages: string[];
   }>;
   scannedAt: string;
+  /** Why the completed scan is partial (unreadable sources); null when every source was read. */
+  degradedReason: string | null;
 }
 
 export type NotificationPayload = CVENotificationPayload | ScanCompletedPayload;
@@ -243,6 +245,7 @@ export async function notifyScanCompleted(
   scanType: 'cve' | 'license' | 'deps',
   summary: Record<string, unknown>,
   policyViolations: ScanCompletedPayload['policyViolations'],
+  degradedReason: string | null = null,
 ): Promise<void> {
   const webhooks = await prisma.webhookConfig.findMany({
     where: { userId, enabled: true },
@@ -260,6 +263,7 @@ export async function notifyScanCompleted(
     summary,
     policyViolations,
     scannedAt: new Date().toISOString(),
+    degradedReason,
   };
 
   await Promise.allSettled(

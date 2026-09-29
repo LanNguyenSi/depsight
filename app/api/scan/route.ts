@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
       status: result.alreadyRunning ? 'running' : 'completed',
       alreadyRunning: result.alreadyRunning ?? false,
       dependabotDisabled: result.dependabotDisabled ?? false,
+      degradedReason: result.degradedReason ?? null,
     });
   } catch (error) {
     if (error instanceof ScanAccessError) {
@@ -85,6 +86,7 @@ export async function GET(req: NextRequest) {
       id: scan.id,
       scannedAt: scan.scannedAt,
       status: scan.status,
+      degradedReason: scan.degradedReason,
       riskScore: scan.riskScore,
       counts: {
         total: scan.cveCount,

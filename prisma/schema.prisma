@@ -81,6 +81,7 @@ model Scan {
   scannedAt     DateTime  @default(now())
   status        ScanStatus @default(PENDING)
   error         String?
+  degradedReason String?   // why a COMPLETED scan is partial (unreadable sources, bounded); null when every source was read
   ecosystem     String?    // detected primary ecosystem: npm, python, go, java, rust, php
 
   // CVE results

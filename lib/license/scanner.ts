@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { detectLicenses } from './detector';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
-import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanDegradedReason, scanSuccessData } from '@/lib/scan/freshness';
 import { trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
@@ -45,6 +45,7 @@ export async function scanLicenses(
         where: { id: scan.id },
         data: {
           status: 'COMPLETED',
+          degradedReason: scanDegradedReason(degraded),
           licenseCount: result.licenses.length,
           licenseIssues: result.conflictCount,
           licensePayload: JSON.parse(JSON.stringify(result.licenses)),
@@ -61,7 +62,7 @@ export async function scanLicenses(
     runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'license', {
       licenseCount: result.licenses.length,
       conflictCount: result.conflictCount,
-    }).catch((err) => console.error('[post-scan] license hook error:', err));
+    }, scanDegradedReason(degraded)).catch((err) => console.error('[post-scan] license hook error:', err));
 
     return {
       scanId: scan.id,
