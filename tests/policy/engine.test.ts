@@ -148,7 +148,7 @@ describe('evaluatePolicies()', () => {
     expect(violations[0].affectedPackages.some((p) => p.includes('highpkg'))).toBe(true);
   });
 
-  it('DEPENDENCY_MAX_AGE — an unknown (null) age never triggers, even below zero', async () => {
+  it('DEPENDENCY_MAX_AGE: an unknown (null) age never triggers, even below zero', async () => {
     mockPolicyFindMany.mockResolvedValue([
       makePolicy({
         type: PolicyType.DEPENDENCY_MAX_AGE,
