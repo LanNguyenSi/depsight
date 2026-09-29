@@ -2,6 +2,11 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:32:06Z, `license-classification.md` rewritten for the shared classifier in
+  `lib/license/classifier.ts`: one copyleft set, one needs-review list, and
+  the Java, Python and Rust preparation that runs before it. Re-verified
+  against the changed code and re-stamped; `index.md` summary updated.
+
 - 2026-09-27T15:13:26Z, scope wording tightened after the third fact-check pass:
   `severity-signals.md` names the two notification-side rankings, notes the
   MCP `depsight_get_cves` filter's own ranking, and gives each notification

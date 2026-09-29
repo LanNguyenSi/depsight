@@ -24,10 +24,11 @@ them.
   per-ecosystem scanner contract and npm's inline exception, plus why the
   `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
   describes what the column actually stores.
-- [License classification](license-classification.md), the five
-  independently defined copies of `classifyLicense`/`COPYLEFT_LICENSES`
-  (one per ecosystem but Go), and the one way Java's copy has already
-  diverged in behavior, not just in location.
+- [License classification](license-classification.md), the one shared
+  `classifyLicense`/`COPYLEFT_LICENSES`/needs-review list in
+  `lib/license/classifier.ts` (Go skips classification), and the
+  per-ecosystem preparation (Java names, PyPI free text, Rust dual
+  licenses) that runs before it.
 
 ## Modules
 
