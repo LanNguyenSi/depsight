@@ -198,6 +198,53 @@ describe('evaluatePolicies()', () => {
     expect(violations[0].affectedPackages[0]).toContain('oldpkg');
   });
 
+  it('DEPENDENCY_MAX_AGE: an age exactly at the limit is fine, one day over is a violation', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MAX_AGE,
+        rule: { maxAgeDays: 365 },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'atlimitpkg', installedVersion: '1.0.0', ageInDays: 365 },
+          { id: 'd2', name: 'overpkg', installedVersion: '1.0.0', ageInDays: 366 },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].type).toBe(PolicyType.DEPENDENCY_MAX_AGE);
+    expect(violations[0].affectedPackages).toHaveLength(1);
+    expect(violations[0].affectedPackages[0]).toContain('overpkg');
+    expect(violations[0].affectedPackages.some((p) => p.includes('atlimitpkg'))).toBe(false);
+  });
+
+  it('DEPENDENCY_MAX_AGE: a dependency exactly at the limit alone raises no violation', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MAX_AGE,
+        rule: { maxAgeDays: 365 },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'atlimitpkg', installedVersion: '1.0.0', ageInDays: 365 },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(0);
+  });
+
   it('DEPENDENCY_MIN_VERSION — catches installed version below the floor', async () => {
     mockPolicyFindMany.mockResolvedValue([
       makePolicy({
