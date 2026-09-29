@@ -186,6 +186,8 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                   {repo.scannerStatus && failingScanners(repo.scannerStatus).length > 0 && (
                     <span
                       className="ml-1.5 text-red-400 font-semibold cursor-help"
+                      role="img"
+                      aria-label={scanFailureTitle(repo.scannerStatus, t)}
                       title={scanFailureTitle(repo.scannerStatus, t)}
                     >
                       {'\u26A0'}

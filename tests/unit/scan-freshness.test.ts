@@ -4,6 +4,8 @@
 // failure marker while the others advance; the cron must never stamp a success
 // timestamp itself.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { scanRepository } from '@/lib/cve/scanner';
+import { scanDependencies } from '@/lib/deps/scanner';
 import {
   failingScanners,
   getScannerStatuses,
@@ -11,7 +13,7 @@ import {
   scanSuccessData,
 } from '@/lib/scan/freshness';
 
-const { store, detectors } = vi.hoisted(() => {
+const { store, detectors, faults } = vi.hoisted(() => {
   const store = {
     repo: {} as Record<string, unknown>,
     scans: [] as Array<Record<string, unknown>>,
@@ -22,7 +24,13 @@ const { store, detectors } = vi.hoisted(() => {
     licenses: vi.fn(),
     depAge: vi.fn(),
   };
-  return { store, detectors };
+  // Faults the prisma mock injects on demand; reset before every test.
+  const faults = {
+    transaction: null as Error | null,
+    depsCreateMany: null as Error | null,
+    failMarkerWrite: false,
+  };
+  return { store, detectors, faults };
 });
 
 vi.mock('@/lib/prisma', () => {
@@ -31,6 +39,10 @@ vi.mock('@/lib/prisma', () => {
     findUnique: vi.fn(async () => store.repo),
     findFirst: vi.fn(async () => store.repo),
     update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      // Simulates the failure-marker write itself failing (any *ScanError set).
+      if (faults.failMarkerWrite && Object.entries(data).some(([k, v]) => k.endsWith('ScanError') && v !== null)) {
+        throw new Error('marker write failed');
+      }
       Object.assign(store.repo, data);
       return store.repo;
     }),
@@ -53,7 +65,12 @@ vi.mock('@/lib/prisma', () => {
     scan: scanApi,
     advisory: { createMany: vi.fn(async () => ({})) },
     licenseResult: { createMany: vi.fn(async () => ({})) },
-    dependency: { createMany: vi.fn(async () => ({})) },
+    dependency: {
+      createMany: vi.fn(async () => {
+        if (faults.depsCreateMany) throw faults.depsCreateMany;
+        return {};
+      }),
+    },
   };
   return {
     prisma: {
@@ -63,7 +80,10 @@ vi.mock('@/lib/prisma', () => {
       repo: repoApi,
       scan: scanApi,
       advisory: { findMany: vi.fn(async () => []) },
-      $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+      $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => {
+        if (faults.transaction) throw faults.transaction;
+        return cb(tx);
+      }),
     },
   };
 });
@@ -132,6 +152,9 @@ beforeEach(() => {
   };
   store.scans = [];
   store.nextScanId = 1;
+  faults.transaction = null;
+  faults.depsCreateMany = null;
+  faults.failMarkerWrite = false;
   detectors.osv.mockReset();
   detectors.licenses.mockReset();
   detectors.depAge.mockReset();
@@ -175,6 +198,8 @@ describe('cron + scanners: per-scanner freshness', () => {
     succeedAll();
     await runCycleAt('2026-07-01T12:00:00Z');
 
+    // The OSV rejection is a synthetic failure shape (the real OSV client never
+    // throws); the reachable CVE failure path is covered separately below.
     detectors.osv.mockRejectedValue(new Error('osv down'));
     detectors.licenses.mockRejectedValue(new Error('license down'));
     detectors.depAge.mockRejectedValue(new Error('deps down'));
@@ -211,6 +236,71 @@ describe('cron + scanners: per-scanner freshness', () => {
     await runCycleAt('2026-07-01T14:00:00Z');
     expect(store.repo.licenseScanError).toBeNull();
     expect(store.repo.licenseScannedAt).toEqual(T2);
+  });
+});
+
+describe('failure recording on paths production can reach', () => {
+  it('a CVE scan whose persistence transaction rejects keeps cveScannedAt and shows a failure', async () => {
+    succeedAll();
+    vi.setSystemTime(T1);
+    await scanRepository('user-1', 'repo-1', 'tok');
+    expect(store.repo.cveScannedAt).toEqual(T1);
+
+    vi.setSystemTime(T2);
+    faults.transaction = new Error('advisory insert failed');
+    await expect(scanRepository('user-1', 'repo-1', 'tok')).rejects.toThrow('advisory insert failed');
+
+    expect(store.repo.cveScannedAt).toEqual(T1); // did not advance
+    expect(store.repo.lastScannedAt).toEqual(T1);
+    expect(store.repo.cveScanError).toBe('advisory insert failed');
+    expect(store.scans[1].status).toBe('FAILED');
+  });
+
+  it('a deps write that rejects after the age check succeeded keeps depsScannedAt and shows a failure', async () => {
+    succeedAll();
+    vi.setSystemTime(T1);
+    await scanDependencies('user-1', 'repo-1', 'tok');
+    expect(store.repo.depsScannedAt).toEqual(T1);
+
+    // The age check succeeds and returns rows, then the insert of those rows fails.
+    detectors.depAge.mockResolvedValue({
+      dependencies: [
+        {
+          name: 'left-pad',
+          installedVersion: '1.0.0',
+          latestVersion: '1.3.0',
+          publishedAt: null,
+          ageInDays: 10,
+          status: 'CURRENT',
+          isDeprecated: false,
+          updateAvailable: true,
+          latestPublishedAt: null,
+        },
+      ],
+      summary: {},
+    });
+    faults.depsCreateMany = new Error('dependency insert failed');
+    vi.setSystemTime(T2);
+    await expect(scanDependencies('user-1', 'repo-1', 'tok')).rejects.toThrow('dependency insert failed');
+
+    expect(store.repo.depsScannedAt).toEqual(T1); // did not advance
+    expect(store.repo.depsScanError).toBe('dependency insert failed');
+    expect(store.scans[1].status).toBe('FAILED');
+  });
+
+  it('when writing the failure marker itself fails, the scanner still rejects with its original error and the scan row is FAILED', async () => {
+    succeedAll();
+    detectors.depAge.mockResolvedValue({ dependencies: [], summary: {} });
+    faults.depsCreateMany = null;
+    faults.transaction = new Error('original scan error');
+    faults.failMarkerWrite = true;
+
+    await expect(scanDependencies('user-1', 'repo-1', 'tok')).rejects.toThrow('original scan error');
+
+    expect(store.scans).toHaveLength(1);
+    expect(store.scans[0].status).toBe('FAILED');
+    expect(store.scans[0].error).toBe('original scan error');
+    expect(store.repo.depsScanError).toBeNull(); // the marker write did fail
   });
 });
 
