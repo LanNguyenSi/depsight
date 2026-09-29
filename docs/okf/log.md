@@ -2,6 +2,14 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:59:20Z, `dependency-age-scanning.md` rewritten for the null-only unknown age: the
+  schema comment and the `DEPENDENCY_MAX_AGE` check now state `null`, the
+  `-1` sentinel stays in the scanners and is converted at the one write path.
+  Route citations in `policy-rule-evaluation.md` re-pointed after the policies
+  route comments changed; `severity-signals.md`, `rescan-and-staleness.md` and
+  `mcp-vs-web-api.md` re-verified (MCP has list and evaluate policy tools only)
+  and re-stamped; `index.md` summary updated.
+
 - 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
   branch: line citations into `lib/policy/engine.ts` re-pointed and verified
   against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`

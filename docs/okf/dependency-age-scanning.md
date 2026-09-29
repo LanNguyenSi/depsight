@@ -1,9 +1,9 @@
 ---
 type: invariant
-title: Dependency age scanning - a shared contract, a schema comment that no longer matches storage
-description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner's -1 unknown-age sentinel is converted to null before it reaches the database, so the Dependency.ageInDays schema comment ("-1 = unknown") describes the in-memory convention, not what is ever actually stored, and a policy check for -1 is effectively dead code against real scan data.
+title: Dependency age scanning - a shared contract and a null-only stored unknown age
+description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner uses a -1 unknown-age sentinel in memory and lib/deps/scanner.ts converts it to null before the only Dependency write, so a stored unknown age is always null, which the schema comment and the DEPENDENCY_MAX_AGE check both state.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-29T05:52:34Z
+timestamp: 2026-09-29T05:59:20Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
@@ -25,8 +25,8 @@ sources:
 
 Every scanner, the five dedicated files and the inline npm branch alike, uses `ageInDays: -1` to mean "publish date unknown or unresolved": `lib/deps/go.ts:83`, `lib/deps/java.ts:58` and `lib/deps/java.ts:86`, `lib/deps/php.ts:63`, `lib/deps/python.ts:50`, `lib/deps/rust.ts:52`, and the inline npm branch's own default (`lib/deps/age-checker.ts:186`) and computed case (`lib/deps/age-checker.ts:153-155`, `installedPublishedAt ? Math.floor(...) : -1`). But `lib/deps/scanner.ts:34` rewrites that sentinel before the `Dependency.createMany` write: `ageInDays: d.ageInDays >= 0 ? d.ageInDays : null`. Every persisted `Dependency` row therefore has `ageInDays` as either a real day count or `null`, never `-1`.
 
-`prisma/schema.prisma:120`'s own field comment, `ageInDays Int? // -1 = unknown`, describes the `DependencyInfo` in-memory convention above the write path, not what the column ever actually holds once `scanDependencies` has run. A reader who trusts the schema comment literally and queries for `ageInDays = -1` will find nothing, not because the "unknown" case doesn't occur, but because it is always stored as `null` instead.
+`prisma/schema.prisma:120`'s field comment reads `ageInDays Int? // null = unknown (the scanner maps its -1 sentinel to null before writing)`, so it states what the column holds while naming the in-memory `-1` convention that exists only above the write path. A query for `ageInDays = -1` finds nothing because the "unknown" case is always stored as `null`. `lib/deps/scanner.ts:27` (`Dependency.createMany`) is the only write path for `Dependency` rows in the codebase (an `rg` for `dependency.create`, `upsert` and `update` finds no other), and the readers (`app/api/deps/route.ts:114`, `lib/export/repo-bundle.ts:259`, `lib/sbom/cyclonedx.ts:173`, the dashboard components) all treat `null` as unknown.
 
-## A defensive check with no live target
+## The age check tests for null only
 
-`lib/policy/engine.ts:274`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays !== -1 && d.ageInDays > maxAgeDays`. Against data written by the normal `scanDependencies` pipeline, the `!== -1` half of that check never has anything to exclude: `null` already covers every "unknown" row from that path. It would only matter for a `Dependency` row inserted by some other write path (a fixture, a script, a future ingestion route) that persists `-1` directly instead of going through `lib/deps/scanner.ts:34`'s conversion; no such path was found in this scan of the codebase.
+`lib/policy/engine.ts:274`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays > maxAgeDays`. Because every persisted unknown age is `null`, the check needs no `-1` clause and an unknown age never triggers the policy. `tests/policy/engine.test.ts` covers this with `null` fixtures, including a case with a negative `maxAgeDays` (the write-time validator accepts any finite number), where a `!== -1`-only check would flag the unknown dependency because `null > -1` is true in JavaScript.
