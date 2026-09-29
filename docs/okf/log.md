@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T07:26:16Z, re-verified after the Slack Mittel and Niedrig count fields: `severity-signals.md` now says the
+  message counts every listed row per severity (`Kritisch`, `Hoch`, `Mittel`, `Niedrig`, each only when
+  present) and that a `CRITICAL` or `HIGH` setting stays byte-identical; its citations into
+  `lib/alerts/notifier.ts` moved by ten lines and were re-pointed and hand-checked. `mcp-vs-web-api.md`
+  and `policy-rule-evaluation.md` cite sections of `docs/features.md` that the one-clause edit to the
+  notifications bullet did not touch, so they are re-stamped only.
+
 - 2026-09-29T07:10:46Z, re-verified after the defensive-note tests and the tracking-scope wording change: `rescan-and-staleness.md` now says that readers which never call a noting source are unaffected (PR scanning via `fetchRepoAdvisories`, SBOM, the export bundle reader) and that the export route's on-demand scans are tracked like any other scan, and its `lib/scan/degraded.ts` citations moved with the longer header comment; `mcp-vs-web-api.md` and `policy-rule-evaluation.md` cite sections of `docs/features.md` that the one-clause edit to the degraded-run bullet did not touch, so they are re-stamped only.
 
 - 2026-09-29T06:55:48Z, re-verified after the degraded-source change: `rescan-and-staleness.md` now describes which
