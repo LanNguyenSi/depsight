@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract, a schema comment that no longer matches storage
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner's -1 unknown-age sentinel is converted to null before it reaches the database, so the Dependency.ageInDays schema comment ("-1 = unknown") describes the in-memory convention, not what is ever actually stored, and a policy check for -1 is effectively dead code against real scan data.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-29T05:43:06Z
+timestamp: 2026-09-29T05:52:34Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts

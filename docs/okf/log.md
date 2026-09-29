@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
+  branch: line citations into `lib/policy/engine.ts` re-pointed and verified
+  against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`
+  and `dependency-age-scanning.md`; `policy-rule-evaluation.md` records the
+  padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
+  re-verified against the policy routes and re-stamped.
+
 - 2026-09-29T05:43:06Z, `policy-rule-evaluation.md` states that `createPolicy` and `updatePolicy` are the
   only paths that write a rule and `togglePolicy` flips `enabled` only; line
   citations into `lib/policy/engine.ts` re-pointed in `policy-rule-evaluation.md`,
