@@ -316,7 +316,28 @@ describe('a repository the token can no longer read', () => {
 
     await runners[scanner]();
 
-    expectDegraded(scanner, /500/);
+    expectDegraded(scanner, /GitHub repository check: HTTP 500/);
+    expect(markerOf(scanner)).not.toMatch(/repository not readable/);
+  });
+
+  it.each(SCANNERS)('a tree 404 alone confirms the repository: root listing 500, lookup 404 degrades %s as not readable', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(404, 'Not Found'), files: { '': httpError(500, 'Server Error') } });
+    gh.reposGet.mockRejectedValue(httpError(404, 'Not Found'));
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /repository not readable/);
+  });
+
+  it.each(SCANNERS)('a root listing 404 alone confirms the repository: tree 500, lookup 404 degrades %s as not readable', async (scanner) => {
+    seedHealthyAtT1();
+    setGitHub({ tree: httpError(500, 'Server Error') });
+    gh.reposGet.mockRejectedValue(httpError(404, 'Not Found'));
+
+    await runners[scanner]();
+
+    expectDegraded(scanner, /repository not readable/);
   });
 });
 
