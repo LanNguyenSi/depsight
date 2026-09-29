@@ -1,7 +1,7 @@
 ---
 type: invariant
 title: "Severity signals: three separate paths, not one gate"
-description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook), all ranking severity through one shared constant; the first two sit behind a hardcoded CRITICAL/HIGH prefilter that runs before the shared SEVERITY_RANK (lib/severity.ts), Slack is additionally gated by SlackConfig.minSeverity, and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
+description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook); the first two rank severity through one shared constant and sit behind a hardcoded CRITICAL/HIGH prefilter that runs before the shared SEVERITY_RANK (lib/severity.ts), Slack is additionally gated by SlackConfig.minSeverity, and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
 timestamp: 2026-09-29T05:31:08Z
 sources:
@@ -27,7 +27,7 @@ The MCP server carries a separate ranking (`severityRank` in `mcp/src/tools/cves
 
 ## A hardcoded prefilter decides whether `notifyForScan` runs at all
 
-Neither ranking gates whether `notifyForScan` is called in the first place. `lib/cve/scanner.ts:137-138` queries the just-saved advisories with a hardcoded Prisma filter, `severity: { in: ['CRITICAL', 'HIGH'] }`, before `notifyForScan` is ever called (`:140-144`). A scan whose worst finding is `MEDIUM` never reaches `notifyForScan`, so the ranking never runs for it either: the hardcoded set decides eligibility for both the `cve.critical`/`cve.high` event path and the Slack path before the ranking constant is even in scope.
+The ranking does not gate whether `notifyForScan` is called in the first place. `lib/cve/scanner.ts:137-138` queries the just-saved advisories with a hardcoded Prisma filter, `severity: { in: ['CRITICAL', 'HIGH'] }`, before `notifyForScan` is ever called (`:140-144`). A scan whose worst finding is `MEDIUM` never reaches `notifyForScan`, so the ranking never runs for it either: the hardcoded set decides eligibility for both the `cve.critical`/`cve.high` event path and the Slack path before the ranking constant is even in scope.
 
 `SlackConfig.minSeverity` (`prisma/schema.prisma:238`, default `HIGH`) is genuinely user-configurable: `POST /api/slack` validates it against `CRITICAL`/`HIGH`/`MEDIUM`/`LOW` (`app/api/slack/route.ts:47-62`) and the settings UI offers all four as a dropdown (`app/settings/SettingsClient.tsx:602-615`). But because `notifyForScan` only ever runs on a scan whose worst advisory is already `CRITICAL` or `HIGH`, setting `minSeverity` to `MEDIUM` or `LOW` has no observable effect on this path: `maxSeverityValue` inside `notifyForScan` is always at least `SEVERITY_RANK.HIGH` whenever the function is reached, so the `MEDIUM`/`LOW` settings behave identically to `HIGH` here.
 
