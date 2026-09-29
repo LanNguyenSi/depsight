@@ -87,8 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   #150): when the channel's minimum severity is MEDIUM or LOW, the message
   carries Mittel and Niedrig count fields for the rows it lists.
 - **`depsight_rescan` MCP tool** (#83, shipped in `@opentriologue/depsight-mcp`
-  0.3.0): `depsight_rescan({ repoId })` posts to `/api/scan` with the same
-  `dsat_` token the read tools use and returns `scanId` and `status`, so an
+  0.3.0): `depsight_rescan({ repoId })` posts to `/api/scan` with the
+  configured `dsat_` token (it needs a `WRITE`-scoped token, see the
+  `ApiToken` scope entry above) and returns `scanId` and `status`, so an
   agent can rescan and then poll `depsight_get_cves`.
 - **Advisory source shown** (#97): `GET /api/scan` now serializes
   `Advisory.source` (`dependabot` or `osv`) and the advisory list renders a
@@ -97,8 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   with a `yarn.lock` are matched against the resolved version instead of the
   manifest floor, like the `package-lock.json` and `uv.lock`/`poetry.lock`
   paths. When `package-lock.json` and `yarn.lock` disagree on a dependency,
-  it falls back to the manifest floor rather than trusting either lockfile; yarn berry (v2+) lockfiles are detected by their
-  `__metadata` marker and skipped, degrading to the manifest floor.
+  it falls back to the manifest floor rather than trusting either lockfile;
+  yarn berry (v2+) lockfiles are detected by their `__metadata` marker and
+  skipped, degrading to the manifest floor.
   `pnpm-lock.yaml` is not covered.
 
 ### Changed
@@ -124,8 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   only CRITICAL/HIGH advisories, and no delivery for a scan without one.
   The Slack message now lists advisories most severe first (stable sort) for
   every minimum-severity setting, so the top-3 slice never drops a CRITICAL
-  or HIGH row for a lower one; the order of the rows in a CRITICAL/HIGH
-  message can therefore differ from 0.5.1.
+  or HIGH row for a lower one; the order and selection of the three listed
+  rows in a CRITICAL/HIGH message can therefore differ from 0.5.1.
 - **One license classifier for all ecosystems** (task `08b5630e`, #142): the
   copyleft set, the needs-review list and `classifyLicense` moved into
   `lib/license/classifier.ts`. The needs-review list is now `UNKNOWN`, empty,
