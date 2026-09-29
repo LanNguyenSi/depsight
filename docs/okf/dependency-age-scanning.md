@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract and a null-only stored unknown age
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner uses a -1 unknown-age sentinel in memory and lib/deps/scanner.ts converts it to null before the only Dependency write, so a stored unknown age is always null, which the schema comment and the DEPENDENCY_MAX_AGE check both state.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-29T10:18:01Z
+timestamp: 2026-09-29T10:38:03Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
