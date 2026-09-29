@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:55:48Z, re-verified after the degraded-source change: `rescan-and-staleness.md` now describes which
+  sources report an unreadable read and which answers stay an empty result, replacing its
+  known-limitation paragraph, and lists `lib/scan/degraded.ts`, `lib/cve/osv.ts`,
+  `lib/manifest-discovery.ts` and `lib/license/detector.ts` as sources; `severity-signals.md`,
+  `dependency-age-scanning.md` and `license-classification.md` had their citations into the
+  edited scanners, manifest discovery and license detector re-pointed. All four re-stamped.
+
 - 2026-09-29T06:27:16Z, merged the stale-comment and null-only unknown-age change into the Slack
   minimum-severity branch: `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
   match master's re-pointed route citations; the `lib/policy/engine.ts` and

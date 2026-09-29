@@ -3,7 +3,7 @@ type: invariant
 title: License classification - one shared classifier, per-ecosystem preparation
 description: classifyLicense, the COPYLEFT_LICENSES set and the needs-review list are defined once in lib/license/classifier.ts and shared by npm, PHP, Java, Python and Rust, so the copyleft set and the fallback list cannot diverge per ecosystem; Java full-name substring matching, PyPI free-text normalization and Rust dual-license reduction stay in the ecosystem files and run before the shared classifier. go.ts skips classification entirely by documented design.
 tags: [licenses, ecosystems, classifier]
-timestamp: 2026-09-29T05:43:22Z
+timestamp: 2026-09-29T06:55:48Z
 sources:
   - lib/license/classifier.ts
   - lib/license/detector.ts
