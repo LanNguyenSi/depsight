@@ -79,6 +79,26 @@ function makeDeleteRequest(id: string): NextRequest {
   return new NextRequest(`http://localhost/api/policies/${id}`, { method: 'DELETE' });
 }
 
+const VALID_RULES: Record<string, Record<string, unknown>> = {
+  LICENSE_DENY: { deniedLicenses: ['GPL-3.0'] },
+  LICENSE_ALLOW_ONLY: { allowedLicenses: ['MIT'] },
+  CVE_MIN_SEVERITY: { minSeverity: 'HIGH' },
+  DEPENDENCY_MAX_AGE: { maxAgeDays: 365 },
+  DEPENDENCY_MIN_VERSION: { package: 'postcss', minVersion: '8.5.18' },
+};
+
+const MALFORMED_RULES: Array<[string, Record<string, unknown>]> = [
+  ['LICENSE_DENY', { deniedLicenses: 'GPL-3.0' }],
+  ['LICENSE_DENY', { licenses: ['GPL-3.0'] }],
+  ['LICENSE_ALLOW_ONLY', { allowedLicenses: [1, 2] }],
+  ['LICENSE_ALLOW_ONLY', {}],
+  ['CVE_MIN_SEVERITY', { minSeverity: 'critical' }],
+  ['CVE_MIN_SEVERITY', { minSeverity: 3 }],
+  ['DEPENDENCY_MAX_AGE', { maxAgeDays: '365' }],
+  ['DEPENDENCY_MAX_AGE', { maxAge: 365 }],
+  ['DEPENDENCY_MIN_VERSION', { package: 'postcss', minVersion: '8.5' }],
+];
+
 const mockUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'WRITE' as const };
 const readOnlyUser = { id: 'user-1', githubLogin: 'octocat', githubToken: 'gh_tok', scope: 'READ' as const };
 
@@ -294,12 +314,10 @@ describe('PUT /api/policies/[id]', () => {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });
 
-      // DEPENDENCY_MIN_VERSION requires a compatible rule (see the (9x)/(door)
-      // tests below): sending `type` alone for it is door (b) and is no
-      // longer accepted, so this type is exercised with a rule attached.
-      const body = type === 'DEPENDENCY_MIN_VERSION'
-        ? { type, rule: { package: 'postcss', minVersion: '8.5.18' } }
-        : { type };
+      // Every type is shape-validated against the resulting type and rule
+      // pair, so each type is exercised with its fitting VALID_RULES fixture
+      // attached. A type-only PUT is covered by the stored-rule tests below.
+      const body = { type, rule: VALID_RULES[type] };
 
       const res = await PUT(
         makePutRequest('pol-1', body),
@@ -413,6 +431,69 @@ describe('PUT /api/policies/[id]', () => {
     expect(body.error).toBe('minVersion must be a valid semver version');
     expect(getPolicyByIdMock).toHaveBeenCalledWith('user-1', 'pol-1');
     expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED_RULES)('(10m) returns 400 when PUT sends type and a malformed %s rule %j', async (type, rule) => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await PUT(makePutRequest('pol-1', { type, rule }), makeParams('pol-1'));
+
+    expect(res.status).toBe(400);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(MALFORMED_RULES)('(10n) returns 400 when PUT sends only a malformed %s rule %j for a stored policy of that type', async (type, rule) => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1', name: 'P', type, severity: 'HIGH', rule: VALID_RULES[type], enabled: true,
+    });
+
+    const res = await PUT(makePutRequest('pol-1', { rule }), makeParams('pol-1'));
+
+    expect(res.status).toBe(400);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('(10o) returns 400 when only `type` changes and the stored rule does not fit the new type', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    getPolicyByIdMock.mockResolvedValue({
+      id: 'pol-1', name: 'P', type: 'LICENSE_DENY', severity: 'HIGH', rule: { deniedLicenses: ['GPL-3.0'] }, enabled: true,
+    });
+
+    const res = await PUT(makePutRequest('pol-1', { type: 'CVE_MIN_SEVERITY' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(400);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE'])(
+    '(10q) accepts a type-only PUT to %s when the stored rule fits that type',
+    async (type) => {
+      resolveRequestUserMock.mockResolvedValue(mockUser);
+      getPolicyByIdMock.mockResolvedValue({
+        id: 'pol-1', name: 'P', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', rule: VALID_RULES[type], enabled: true,
+      });
+      updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });
+
+      const res = await PUT(makePutRequest('pol-1', { type }), makeParams('pol-1'));
+
+      expect(res.status).toBe(200);
+      expect(updatePolicyMock).toHaveBeenCalledWith(
+        'user-1',
+        'pol-1',
+        expect.objectContaining({ type, rule: VALID_RULES[type] }),
+      );
+    },
+  );
+
+  it('(10p) a PUT that touches neither type nor rule does not validate or fetch the stored rule', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'New', type: 'CVE_MIN_SEVERITY', severity: 'HIGH', enabled: true });
+
+    const res = await PUT(makePutRequest('pol-1', { name: 'New' }), makeParams('pol-1'));
+
+    expect(res.status).toBe(200);
+    expect(getPolicyByIdMock).not.toHaveBeenCalled();
   });
 
   it('(10b) door (b): validates the stored rule when only `type` flips to DEPENDENCY_MIN_VERSION', async () => {

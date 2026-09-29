@@ -1,5 +1,5 @@
 import semver from 'semver';
-import { PolicyType, Severity } from '@prisma/client';
+import { Prisma, PolicyType, Severity } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { SEVERITY_RANK, severityGte } from '@/lib/severity';
 
@@ -84,13 +84,11 @@ const NPM_PACKAGE_NAME_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 // never match anything, which is the same silently-broken-policy outcome
 // this whole function exists to prevent. Better to fail the request loudly.
 //
-// The "rule must be an object" branch is unreachable for callers that
-// already checked the request body's own shape (POST and PUT on the API
-// routes both reject a non-object `rule` before calling this). It stays
-// live for a caller validating a rule read back from storage rather than
-// from the current request body — see the PUT handler's "door (b)" case in
-// app/api/policies/[id]/route.ts, where nothing upstream has already
-// checked the stored value's shape.
+// The "rule must be an object" branch is normally unreachable: validatePolicyRule
+// (the caller for the API routes) checks the object shape before dispatching
+// per type, and both routes reject a non-object `rule` from the request body
+// first. It stays as a defensive guard for direct callers that pass a value
+// read back from storage.
 export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVersionRuleValidation {
   if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
     return { error: 'rule must be an object' };
@@ -110,6 +108,57 @@ export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVe
     return { error: 'minVersion must be a valid semver version' };
   }
   return { rule: { package: trimmedPkg, minVersion } };
+}
+
+export type PolicyRuleValidation =
+  | { error: string; rule?: undefined }
+  | { error?: undefined; rule: Prisma.InputJsonValue };
+
+// Validates a rule payload against the shape its PolicyType evaluates, using the
+// same guards evaluatePolicies applies. This runs on every policy write (create
+// and update) and on stored rows during evaluation, so a rule that would fall
+// out of its evaluation case without a violation is rejected up front instead
+// of persisting and reporting clean forever. The returned rule is the value to
+// persist (DEPENDENCY_MIN_VERSION normalizes the package name; the other types
+// return the rule unchanged).
+export function validatePolicyRule(type: PolicyType, rule: unknown): PolicyRuleValidation {
+  if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+    return { error: 'rule must be an object' };
+  }
+  const fields = rule as Record<string, unknown>;
+  const persisted = rule as Prisma.InputJsonValue;
+
+  switch (type) {
+    case PolicyType.LICENSE_DENY:
+      if (!isStringArray(fields['deniedLicenses'])) {
+        return { error: 'rule.deniedLicenses must be an array of strings' };
+      }
+      return { rule: persisted };
+    case PolicyType.LICENSE_ALLOW_ONLY:
+      if (!isStringArray(fields['allowedLicenses'])) {
+        return { error: 'rule.allowedLicenses must be an array of strings' };
+      }
+      return { rule: persisted };
+    case PolicyType.CVE_MIN_SEVERITY:
+      if (!isSeverity(fields['minSeverity'])) {
+        return {
+          error: `rule.minSeverity must be one of ${Object.keys(SEVERITY_RANK).join(', ')}`,
+        };
+      }
+      return { rule: persisted };
+    case PolicyType.DEPENDENCY_MAX_AGE:
+      if (!Number.isFinite(fields['maxAgeDays'])) {
+        return { error: 'rule.maxAgeDays must be a number' };
+      }
+      return { rule: persisted };
+    case PolicyType.DEPENDENCY_MIN_VERSION: {
+      const result = validateDependencyMinVersionRule(rule);
+      if (result.error) return { error: result.error };
+      return { rule: result.rule as unknown as Prisma.InputJsonValue };
+    }
+    default:
+      return { error: 'invalid type' };
+  }
 }
 
 export async function evaluatePolicies(
@@ -141,6 +190,17 @@ export async function evaluatePolicies(
 
   for (const policy of policies) {
     const rule = policy.rule as Record<string, unknown>;
+
+    // Rows stored before write-time validation existed (or written outside the
+    // API) can carry a rule that falls out of its case below without a
+    // violation. Surface each such row on every evaluation instead of letting it
+    // report clean silently. Evaluation itself is unchanged.
+    const stored = validatePolicyRule(policy.type, policy.rule);
+    if (stored.error) {
+      console.warn(
+        `[policy] ${policy.type} policy "${policy.name}" (${policy.id}) has a malformed rule and may never match: ${stored.error}`,
+      );
+    }
 
     switch (policy.type) {
       case PolicyType.LICENSE_DENY: {

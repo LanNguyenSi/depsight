@@ -9,6 +9,34 @@
   `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified against
   the changed sources and re-stamped.
 
+- 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
+  branch: line citations into `lib/policy/engine.ts` re-pointed and verified
+  against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`
+  and `dependency-age-scanning.md`; `policy-rule-evaluation.md` records the
+  padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
+  re-verified against the policy routes and re-stamped.
+
+- 2026-09-29T05:43:22Z, `license-classification.md` and the `index.md` summary line re-verified
+  after the Python and Rust scanners took their displayed license and its
+  classification from one helper; citations re-pointed and re-stamped.
+
+- 2026-09-29T05:43:06Z, `policy-rule-evaluation.md` states that `createPolicy` and `updatePolicy` are the
+  only paths that write a rule and `togglePolicy` flips `enabled` only; line
+  citations into `lib/policy/engine.ts` re-pointed in `policy-rule-evaluation.md`,
+  `severity-signals.md` and `dependency-age-scanning.md` after a comment edit
+  shifted them; `mcp-vs-web-api.md` re-stamped.
+
+- 2026-09-29T05:33:12Z, `license-classification.md` rewritten for the shared classifier in
+  `lib/license/classifier.ts`: one copyleft set, one needs-review list, and
+  the Java, Python and Rust preparation that runs before it. Re-verified
+  against the changed code and re-stamped.
+
+- 2026-09-29T05:32:18Z, `policy-rule-evaluation.md` rewritten for write-time rule validation
+  of all five policy types and the per-row stored-rule warning; line citations
+  into `lib/policy/engine.ts` re-pointed in `severity-signals.md` and
+  `dependency-age-scanning.md`; `mcp-vs-web-api.md` re-verified against the
+  policy routes and `docs/features.md` (no claim changed) and re-stamped.
+
 - 2026-09-29T05:31:08Z, `severity-signals.md` now describes the single shared severity
   ranking in `lib/severity.ts` used by the policy engine and the notifier
   instead of two separate constants; line citations into

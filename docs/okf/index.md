@@ -10,10 +10,9 @@ them.
 ## Invariants
 
 - [Policy rule evaluation](policy-rule-evaluation.md), why every one of the
-  five policy types (not only `DEPENDENCY_MIN_VERSION`) silently reports
-  zero violations on a malformed rule shape, and why only
-  `DEPENDENCY_MIN_VERSION`'s shape is ever validated before it can be
-  persisted.
+  five policy types still reports zero violations on a stored malformed rule
+  shape, why every type's rule shape is now checked at create and update, and
+  how stored malformed rows are made visible with a warning at evaluation.
 - [Severity signals](severity-signals.md), the three notification paths a
   CVE finding can reach a person or a webhook through (cve.critical/cve.high
   events, Slack, scan.completed), why a MEDIUM finding is unreachable on the
@@ -24,10 +23,11 @@ them.
   per-ecosystem scanner contract and npm's inline exception, plus why the
   `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
   describes what the column actually stores.
-- [License classification](license-classification.md), the five
-  independently defined copies of `classifyLicense`/`COPYLEFT_LICENSES`
-  (one per ecosystem but Go), and the one way Java's copy has already
-  diverged in behavior, not just in location.
+- [License classification](license-classification.md), the one shared
+  `classifyLicense`, copyleft set and needs-review list in
+  `lib/license/classifier.ts` used by every ecosystem but Go, and the
+  per-ecosystem preparation (Java full-name matching, PyPI free-text
+  normalization, Rust dual-license reduction) that runs before it.
 
 ## Modules
 

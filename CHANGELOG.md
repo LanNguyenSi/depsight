@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Policy rules are validated for every PolicyType** (task `e3e9795f`):
+  `POST /api/policies` and `PUT /api/policies/[id]` now check that `rule`
+  fits the policy `type` for all five types and answer 400 with a message on
+  mismatch (previously only `DEPENDENCY_MIN_VERSION` was checked). A PUT that
+  sends `type` without `rule` now returns 400 when the stored rule does not fit
+  the new type. Enabled policies whose stored rule fails the check (rows
+  written before this change) log a warning on every evaluation; evaluation
+  itself is unchanged and the rows are not migrated.
+
 ### Security
 
 - **CVE sweep 2026-09-11** (task `729402b7-12a7-4075-8802-89b41be000c0`):

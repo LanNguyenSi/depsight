@@ -1,6 +1,7 @@
 import { createGitHubClient } from '@/lib/github';
 import { collectPhpDeps } from '@/lib/manifests/php';
 import type { LicenseEntry } from './detector';
+import { classifyLicense } from './classifier';
 
 interface PackagistVersionEntry {
   version: string;
@@ -9,32 +10,6 @@ interface PackagistVersionEntry {
 
 interface PackagistData {
   packages: Record<string, PackagistVersionEntry[]>;
-}
-
-const COPYLEFT_LICENSES = new Set([
-  'GPL-2.0', 'GPL-2.0-only', 'GPL-2.0-or-later',
-  'GPL-3.0', 'GPL-3.0-only', 'GPL-3.0-or-later',
-  'AGPL-3.0', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
-  'LGPL-2.0', 'LGPL-2.1', 'LGPL-3.0',
-  'MPL-2.0', 'EUPL-1.1', 'EUPL-1.2',
-  'CDDL-1.0', 'CDDL-1.1',
-  'OSL-3.0', 'EPL-1.0', 'EPL-2.0',
-]);
-
-function classifyLicense(license: string): { isCompatible: boolean; policyViolation: boolean; needsReview: boolean } {
-  const normalized = license.trim().toUpperCase();
-
-  for (const l of COPYLEFT_LICENSES) {
-    if (normalized === l.toUpperCase()) {
-      return { isCompatible: false, policyViolation: true, needsReview: false };
-    }
-  }
-
-  if (normalized === 'UNKNOWN' || normalized === '' || normalized === 'UNLICENSED') {
-    return { isCompatible: true, policyViolation: false, needsReview: true };
-  }
-
-  return { isCompatible: true, policyViolation: false, needsReview: false };
 }
 
 /**
