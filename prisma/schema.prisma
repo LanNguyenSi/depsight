@@ -117,7 +117,7 @@ model Dependency {
   latestVersion       String    @default("")
   publishedAt         DateTime?
   latestPublishedAt   DateTime?
-  ageInDays           Int?      // -1 = unknown
+  ageInDays           Int?      // null = unknown (the scanner maps its -1 sentinel to null before writing)
   status              DepStatus @default(UNKNOWN)
   isDeprecated        Boolean   @default(false)
   updateAvailable     Boolean   @default(false)

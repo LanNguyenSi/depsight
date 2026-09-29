@@ -148,6 +148,30 @@ describe('evaluatePolicies()', () => {
     expect(violations[0].affectedPackages.some((p) => p.includes('highpkg'))).toBe(true);
   });
 
+  it('DEPENDENCY_MAX_AGE — an unknown (null) age never triggers, even below zero', async () => {
+    mockPolicyFindMany.mockResolvedValue([
+      makePolicy({
+        type: PolicyType.DEPENDENCY_MAX_AGE,
+        rule: { maxAgeDays: -1 },
+      }),
+    ]);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        dependencies: [
+          { id: 'd1', name: 'knownpkg', installedVersion: '1.0.0', ageInDays: 5 },
+          { id: 'd2', name: 'unknownpkg', installedVersion: '1.0.0', ageInDays: null },
+        ],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0].affectedPackages).toHaveLength(1);
+    expect(violations[0].affectedPackages[0]).toContain('knownpkg');
+  });
+
   it('DEPENDENCY_MAX_AGE — catches old dependencies', async () => {
     mockPolicyFindMany.mockResolvedValue([
       makePolicy({
@@ -160,7 +184,7 @@ describe('evaluatePolicies()', () => {
         dependencies: [
           { id: 'd1', name: 'oldpkg', installedVersion: '1.0.0', ageInDays: 800 },
           { id: 'd2', name: 'newpkg', installedVersion: '2.0.0', ageInDays: 100 },
-          { id: 'd3', name: 'unknownpkg', installedVersion: '1.0.0', ageInDays: -1 },
+          { id: 'd3', name: 'unknownpkg', installedVersion: '1.0.0', ageInDays: null },
         ],
       }),
     );
