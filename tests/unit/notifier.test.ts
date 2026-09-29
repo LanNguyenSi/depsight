@@ -161,4 +161,94 @@ describe('notifyForScan', () => {
     const calledUrls = safeFetchMock.mock.calls.map((c: unknown[]) => c[0]);
     expect(calledUrls).not.toContain('https://hooks.example.com/scan-only');
   });
+
+  const adv = (severity: string, n = 1) =>
+    ({
+      id: `adv-${severity}-${n}`,
+      ghsaId: `GHSA-${severity}-${n}`,
+      cveId: null,
+      severity,
+      summary: `${severity} issue`,
+      packageName: `pkg-${severity}`,
+      fixedVersion: null,
+      url: null,
+    }) as unknown as Advisory;
+
+  const SLACK_URL = 'https://hooks.slack.example/T/B/x';
+  const slackConfig = (minSeverity: string) => ({
+    enabled: true,
+    webhookUrl: SLACK_URL,
+    channel: null,
+    minSeverity,
+  });
+  const hooks = [
+    { url: 'https://hooks.example.com/crit', secret: null, events: ['cve.critical'], enabled: true },
+    { url: 'https://hooks.example.com/high', secret: null, events: ['cve.high'], enabled: true },
+  ];
+  const bodyOf = (call: unknown[]) =>
+    JSON.parse((call[1] as { body: string }).body) as Record<string, unknown>;
+  const callsTo = (url: string) => safeFetchMock.mock.calls.filter((c: unknown[]) => c[0] === url);
+
+  it('emits cve.high, not cve.critical, when the worst advisory is HIGH', async () => {
+    webhookConfigFindMany.mockResolvedValue(hooks);
+    slackConfigFindUnique.mockResolvedValue(null);
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-h', 40, [adv('HIGH')]);
+
+    expect(callsTo('https://hooks.example.com/crit')).toHaveLength(0);
+    const high = callsTo('https://hooks.example.com/high');
+    expect(high).toHaveLength(1);
+    expect(bodyOf(high[0]).event).toBe('cve.high');
+  });
+
+  it('does not deliver to Slack when minSeverity is CRITICAL and the scan is HIGH-only', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('CRITICAL'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-h', 40, [adv('HIGH')]);
+
+    expect(callsTo(SLACK_URL)).toHaveLength(0);
+  });
+
+  it('delivers a MEDIUM-only scan to Slack when minSeverity is MEDIUM', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('MEDIUM'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-m', 20, [adv('MEDIUM')]);
+
+    const slack = callsTo(SLACK_URL);
+    expect(slack).toHaveLength(1);
+    expect(JSON.stringify(bodyOf(slack[0]))).toContain('pkg-MEDIUM');
+  });
+
+  it('does not deliver a MEDIUM-only scan to Slack when minSeverity is HIGH', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('HIGH'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-m', 20, [adv('MEDIUM')]);
+
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps webhooks at CRITICAL/HIGH: no delivery for a MEDIUM-only scan, no MEDIUM in a mixed payload', async () => {
+    webhookConfigFindMany.mockResolvedValue(hooks);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('LOW'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-m', 20, [adv('MEDIUM'), adv('LOW')]);
+    expect(callsTo('https://hooks.example.com/crit')).toHaveLength(0);
+    expect(callsTo('https://hooks.example.com/high')).toHaveLength(0);
+    expect(callsTo(SLACK_URL)).toHaveLength(1);
+
+    safeFetchMock.mockClear();
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-x', 60, [adv('HIGH'), adv('MEDIUM')]);
+    const high = callsTo('https://hooks.example.com/high');
+    expect(high).toHaveLength(1);
+    const listed = (bodyOf(high[0]).newAdvisories as Array<{ severity: string }>).map((a) => a.severity);
+    expect(listed).toEqual(['HIGH']);
+  });
 });

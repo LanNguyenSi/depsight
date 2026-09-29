@@ -156,19 +156,25 @@ export async function notifyForScan(
 ): Promise<void> {
   if (newAdvisories.length === 0) return;
 
-  const maxSeverityValue = Math.max(
-    ...newAdvisories.map((a) => severityValue(a.severity)),
+  // Webhooks only ever see CRITICAL/HIGH advisories, whatever the scan found:
+  // the cve.critical / cve.high events are defined by that floor.
+  const webhookAdvisories = newAdvisories.filter(
+    (a) => severityValue(a.severity) >= SEVERITY_RANK.HIGH,
   );
+  const webhookMax = Math.max(0, ...webhookAdvisories.map((a) => severityValue(a.severity)));
   const event: NotificationEvent =
-    maxSeverityValue >= SEVERITY_RANK.CRITICAL ? 'cve.critical' : 'cve.high';
+    webhookMax >= SEVERITY_RANK.CRITICAL ? 'cve.critical' : 'cve.high';
 
-  const payload: CVENotificationPayload = {
-    event,
+  const buildPayload = (
+    evt: NotificationEvent,
+    advisories: Advisory[],
+  ): CVENotificationPayload => ({
+    event: evt,
     repoFullName,
     repoId,
     scanId,
     riskScore,
-    newAdvisories: newAdvisories.map((a) => ({
+    newAdvisories: advisories.map((a) => ({
       ghsaId: a.ghsaId,
       cveId: a.cveId,
       severity: a.severity,
@@ -178,18 +184,21 @@ export async function notifyForScan(
       url: a.url,
     })),
     scannedAt: new Date().toISOString(),
-  };
-
-  // Deliver webhooks
-  const webhooks = await prisma.webhookConfig.findMany({
-    where: { userId, enabled: true },
   });
 
-  await Promise.allSettled(
-    webhooks
-      .filter((wh) => wh.events.includes(event))
-      .map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
-  );
+  // Deliver webhooks
+  if (webhookAdvisories.length > 0) {
+    const payload = buildPayload(event, webhookAdvisories);
+    const webhooks = await prisma.webhookConfig.findMany({
+      where: { userId, enabled: true },
+    });
+
+    await Promise.allSettled(
+      webhooks
+        .filter((wh) => wh.events.includes(event))
+        .map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
+    );
+  }
 
   // Deliver Slack
   const slack = await prisma.slackConfig.findUnique({
@@ -197,9 +206,17 @@ export async function notifyForScan(
   });
 
   if (slack?.enabled) {
-    const slackSeverityValue = severityValue(slack.minSeverity);
-    if (maxSeverityValue >= slackSeverityValue) {
-      await deliverSlack(slack.webhookUrl, slack.channel, payload);
+    const slackMin = severityValue(slack.minSeverity);
+    const maxSeverityValue = Math.max(...newAdvisories.map((a) => severityValue(a.severity)));
+    if (maxSeverityValue >= slackMin) {
+      // List every advisory at or above the lower of the configured minimum and
+      // HIGH, so a CRITICAL/HIGH minimum keeps listing both as before and a
+      // MEDIUM/LOW minimum also lists the lower severities it asked for.
+      const listFloor = Math.min(slackMin, SEVERITY_RANK.HIGH);
+      const slackAdvisories = newAdvisories.filter(
+        (a) => severityValue(a.severity) >= listFloor,
+      );
+      await deliverSlack(slack.webhookUrl, slack.channel, buildPayload(event, slackAdvisories));
     }
   }
 }
