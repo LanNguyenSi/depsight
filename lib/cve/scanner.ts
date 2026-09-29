@@ -6,6 +6,8 @@ import { mergeCveAdvisories } from './merge';
 import { notifyForScan } from '@/lib/alerts/notifier';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
+import { scanSuccessData } from '@/lib/scan/freshness';
+import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export class ScanAccessError extends Error {
   constructor(
@@ -126,10 +128,10 @@ export async function scanRepository(
         },
       });
 
-      // Update repo last scanned timestamp
+      // Stamp this scanner's success (and clear its failure marker)
       await tx.repo.update({
         where: { id: repoId },
-        data: { lastScannedAt: new Date() },
+        data: scanSuccessData('cve'),
       });
     });
 
@@ -156,6 +158,8 @@ export async function scanRepository(
       dependabotDisabled: dependabotResult.dependabotDisabled,
     };
   } catch (error) {
+    // Record the failure on the repo first so it is kept even if the scan row update fails
+    await recordScanFailure(repoId, 'cve', error);
     // Mark scan as failed
     await prisma.scan.update({
       where: { id: scan.id },

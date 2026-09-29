@@ -13,6 +13,7 @@ import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
+import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 
 interface ScanSummary {
   id: string;
@@ -36,6 +37,7 @@ interface RepoItem {
   private: boolean;
   language: string | null;
   lastScannedAt: string | null;
+  scannerStatus?: ScannerStatuses;
   latestScan: ScanSummary | null;
 }
 
@@ -938,6 +940,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                         {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
                       </p>
                     )}
+                    {selectedRepo.scannerStatus &&
+                      failingScanners(selectedRepo.scannerStatus).map((key) => {
+                        const { lastSuccessAt, error } = selectedRepo.scannerStatus![key];
+                        return (
+                          <p key={key} className="text-xs text-red-400 mt-0.5" title={error ?? undefined}>
+                            {t['scanner.failing']} {t[`scanner.${key}` as const]}
+                            {' ('}
+                            {t['scanner.lastSuccess']}{' '}
+                            {lastSuccessAt ? new Date(lastSuccessAt).toLocaleString('de-DE') : '\u2013'}
+                            {')'}
+                          </p>
+                        );
+                      })}
                   </div>
                   <div className="relative shrink-0" ref={actionsRef}>
                     <button

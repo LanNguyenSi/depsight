@@ -148,4 +148,34 @@ describe('getTeamHealthOverview()', () => {
     expect(overview.topRiskyRepos.map((repo) => repo.repoId)).toEqual(['repo-tracked']);
     expect(overview.mostOutdated.map((repo) => repo.repoId)).toEqual(['repo-tracked']);
   });
+
+  it('carries per-scanner freshness so a failing scanner is visible next to lastScannedAt', async () => {
+    mockRepoFindMany.mockResolvedValue([
+      {
+        id: 'repo-1',
+        fullName: 'acme/one',
+        owner: 'acme',
+        name: 'one',
+        language: null,
+        lastScannedAt: new Date('2026-07-01T12:00:00.000Z'),
+        cveScannedAt: new Date('2026-07-01T12:00:00.000Z'),
+        licenseScannedAt: new Date('2026-06-01T12:00:00.000Z'),
+        depsScannedAt: null,
+        cveScanError: null,
+        licenseScanError: 'license backend down',
+        depsScanError: null,
+      },
+    ]);
+    mockScanFindMany.mockResolvedValue([]);
+    mockDependencyGroupBy.mockResolvedValue([]);
+
+    const { getTeamHealthOverview } = await import('@/lib/overview/team-health');
+    const overview = await getTeamHealthOverview('user-1');
+
+    expect(overview.repos[0].scannerStatus).toEqual({
+      cve: { lastSuccessAt: '2026-07-01T12:00:00.000Z', error: null },
+      license: { lastSuccessAt: '2026-06-01T12:00:00.000Z', error: 'license backend down' },
+      deps: { lastSuccessAt: null, error: null },
+    });
+  });
 });

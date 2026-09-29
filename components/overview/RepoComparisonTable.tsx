@@ -3,12 +3,15 @@
 import { useState, useMemo } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { Pagination, usePagination } from '@/components/Pagination';
+import type { Translations } from '@/lib/i18n';
+import { failingScanners, type ScannerKey, type ScannerStatuses } from '@/lib/scan/freshness';
 
 interface RepoHealthSummary {
   repoId: string;
   fullName: string;
   language: string | null;
   lastScannedAt: string | null;
+  scannerStatus?: ScannerStatuses;
   riskScore: number;
   cveCount: number;
   criticalCount: number;
@@ -45,6 +48,21 @@ const SORT_FNS: Record<SortColumn, (a: RepoHealthSummary, b: RepoHealthSummary) 
     return aTime - bTime;
   },
 };
+
+const SCANNER_LABEL_KEYS = {
+  cve: 'scanner.cve',
+  license: 'scanner.license',
+  deps: 'scanner.deps',
+} as const satisfies Record<ScannerKey, keyof Translations>;
+
+function scanFailureTitle(statuses: ScannerStatuses, t: Translations): string {
+  const lines = failingScanners(statuses).map((key) => {
+    const { lastSuccessAt, error } = statuses[key];
+    const last = lastSuccessAt ? new Date(lastSuccessAt).toLocaleDateString('de-DE') : '\u2013';
+    return `${t[SCANNER_LABEL_KEYS[key]]}: ${error} (${t['scanner.lastSuccess']} ${last})`;
+  });
+  return `${t['scanner.failing']}\n${lines.join('\n')}`;
+}
 
 export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTableProps) {
   const { t } = useLocale();
@@ -165,6 +183,16 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                   {repo.lastScannedAt
                     ? new Date(repo.lastScannedAt).toLocaleDateString('de-DE')
                     : '\u2013'}
+                  {repo.scannerStatus && failingScanners(repo.scannerStatus).length > 0 && (
+                    <span
+                      className="ml-1.5 text-red-400 font-semibold cursor-help"
+                      role="img"
+                      aria-label={scanFailureTitle(repo.scannerStatus, t)}
+                      title={scanFailureTitle(repo.scannerStatus, t)}
+                    >
+                      {'\u26A0'}
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}

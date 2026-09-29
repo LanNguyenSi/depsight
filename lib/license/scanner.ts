@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { detectLicenses } from './detector';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
+import { scanSuccessData } from '@/lib/scan/freshness';
+import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export async function scanLicenses(
   userId: string,
@@ -46,7 +48,7 @@ export async function scanLicenses(
 
       await tx.repo.update({
         where: { id: repoId },
-        data: { lastScannedAt: new Date() },
+        data: scanSuccessData('license'),
       });
     });
 
@@ -62,6 +64,8 @@ export async function scanLicenses(
       conflictCount: result.conflictCount,
     };
   } catch (error) {
+    // Record the failure on the repo first so it is kept even if the scan row update fails
+    await recordScanFailure(repoId, 'license', error);
     await prisma.scan.update({
       where: { id: scan.id },
       data: {

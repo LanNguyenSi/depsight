@@ -7,12 +7,14 @@ import { useLocale, interpolate } from '@/lib/i18n';
 import { AppShell } from '@/components/AppShell';
 import { TeamHealthCard } from '@/components/overview/TeamHealthCard';
 import { RepoComparisonTable } from '@/components/overview/RepoComparisonTable';
+import type { ScannerStatuses } from '@/lib/scan/freshness';
 
 interface RepoHealthSummary {
   repoId: string;
   fullName: string;
   language: string | null;
   lastScannedAt: string | null;
+  scannerStatus?: ScannerStatuses;
   riskScore: number;
   cveCount: number;
   criticalCount: number;
