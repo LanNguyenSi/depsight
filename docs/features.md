@@ -12,6 +12,12 @@ A complete list of what depsight does today, beyond the headline value props in 
 
 ## Known limitations
 
+- **The per-scanner failure marker fires only when a scanner throws.** A
+  revoked GitHub token or an outage of GitHub or OSV makes the CVE, license
+  and dependency-age scanners complete with nothing found instead of
+  failing (their sources swallow those errors), so the marker stays clear
+  and the scan counts as a success. A marker for degraded sources is a
+  follow-up.
 - **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
