@@ -20,7 +20,7 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/net/safe-fetch', () => ({
   safeFetch: safeFetchMock,
-  // Minimal stub \u2014 deliverWebhook only uses instanceof check in the catch path
+  // Minimal stub — deliverWebhook only uses instanceof check in the catch path
   SsrfBlockedError: class SsrfBlockedError extends Error {},
 }));
 
@@ -59,7 +59,7 @@ describe('notifyScanCompleted', () => {
       violations,
     );
 
-    // Only one fetch call \u2014 for the scan.completed subscriber
+    // Only one fetch call — for the scan.completed subscriber
     expect(safeFetchMock).toHaveBeenCalledTimes(1);
     expect(safeFetchMock).toHaveBeenCalledWith(
       'https://hooks.example.com/scan',
@@ -381,6 +381,18 @@ describe('notifyForScan', () => {
 
     const text = slackBodyText();
     expect(text).toContain('Mittel:* 2');
+    expect(text).not.toContain('Niedrig');
+  });
+
+  it('Slack MEDIUM counts only the listed rows: LOW advisories below the floor add no Niedrig field', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue(slackConfig('MEDIUM'));
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-ml2', 20, [adv('MEDIUM', 1), adv('LOW', 2), adv('LOW', 3)]);
+
+    const text = slackBodyText();
+    expect(text).toContain('Mittel:* 1');
     expect(text).not.toContain('Niedrig');
   });
 
