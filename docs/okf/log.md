@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T05:49:50Z, `severity-signals.md` now describes the scanner handing every saved
+  advisory to `notifyForScan`, the fixed HIGH floor of the webhook events, and
+  Slack's minimum severity taking effect for MEDIUM and LOW; line citations
+  into `lib/alerts/notifier.ts` re-pointed. `mcp-vs-web-api.md`,
+  `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified against
+  the changed sources and re-stamped.
+
 - 2026-09-29T05:31:08Z, `severity-signals.md` now describes the single shared severity
   ranking in `lib/severity.ts` used by the policy engine and the notifier
   instead of two separate constants; line citations into

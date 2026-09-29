@@ -17,9 +17,9 @@ them.
 - [Severity signals](severity-signals.md), the three notification paths a
   CVE finding can reach a person or a webhook through (cve.critical/cve.high
   events, Slack, scan.completed), why a MEDIUM finding is unreachable on the
-  first two, and when it still reaches `scan.completed` subscribers as a
-  policy violation (an enabled `CVE_MIN_SEVERITY` policy at MEDIUM or
-  below).
+  webhook events, reaches Slack when its minimum severity is MEDIUM or LOW,
+  and when it reaches `scan.completed` subscribers as a policy violation (an
+  enabled `CVE_MIN_SEVERITY` policy at MEDIUM or below).
 - [Dependency age scanning](dependency-age-scanning.md), the shared
   per-ecosystem scanner contract and npm's inline exception, plus why the
   `Dependency.ageInDays` schema comment ("-1 = unknown") no longer
