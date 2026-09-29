@@ -7,8 +7,10 @@
 // per-scanner failure marker shows and its last-success time does not advance.
 //
 // Sources report through `noteDegraded`, a no-op outside a tracking scope, so
-// callers that do not track (PR scanning, SBOM, export) behave as before. A
-// scanner opens a scope with `trackDegraded` around its source reads. The scope
+// readers that never call a noting source are unaffected (PR scanning via
+// fetchRepoAdvisories, SBOM, the export bundle reader); the export route's
+// on-demand scans are tracked like any other scan. A scanner opens a scope
+// with `trackDegraded` around its source reads. The scope
 // is an AsyncLocalStorage store so the leaf readers (manifest discovery, the
 // per-ecosystem manifest readers) need no signature change, and the three
 // scanners the cron runs in parallel each see only their own reads.
