@@ -18,6 +18,7 @@ import { collectJavaDeps } from '@/lib/manifests/java';
 import { collectRustDeps } from '@/lib/manifests/rust';
 import { collectPhpDeps } from '@/lib/manifests/php';
 import type { GitHubAdvisory, Severity } from '@/lib/cve/github-advisories';
+import { noteDegraded } from '@/lib/scan/degraded';
 
 // ---- Pure helpers ----------------------------------------------------------
 
@@ -432,9 +433,15 @@ async function collectDeps(
         // whole npm scan, which would return zero advisories and hide every
         // vuln for the repo.
         fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null)
-          .catch(emptyLockfileResolutions),
+          .catch((err) => {
+            noteDegraded('npm lockfile resolution', err);
+            return emptyLockfileResolutions();
+          }),
         fetchYarnLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.yarn ?? null)
-          .catch(emptyLockfileResolutions),
+          .catch((err) => {
+            noteDegraded('yarn lockfile resolution', err);
+            return emptyLockfileResolutions();
+          }),
       ]);
       const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
         mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
@@ -478,9 +485,10 @@ async function collectDeps(
         // the manifest floor (per-dep fallback below), never reject and abort
         // the whole python scan, which would return zero advisories and hide
         // every vuln for the repo.
-        fetchPythonLockfileResolutions(octokit, owner, repo, manifestPaths).catch(
-          () => new Map<string, string>(),
-        ),
+        fetchPythonLockfileResolutions(octokit, owner, repo, manifestPaths).catch((err) => {
+          noteDegraded('python lockfile resolution', err);
+          return new Map<string, string>();
+        }),
       ]);
       return pyDeps
         .map(({ name, version }) => {
@@ -529,6 +537,11 @@ async function collectDeps(
  * supplementary. ecosystem is null only on a top-level unexpected error;
  * otherwise the detected ecosystem string is always returned even when
  * unsupported or when advisories is empty.
+ *
+ * An empty result is "read, nothing found" only when every read succeeded. A
+ * failed manifest read, OSV request or vulnerability lookup still returns what
+ * was found but is reported through `noteDegraded` (lib/scan/degraded.ts), so
+ * a scanner that tracks degraded sources does not count the run as a success.
  */
 export async function fetchOsvAdvisories(
   accessToken: string,
@@ -560,6 +573,7 @@ export async function fetchOsvAdvisories(
       );
     } catch (err) {
       console.warn('[osv] dep collection failed:', err);
+      noteDegraded('OSV dependency collection', err);
       return { advisories: [], ecosystem: eco };
     }
 
@@ -594,6 +608,7 @@ export async function fetchOsvAdvisories(
         clearTimeout(timeoutId);
         if (!resp.ok) {
           console.warn(`[osv] querybatch chunk at ${chunkStart} failed with status ${resp.status}`);
+          noteDegraded('OSV querybatch', `HTTP ${resp.status}`);
           continue; // degrade to empty for this chunk
         }
         const parsed = (await resp.json()) as { results: typeof chunkResults };
@@ -601,6 +616,7 @@ export async function fetchOsvAdvisories(
       } catch (err) {
         clearTimeout(timeoutId);
         console.warn(`[osv] querybatch chunk at ${chunkStart} failed:`, err);
+        noteDegraded('OSV querybatch', err);
         continue; // degrade to empty for this chunk (abort/timeout or network error)
       }
 
@@ -633,6 +649,7 @@ export async function fetchOsvAdvisories(
         clearTimeout(timeoutId);
         if (!resp.ok) {
           console.warn(`[osv] failed to fetch vuln ${id}: ${resp.status}`);
+          noteDegraded('OSV vulnerability detail', `HTTP ${resp.status}`);
           return;
         }
         const vuln = (await resp.json()) as OsvVuln;
@@ -640,6 +657,7 @@ export async function fetchOsvAdvisories(
       } catch (err) {
         clearTimeout(timeoutId);
         console.warn(`[osv] failed to fetch vuln ${id}:`, err);
+        noteDegraded('OSV vulnerability detail', err);
         // On abort/timeout, skip this vuln (treated as not found)
       }
     });
@@ -686,6 +704,7 @@ export async function fetchOsvAdvisories(
     return { advisories, ecosystem: eco };
   } catch (err) {
     console.warn('[osv] unexpected error in fetchOsvAdvisories:', err);
+    noteDegraded('OSV scan', err);
     return { advisories: [], ecosystem: null };
   }
 }

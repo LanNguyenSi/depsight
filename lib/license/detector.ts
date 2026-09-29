@@ -5,6 +5,7 @@ import {
   fetchNpmManifests,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
+import { isNothingThere, noteDegraded } from '@/lib/scan/degraded';
 import { classifyLicense } from './classifier';
 import { scanPythonLicenses } from './python';
 import { scanGoLicenses } from './go';
@@ -65,8 +66,11 @@ export async function detectLicenses(
     try {
       const licenseResp = await octokit.rest.licenses.getForRepo({ owner, repo });
       repoLicense = licenseResp.data.license?.spdx_id ?? 'UNKNOWN';
-    } catch {
-      // No license file found
+    } catch (err) {
+      // A repository without a license file answers 404: nothing to find. Any
+      // other answer means the lookup itself failed, so an UNKNOWN repo license
+      // below is not proof that the repository has none.
+      if (!isNothingThere(err)) noteDegraded('GitHub repository license lookup', err);
     }
 
     // 2. Read every discovered manifest (root + workspaces / monorepo packages)
@@ -129,7 +133,11 @@ export async function detectLicenses(
     }
   } catch (error: unknown) {
     const err = error as { status?: number };
-    if (err?.status === 404 || err?.status === 403) {
+    if (err?.status === 404) {
+      return buildLicenseScanResult([]);
+    }
+    if (err?.status === 403) {
+      noteDegraded('GitHub license scan', error);
       return buildLicenseScanResult([]);
     }
     throw error;

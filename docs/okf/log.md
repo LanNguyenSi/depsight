@@ -2,6 +2,17 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T07:10:46Z, re-verified after the defensive-note tests and the tracking-scope wording change: `rescan-and-staleness.md` now says that readers which never call a noting source are unaffected (PR scanning via `fetchRepoAdvisories`, SBOM, the export bundle reader) and that the export route's on-demand scans are tracked like any other scan, and its `lib/scan/degraded.ts` citations moved with the longer header comment; `mcp-vs-web-api.md` and `policy-rule-evaluation.md` cite sections of `docs/features.md` that the one-clause edit to the degraded-run bullet did not touch, so they are re-stamped only.
+
+- 2026-09-29T06:55:48Z, re-verified after the degraded-source change: `rescan-and-staleness.md` now describes which
+  sources report an unreadable read and which answers stay an empty result, replacing its
+  known-limitation paragraph, and lists `lib/scan/degraded.ts`, `lib/cve/osv.ts`,
+  `lib/manifest-discovery.ts` and `lib/license/detector.ts` as sources; `severity-signals.md`,
+  `dependency-age-scanning.md` and `license-classification.md` had their citations into the
+  edited scanners, manifest discovery and license detector re-pointed. All four re-stamped; `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
+  cite sections of `docs/features.md` that this change did not touch (the MCP read-only framing, the
+  Policy engine section), so their claims hold and they are re-stamped only.
+
 - 2026-09-29T06:27:16Z, merged the stale-comment and null-only unknown-age change into the Slack
   minimum-severity branch: `mcp-vs-web-api.md` and `policy-rule-evaluation.md`
   match master's re-pointed route citations; the `lib/policy/engine.ts` and

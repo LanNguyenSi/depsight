@@ -3,7 +3,7 @@ type: invariant
 title: "Severity signals: three separate paths, not one gate"
 description: a CVE finding reaches a person or a webhook through three separate notification paths (the cve.critical/cve.high webhook events, Slack, and the scan.completed webhook); the scanner hands every saved advisory to notifyForScan and each channel applies its own threshold with the shared SEVERITY_RANK (lib/severity.ts); the webhook events keep a fixed CRITICAL/HIGH floor, Slack follows SlackConfig.minSeverity (CRITICAL, HIGH, MEDIUM or LOW), and scan.completed has no severity filter of its own, so a MEDIUM finding reaches scan.completed subscribers as a policy violation when an enabled CVE_MIN_SEVERITY policy at MEDIUM or below exists.
 tags: [severity, cve, notifications, policy]
-timestamp: 2026-09-29T06:27:16Z
+timestamp: 2026-09-29T06:55:48Z
 sources:
   - lib/policy/engine.ts
   - lib/alerts/notifier.ts
@@ -27,7 +27,7 @@ The MCP server carries a separate ranking (`severityRank` in `mcp/src/tools/cves
 
 ## The scanner passes every severity on; each channel filters for itself
 
-`lib/cve/scanner.ts:139-141` loads all of the just-saved advisories for the scan, with no severity filter, and hands them to `notifyForScan` (`:142-146`) whenever the scan has at least one. The thresholds live in `notifyForScan` (`lib/alerts/notifier.ts:149-224`), one per channel.
+`lib/cve/scanner.ts:151-153` loads all of the just-saved advisories for the scan, with no severity filter, and hands them to `notifyForScan` (`:154-158`) whenever the scan has at least one. The thresholds live in `notifyForScan` (`lib/alerts/notifier.ts:149-224`), one per channel.
 
 The webhook events keep a fixed floor. Only advisories ranked `HIGH` or above are kept for them (`:161-163`), the event is `cve.critical` when any of those is `CRITICAL` and `cve.high` otherwise (`:165-166`), and a scan with no `HIGH`-or-above advisory delivers no webhook at all (`:190-201`). A webhook payload therefore never lists a `MEDIUM` or `LOW` advisory, even in a scan that also has a `CRITICAL` one, and no webhook subscribes to a severity below `HIGH`.
 
@@ -35,7 +35,7 @@ Slack follows `SlackConfig.minSeverity` (`prisma/schema.prisma:259`, default `HI
 
 ## A third path has no severity floor of its own: `scan.completed`
 
-`runPostScanHooks` (`lib/cve/scanner.ts:149`, called on every CVE scan that completes, whatever severities it found; a scan that returns early because one is already running (`:55-57`) or throws (`:160-172`) never reaches it) runs `evaluatePolicies` and then `notifyScanCompleted` (`lib/alerts/post-scan.ts:13-32`, `lib/alerts/notifier.ts:228-258`). `notifyScanCompleted` delivers a `scan.completed` webhook event to every subscriber, carrying the scan's `policyViolations` array, with no severity filter of its own. A `CVE_MIN_SEVERITY` policy configured to flag `MEDIUM` and above therefore does reach `scan.completed` webhook subscribers for a `MEDIUM` finding, through this path, even though the same finding never reaches the `cve.critical`/`cve.high` event path, and reaches Slack only when `SlackConfig.minSeverity` is `MEDIUM` or `LOW`.
+`runPostScanHooks` (`lib/cve/scanner.ts:161`, called on every CVE scan that completes, whatever severities it found; a scan that returns early because one is already running (`:56-58`) or throws (`:172-184`) never reaches it) runs `evaluatePolicies` and then `notifyScanCompleted` (`lib/alerts/post-scan.ts:13-32`, `lib/alerts/notifier.ts:228-258`). `notifyScanCompleted` delivers a `scan.completed` webhook event to every subscriber, carrying the scan's `policyViolations` array, with no severity filter of its own. A `CVE_MIN_SEVERITY` policy configured to flag `MEDIUM` and above therefore does reach `scan.completed` webhook subscribers for a `MEDIUM` finding, through this path, even though the same finding never reaches the `cve.critical`/`cve.high` event path, and reaches Slack only when `SlackConfig.minSeverity` is `MEDIUM` or `LOW`.
 
 ## Consequence: three paths, three different reachability rules
 
