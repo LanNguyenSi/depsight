@@ -96,13 +96,11 @@ const NPM_PACKAGE_NAME_RE = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 // never match anything, which is the same silently-broken-policy outcome
 // this whole function exists to prevent. Better to fail the request loudly.
 //
-// The "rule must be an object" branch is unreachable for callers that
-// already checked the request body's own shape (POST and PUT on the API
-// routes both reject a non-object `rule` before calling this). It stays
-// live for a caller validating a rule read back from storage rather than
-// from the current request body — see the PUT handler's "door (b)" case in
-// app/api/policies/[id]/route.ts, where nothing upstream has already
-// checked the stored value's shape.
+// The "rule must be an object" branch is normally unreachable: validatePolicyRule
+// (the caller for the API routes) checks the object shape before dispatching
+// per type, and both routes reject a non-object `rule` from the request body
+// first. It stays as a defensive guard for direct callers that pass a value
+// read back from storage.
 export function validateDependencyMinVersionRule(rule: unknown): DependencyMinVersionRuleValidation {
   if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
     return { error: 'rule must be an object' };
@@ -161,7 +159,7 @@ export function validatePolicyRule(type: PolicyType, rule: unknown): PolicyRuleV
       }
       return { rule: persisted };
     case PolicyType.DEPENDENCY_MAX_AGE:
-      if (!isNumber(fields['maxAgeDays']) || !Number.isFinite(fields['maxAgeDays'])) {
+      if (!Number.isFinite(fields['maxAgeDays'])) {
         return { error: 'rule.maxAgeDays must be a number' };
       }
       return { rule: persisted };

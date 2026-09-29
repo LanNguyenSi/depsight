@@ -275,8 +275,8 @@ describe('POST /api/policies', () => {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       createPolicyMock.mockResolvedValue({ id: 'pol-x', name: 'P', type, severity: 'HIGH', enabled: true });
 
-      // DEPENDENCY_MIN_VERSION rules are shape-validated (see the (9x) block below),
-      // so this generic rule only applies to the other types.
+      // Every type is shape-validated by validatePolicyRule, so each type
+      // is created with its own fitting VALID_RULES fixture.
       const rule = VALID_RULES[type];
 
       const res = await POST(makePostRequest({ ...validPolicyBody(), type, rule }));

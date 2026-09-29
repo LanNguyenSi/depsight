@@ -314,9 +314,9 @@ describe('PUT /api/policies/[id]', () => {
       resolveRequestUserMock.mockResolvedValue(mockUser);
       updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });
 
-      // DEPENDENCY_MIN_VERSION requires a compatible rule (see the (9x)/(door)
-      // tests below): sending `type` alone for it is door (b) and is no
-      // longer accepted, so this type is exercised with a rule attached.
+      // Every type is shape-validated against the resulting type and rule
+      // pair, so each type is exercised with its fitting VALID_RULES fixture
+      // attached. A type-only PUT is covered by the stored-rule tests below.
       const body = { type, rule: VALID_RULES[type] };
 
       const res = await PUT(
@@ -465,6 +465,26 @@ describe('PUT /api/policies/[id]', () => {
     expect(res.status).toBe(400);
     expect(updatePolicyMock).not.toHaveBeenCalled();
   });
+
+  it.each(['LICENSE_DENY', 'LICENSE_ALLOW_ONLY', 'CVE_MIN_SEVERITY', 'DEPENDENCY_MAX_AGE'])(
+    '(10q) accepts a type-only PUT to %s when the stored rule fits that type',
+    async (type) => {
+      resolveRequestUserMock.mockResolvedValue(mockUser);
+      getPolicyByIdMock.mockResolvedValue({
+        id: 'pol-1', name: 'P', type: 'DEPENDENCY_MIN_VERSION', severity: 'HIGH', rule: VALID_RULES[type], enabled: true,
+      });
+      updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type, severity: 'HIGH', enabled: true });
+
+      const res = await PUT(makePutRequest('pol-1', { type }), makeParams('pol-1'));
+
+      expect(res.status).toBe(200);
+      expect(updatePolicyMock).toHaveBeenCalledWith(
+        'user-1',
+        'pol-1',
+        expect.objectContaining({ type, rule: VALID_RULES[type] }),
+      );
+    },
+  );
 
   it('(10p) a PUT that touches neither type nor rule does not validate or fetch the stored rule', async () => {
     resolveRequestUserMock.mockResolvedValue(mockUser);
