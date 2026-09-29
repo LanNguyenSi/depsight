@@ -56,15 +56,19 @@ async function runAutoScan() {
           }
         }
 
-        // 4. Get tracked repos not scanned within the current interval
+        // 4. Get tracked repos that are due: neither a scanner success
+        //    (lastScannedAt, also set by manual scans) nor a cron attempt
+        //    (lastScanAttemptAt) within the current interval. The gate keys off
+        //    "last touched" so a failing repo is retried at the normal cadence;
+        //    per-scanner staleness is a display concern (Repo.*ScannedAt).
         const staleThreshold = new Date(Date.now() - INTERVAL_MS);
         const repos = await prisma.repo.findMany({
           where: {
             userId: user.id,
             tracked: true,
-            OR: [
-              { lastScannedAt: null },
-              { lastScannedAt: { lt: staleThreshold } },
+            AND: [
+              { OR: [{ lastScannedAt: null }, { lastScannedAt: { lt: staleThreshold } }] },
+              { OR: [{ lastScanAttemptAt: null }, { lastScanAttemptAt: { lt: staleThreshold } }] },
             ],
           },
           select: { id: true, fullName: true },
@@ -104,10 +108,13 @@ async function runAutoScan() {
             }
           }
 
+          // Record the attempt only. Success timestamps are written by the
+          // scanners themselves, so a repo whose scanners all threw does not
+          // look freshly scanned.
           if (!rateLimited) {
             await prisma.repo.update({
               where: { id: repo.id },
-              data: { lastScannedAt: new Date() },
+              data: { lastScanAttemptAt: new Date() },
             });
           }
         }

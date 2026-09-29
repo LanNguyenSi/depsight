@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { analyzeDepAge } from './age-checker';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
+import { scanSuccessData } from '@/lib/scan/freshness';
+import { recordScanFailure } from '@/lib/scan/record-failure';
 
 export async function scanDependencies(
   userId: string,
@@ -14,7 +16,15 @@ export async function scanDependencies(
     throw new Error('Repository not found or access denied');
   }
 
-  const result = await analyzeDepAge(accessToken, repo.owner, repo.name, repo.defaultBranch);
+  // Runs before the scan row exists, so a failure here has no FAILED scan to
+  // show it; record it on the repo so the failure stays visible.
+  let result: Awaited<ReturnType<typeof analyzeDepAge>>;
+  try {
+    result = await analyzeDepAge(accessToken, repo.owner, repo.name, repo.defaultBranch);
+  } catch (error) {
+    await recordScanFailure(repoId, 'deps', error);
+    throw error;
+  }
 
   // Always create a fresh scan record (avoid race conditions with CVE/license scans)
   const scan = await prisma.scan.create({
@@ -47,7 +57,7 @@ export async function scanDependencies(
 
       await tx.repo.update({
         where: { id: repoId },
-        data: { lastScannedAt: new Date() },
+        data: scanSuccessData('deps'),
       });
     });
 
@@ -63,6 +73,8 @@ export async function scanDependencies(
       summary: result.summary,
     };
   } catch (error) {
+    // Record the failure on the repo first so it is kept even if the scan row update fails
+    await recordScanFailure(repoId, 'deps', error);
     await prisma.scan.update({
       where: { id: scan.id },
       data: {

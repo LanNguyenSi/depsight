@@ -8,9 +8,16 @@ A complete list of what depsight does today, beyond the headline value props in 
 - **License detection** and copyleft compliance checking across all supported ecosystems.
 - **Dependency age tracking** and outdated alerts.
 - **Multi-ecosystem support:** npm, Python, Go, Java, Rust, PHP.
+- **Per-scanner failure marker.** The CVE, license and dependency-age scanners each keep their own last-success time and last failure message per repository. The repository overview table and the dashboard header show a warning when a scanner is failing, naming the scanner, its error and its last success, so a scanner that keeps failing is no longer hidden behind a fresh "last scanned" time. `lastScannedAt` now means the last time any scanner succeeded (the auto-scan cron no longer sets it after a failed attempt). `GET /api/overview`, and therefore the MCP overview tool, carries an additive `scannerStatus` field per repository.
 
 ## Known limitations
 
+- **The per-scanner failure marker fires only when a scanner throws.** A
+  revoked GitHub token or an outage of GitHub or OSV makes the CVE, license
+  and dependency-age scanners complete with nothing found instead of
+  failing (their sources swallow those errors), so the marker stays clear
+  and the scan counts as a success. A marker for degraded sources is a
+  follow-up.
 - **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for

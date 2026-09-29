@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:01:14Z, merged master into the per-scanner freshness branch: citations into
+  `lib/cve/scanner.ts`, `lib/deps/scanner.ts` and `prisma/schema.prisma` in
+  `severity-signals.md` and `dependency-age-scanning.md` re-pointed against the
+  merged sources; `rescan-and-staleness.md` citations re-verified against the
+  merged tree; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified
+  against the merged `docs/features.md`. All five re-stamped.
+
 - 2026-09-29T05:59:20Z, `dependency-age-scanning.md` rewritten for the null-only unknown age: the
   schema comment and the `DEPENDENCY_MAX_AGE` check now state `null`, the
   `-1` sentinel stays in the scanners and is converted at the one write path.
@@ -17,6 +24,14 @@
   padded-package-name gap; `index.md` summary updated; `mcp-vs-web-api.md`
   re-verified against the policy routes and re-stamped.
 
+- 2026-09-29T05:49:15Z, failure marker limits and doc pointers: `rescan-and-staleness.md` now states
+  that the CVE failure marker does not fire for a source outage (a completed
+  scan with zero advisories stamps `cveScannedAt`) and re-points its overview
+  table citation; `policy-rule-evaluation.md` re-points its `docs/features.md`
+  Policy engine range after `docs/features.md` gained a per-scanner failure
+  marker entry; `mcp-vs-web-api.md` was re-verified against the changed
+  `docs/features.md` and re-stamped.
+
 - 2026-09-29T05:43:22Z, `license-classification.md` and the `index.md` summary line re-verified
   after the Python and Rust scanners took their displayed license and its
   classification from one helper; citations re-pointed and re-stamped.
@@ -26,6 +41,16 @@
   citations into `lib/policy/engine.ts` re-pointed in `policy-rule-evaluation.md`,
   `severity-signals.md` and `dependency-age-scanning.md` after a comment edit
   shifted them; `mcp-vs-web-api.md` re-stamped.
+
+- 2026-09-29T05:36:31Z, per-scanner freshness: `rescan-and-staleness.md` now describes the
+  per-scanner success and failure columns on `Repo`, that `lastScannedAt` means
+  any scanner last succeeded and is no longer written by the cron, the cron's
+  own attempt marker and the due-gate that reads both, and the failure marker in
+  the overview table and the dashboard. `severity-signals.md` and
+  `dependency-age-scanning.md` had their `lib/cve/scanner.ts`,
+  `lib/deps/scanner.ts` and `prisma/schema.prisma` citations re-pointed after
+  the line shifts; their claims were re-verified and re-stamped, and `index.md`
+  carries the updated one-line summary.
 
 - 2026-09-29T05:33:12Z, `license-classification.md` rewritten for the shared classifier in
   `lib/license/classifier.ts`: one copyleft set, one needs-review list, and

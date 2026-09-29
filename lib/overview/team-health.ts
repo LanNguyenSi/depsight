@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { getScannerStatuses, type ScannerStatuses } from '@/lib/scan/freshness';
 
 export interface RepoHealthSummary {
   repoId: string;
@@ -7,7 +8,9 @@ export interface RepoHealthSummary {
   owner: string;
   name: string;
   language: string | null;
+  /** Last time any scanner succeeded; see scannerStatus for per-scanner freshness. */
   lastScannedAt: Date | null;
+  scannerStatus: ScannerStatuses;
   riskScore: number;
   cveCount: number;
   criticalCount: number;
@@ -155,6 +158,7 @@ export async function getTeamHealthOverview(userId: string): Promise<TeamHealthO
       name: repo.name,
       language: repo.language,
       lastScannedAt: repo.lastScannedAt,
+      scannerStatus: getScannerStatuses(repo),
       riskScore: cveScan?.riskScore ?? 0,
       cveCount: cveScan?.cveCount ?? 0,
       criticalCount: cveScan?.criticalCount ?? 0,
