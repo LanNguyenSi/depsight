@@ -2,6 +2,13 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-09-29T06:01:14Z, merged master into the per-scanner freshness branch: citations into
+  `lib/cve/scanner.ts`, `lib/deps/scanner.ts` and `prisma/schema.prisma` in
+  `severity-signals.md` and `dependency-age-scanning.md` re-pointed against the
+  merged sources; `rescan-and-staleness.md` citations re-verified against the
+  merged tree; `policy-rule-evaluation.md` and `mcp-vs-web-api.md` re-verified
+  against the merged `docs/features.md`. All five re-stamped.
+
 - 2026-09-29T05:52:34Z, merged the shared severity ranking (`lib/severity.ts`) into the policy-validation
   branch: line citations into `lib/policy/engine.ts` re-pointed and verified
   against the merged file in `policy-rule-evaluation.md`, `severity-signals.md`
