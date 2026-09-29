@@ -6,7 +6,7 @@ import { mergeCveAdvisories } from './merge';
 import { notifyForScan } from '@/lib/alerts/notifier';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
 import type { Severity as PrismaSeverity } from '@prisma/client';
-import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanDegradedReason, scanSuccessData } from '@/lib/scan/freshness';
 import { noteDegraded, trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
@@ -23,6 +23,8 @@ export class ScanAccessError extends Error {
 export interface ScanRepositoryResult {
   scanId: string;
   dependabotDisabled?: boolean;
+  /** Why the completed scan is partial (unreadable sources); null when every source was read. */
+  degradedReason?: string | null;
   alreadyRunning?: boolean;
 }
 
@@ -128,6 +130,7 @@ export async function scanRepository(
         where: { id: scan.id },
         data: {
           status: 'COMPLETED',
+          degradedReason: scanDegradedReason(degraded),
           cveCount: merged.counts.total,
           criticalCount: merged.counts.critical,
           highCount: merged.counts.high,
@@ -163,11 +166,12 @@ export async function scanRepository(
       riskScore: merged.riskScore,
       criticalCount: merged.counts.critical,
       highCount: merged.counts.high,
-    }).catch((err) => console.error('[post-scan] cve hook error:', err));
+    }, scanDegradedReason(degraded)).catch((err) => console.error('[post-scan] cve hook error:', err));
 
     return {
       scanId: scan.id,
       dependabotDisabled: dependabotResult.dependabotDisabled,
+      degradedReason: scanDegradedReason(degraded),
     };
   } catch (error) {
     // Record the failure on the repo first so it is kept even if the scan row update fails

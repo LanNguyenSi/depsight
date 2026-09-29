@@ -23,6 +23,12 @@ A complete list of what depsight does today, beyond the headline value props in 
   A repository the token can no longer read (deleted, or access lost) is marked
   degraded too: when the git tree or the root listing answers 404, one repository
   lookup confirms whether the repository itself is gone.
+  The scan row carries the reason: `Scan.degradedReason` holds the unreadable
+  sources (cut to 500 characters) of a degraded run and is null when every source
+  was read. It is exposed as an additive `degradedReason` key by the
+  `scan.completed` webhook payload, `POST /api/scan` (still `status: completed`),
+  `GET /api/scan` and the MCP `depsight_rescan` answer, so a consumer can tell that
+  a completed scan is partial. Which scan counts as the latest is unchanged.
   Two things stay a normal result and are not marked: a source that answered
   "nothing here" (no manifest, no license file, a repository without commits,
   Dependabot alerts not enabled) and a single package whose registry lookup
@@ -70,7 +76,7 @@ A complete list of what depsight does today, beyond the headline value props in 
 
 - **GitHub OAuth** login and repository discovery.
 - **PR integration** with automatic CVE comments.
-- **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories. Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings; the message lists the most severe advisories first and adds a Mittel or Niedrig count field when MEDIUM or LOW rows are listed.
+- **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories. Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings; the message lists the most severe advisories first and adds a Mittel or Niedrig count field when MEDIUM or LOW rows are listed. The `scan.completed` payload carries `degradedReason` (null unless the scan was degraded, see Known limitations).
 - **Dependabot integration:** status check, enable per-repo, bulk-enable across all repos.
 
 ## Policy engine

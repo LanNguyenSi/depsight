@@ -11,6 +11,7 @@ import { scanRepository } from '@/lib/cve/scanner';
 import { scanLicenses } from '@/lib/license/scanner';
 import { scanDependencies } from '@/lib/deps/scanner';
 import { failingScanners, getScannerStatuses } from '@/lib/scan/freshness';
+import { runPostScanHooks } from '@/lib/alerts/post-scan';
 
 const { store, gh } = vi.hoisted(() => {
   const store = {
@@ -563,5 +564,63 @@ describe('license lookup source', () => {
     await runners.license();
 
     expectSuccess('license');
+  });
+});
+
+describe('degraded reason on the completed scan row and the scan.completed hook', () => {
+  const hooks = vi.mocked(runPostScanHooks);
+
+  it.each(SCANNERS)('a degraded %s run stores the reason on its scan row and hands it to the hook', async (scanner) => {
+    hooks.mockClear();
+    seedHealthyAtT1();
+    setGitHubRejectingEverything(401, 'Bad credentials');
+
+    await runners[scanner]();
+
+    expect(store.scans).toHaveLength(1);
+    expect(store.scans[0].status).toBe('COMPLETED');
+    expect(store.scans[0].degradedReason).toMatch(/401/);
+    expect(store.scans[0].degradedReason).toContain('Bad credentials');
+    // the hook's last argument is the same reason the row carries
+    expect(hooks).toHaveBeenCalledTimes(1);
+    expect(hooks.mock.calls[0][6]).toBe(store.scans[0].degradedReason);
+  });
+
+  it.each(SCANNERS)('a healthy %s run leaves the reason null on the row and in the hook', async (scanner) => {
+    hooks.mockClear();
+    seedHealthyAtT1();
+    setGitHub(NPM_REPO);
+
+    await runners[scanner]();
+
+    expect(store.scans).toHaveLength(1);
+    expect(store.scans[0].status).toBe('COMPLETED');
+    expect(store.scans[0].degradedReason).toBeNull();
+    expect(hooks).toHaveBeenCalledTimes(1);
+    expect(hooks.mock.calls[0][6]).toBeNull();
+  });
+
+  it('the CVE scanner returns the reason to its caller, and null when healthy', async () => {
+    seedHealthyAtT1();
+    setGitHubRejectingEverything(401, 'Bad credentials');
+    const degraded = (await runners.cve()) as { degradedReason: string | null };
+    expect(degraded.degradedReason).toBe(store.scans[0].degradedReason);
+    expect(degraded.degradedReason).toMatch(/401/);
+
+    store.scans = [];
+    setGitHub(NPM_REPO);
+    const healthy = (await runners.cve()) as { degradedReason: string | null };
+    expect(healthy.degradedReason).toBeNull();
+  });
+
+  it('bounds a long reason to 500 characters', async () => {
+    seedHealthyAtT1();
+    setGitHubRejectingEverything(500, 'x'.repeat(2000));
+
+    await runners.license();
+
+    const reason = store.scans[0].degradedReason as string;
+    expect(reason.length).toBeGreaterThan(0);
+    expect(reason.length).toBeLessThanOrEqual(500);
   });
 });

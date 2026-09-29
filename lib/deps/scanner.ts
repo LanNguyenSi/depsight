@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { analyzeDepAge } from './age-checker';
 import { runPostScanHooks } from '@/lib/alerts/post-scan';
-import { scanDegradedData, scanSuccessData } from '@/lib/scan/freshness';
+import { scanDegradedData, scanDegradedReason, scanSuccessData } from '@/lib/scan/freshness';
 import { trackDegraded } from '@/lib/scan/degraded';
 import { recordScanFailure } from '@/lib/scan/record-failure';
 
@@ -58,7 +58,7 @@ export async function scanDependencies(
 
       await tx.scan.update({
         where: { id: scan.id },
-        data: { status: 'COMPLETED' },
+        data: { status: 'COMPLETED', degradedReason: scanDegradedReason(degraded) },
       });
 
       await tx.repo.update({
@@ -72,7 +72,7 @@ export async function scanDependencies(
     // signature, so the double-cast satisfies ScanCompletedPayload.summary (Record<string,unknown>).
     runPostScanHooks(userId, repoId, repo.fullName, scan.id, 'deps', {
       summary: result.summary as unknown as Record<string, unknown>,
-    }).catch((err) => console.error('[post-scan] deps hook error:', err));
+    }, scanDegradedReason(degraded)).catch((err) => console.error('[post-scan] deps hook error:', err));
 
     return {
       scanId: scan.id,

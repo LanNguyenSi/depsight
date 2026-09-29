@@ -10,6 +10,7 @@ import {
   failingScanners,
   getScannerStatuses,
   scanDegradedData,
+  scanDegradedReason,
   scanFailureData,
   scanSuccessData,
 } from '@/lib/scan/freshness';
@@ -350,6 +351,13 @@ describe('freshness helpers', () => {
   it('scanFailureData truncates very long messages', () => {
     const data = scanFailureData('cve', new Error('x'.repeat(2000)));
     expect(data.cveScanError).toHaveLength(500);
+  });
+
+  it('scanDegradedReason never ends in half of a surrogate pair at the cut', () => {
+    const reason = scanDegradedReason('a'.repeat(499) + '\u{1F600}tail');
+    expect(reason).toBe('a'.repeat(499));
+    expect(reason!.isWellFormed()).toBe(true);
+    expect(scanDegradedReason('a'.repeat(498) + '\u{1F600}tail')).toBe('a'.repeat(498) + '\u{1F600}');
   });
 
   it('getScannerStatuses treats missing columns as not failing', () => {

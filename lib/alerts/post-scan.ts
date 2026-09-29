@@ -8,6 +8,7 @@ export async function runPostScanHooks(
   scanId: string,
   scanType: 'cve' | 'license' | 'deps',
   summary: Record<string, unknown>,
+  degradedReason: string | null = null,
 ): Promise<void> {
   let violations: PolicyViolation[] = [];
   try {
@@ -29,5 +30,6 @@ export async function runPostScanHooks(
       message: v.message,
       affectedPackages: v.affectedPackages,
     })),
+    degradedReason,
   );
 }

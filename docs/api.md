@@ -6,7 +6,7 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`) |
+| `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read |
 | `POST` | `/api/license` | Run license compliance check (body: `{ repoId }`) |
 | `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
 | `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |

@@ -166,6 +166,7 @@ describe("depsight_rescan tool wrapper", () => {
       scanId: "scan-123",
       status: "completed",
       dependabotDisabled: true,
+      degradedReason: null,
       message: expect.stringContaining("depsight_get_cves"),
     });
   });
@@ -219,5 +220,34 @@ describe("depsight_rescan tool wrapper", () => {
 
     expect(result.isError).toBe(true);
     expect(parseToolText(result)).toMatchObject({ success: false });
+  });
+
+  describe("tool handler degradedReason", () => {
+    it("passes the degraded reason through and says the result is degraded", async () => {
+      const handler = captureRescanHandler(async () => ({
+        scanId: "scan-1",
+        status: "completed",
+        dependabotDisabled: false,
+        degradedReason: "OSV: HTTP 500: down",
+      }));
+      const out = parseToolText(await handler({ repoId: "repo-1" }));
+      expect(out.degradedReason).toBe("OSV: HTTP 500: down");
+      expect(out.status).toBe("completed");
+      expect(String(out.message)).toContain("degraded");
+    });
+
+    it("reports degradedReason null and the unchanged message for a healthy or older backend answer", async () => {
+      for (const answer of [
+        { scanId: "scan-1", status: "completed", dependabotDisabled: false, degradedReason: null },
+        { scanId: "scan-1", status: "completed", dependabotDisabled: false },
+      ]) {
+        const handler = captureRescanHandler(async () => answer);
+        const out = parseToolText(await handler({ repoId: "repo-1" }));
+        expect(out.degradedReason).toBeNull();
+        expect(out.message).toBe(
+          "Scan completed. Call depsight_get_cves with this repoId to read updated CVE results.",
+        );
+      }
+    });
   });
 });
