@@ -65,6 +65,30 @@ A complete list of what depsight does today, beyond the headline value props in 
     spot does not apply to that repo. See the cve-sweep skill
     (`.claude/skills/cve-sweep/SKILL.md`) for the full two-channel discovery
     procedure and each channel's blind spots.
+- **A scan that reports 0 advisories does not rule out a vulnerable transitive
+  dependency.** The OSV channel queries only direct manifest dependencies (see
+  the OSV note above), so a package that a repository installs only
+  transitively, for example a runtime helper of a direct dependency or a dev
+  dependency of a test tool, can reach depsight through the Dependabot channel
+  alone. GitHub raises Dependabot alerts asynchronously, some hours after an
+  advisory is published, not at the same moment for every repository, and not
+  necessarily for every affected repository; depsight reports only an alert
+  that exists and is `open` when the scan runs. Before such an alert exists,
+  or when none is raised, a scan shows 0 for a repository whose lockfile
+  installs a vulnerable version, and depsight cannot tell that repository from
+  a clean one. This is a structural gap, not a scan defect: closing it would need a
+  scanner that resolves transitive lockfile entries itself.
+  - Mitigation: after triage, run a fleet lockfile scan on the checkouts of the
+    tracked repositories. Audit every lockfile, not only the root one
+    (`git ls-files '*package-lock.json'`, then
+    `npm audit --package-lock-only --audit-level=moderate` in each directory),
+    and read a finding depsight does not list as this gap, not as a scan defect.
+  - Dependabot cross-check: the `state` parameter of the alerts list takes a
+    comma-separated list of `open`, `fixed`, `dismissed` and `auto_dismissed`.
+    `state=all` is not a value; the endpoint answers an empty array instead
+    of an error, so an empty answer proves nothing. To see whether GitHub ever
+    raised an alert for an advisory, list every state:
+    `gh api --paginate "repos/<owner>/<repo>/dependabot/alerts?state=open,fixed,dismissed,auto_dismissed&per_page=100"`.
 
 ## Reporting and export
 

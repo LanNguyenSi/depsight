@@ -3,7 +3,7 @@ type: invariant
 title: Policy rule evaluation - every type is shape-checked at write time, stored rows warn at evaluation
 description: evaluatePolicies still breaks out of a PolicyType case with no violation when the stored rule fails its type guard, but validatePolicyRule now checks the rule shape of all five policy types on POST and PUT (PUT validates the resulting type and rule pair), and every evaluation logs a warning per stored row whose rule fails that check, so a malformed rule can no longer persist unnoticed through the API; rows stored before the check are not migrated.
 tags: [policy, silent-failure, validation]
-timestamp: 2026-09-29T10:38:03Z
+timestamp: 2026-09-30T04:09:17Z
 sources:
   - lib/policy/engine.ts
   - app/api/policies/route.ts
