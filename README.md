@@ -8,7 +8,7 @@ GitHub-connected security dashboard: CVEs, licenses, and dependency health, self
 
 ## Overview
 
-Dependency trees rot quietly: a CVE disclosed today against a transitive dependency installed six months ago will not surface until something fails, or until a customer asks. depsight runs continuous CVE, license, and staleness scanning across every repository a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a glance at a dashboard rather than an afternoon of manual audits, across npm, Python, Go, Java, Rust, and PHP.
+Dependency trees rot quietly: a CVE disclosed against a dependency installed six months ago will not surface until something fails, or until a customer asks. depsight runs continuous CVE, license, and staleness scanning across every repository a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a dashboard view rather than an afternoon of manual audits, across npm, Python, Go, Java, Rust, and PHP. depsight reads the Dependabot alerts GitHub has raised for a repository and supplements them with an OSV query over the dependencies declared in its manifests; a package installed only transitively shows up only once GitHub has raised a Dependabot alert for it, so a 0-advisory scan does not rule out a vulnerable transitive dependency (see [Known limitations](docs/features.md#known-limitations)).
 
 For the broader operational picture beyond security, see [agent-ops-dashboard](https://github.com/LanNguyenSi/agent-ops-dashboard), which complements depsight with a fleet-wide repo-health view.
 
