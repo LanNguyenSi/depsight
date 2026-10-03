@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Publish workflows now install npm with `npm install -g npm@^11.5.1` (the documented trusted-publishing floor) instead of the floating `npm@11`. CI only; no package code change.
+
 ## [0.6.0] - 2026-09-29
 
 **Headline: scanners now say when they cannot read their source, tokens carry a read/write scope, and the policy engine gains a version-floor type.** A scanner that could not read GitHub or OSV no longer reports a clean scan, each scanner carries its own freshness and failure marker, dsat_ tokens can be read-only, `DEPENDENCY_MIN_VERSION` policies enforce a per-package floor, Slack minimum severity MEDIUM/LOW finally delivers, and yarn.lock v1 repos are matched against resolved versions. The deploy needs `prisma db push` (new `ApiToken.scope` column and per-scanner freshness columns). The published MCP package is released as `@opentriologue/depsight-mcp` 0.4.0 (see the list below). depsight is deployed from `master`; this tag is deploy provenance.
