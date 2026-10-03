@@ -62,7 +62,7 @@ jobs:
       # package's Trusted Publisher entry on npmjs.com (repo
       # LanNguyenSi/depsight, workflow publish-npm.yml) — no NPM_TOKEN.
       - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@11 --no-audit --no-fund
+        run: npm install -g npm@^11.5.1 --no-audit --no-fund
 
       - name: Publish
         run: npm publish --access public --provenance
