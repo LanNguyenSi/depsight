@@ -7,10 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-04
+
+**Headline: a completed scan now says why it was degraded, and a repository that cannot be read at all is no longer reported as a clean scan.** The deploy needs `prisma db push` (new nullable `Scan.degradedReason` column). The published MCP package is released as `@opentriologue/depsight-mcp` 0.5.0 (tag `depsight-mcp-v0.5.0`): the `depsight_rescan` answer carries a `degradedReason` key (null unless a source could not be read) and its message says so for a degraded scan (#153); the server reports version 0.5.0 in the MCP handshake. The mcp lockfile security bumps (ip-address, brace-expansion, fast-uri) only touch the repository's own dev and CI install; npm consumers do not receive them. depsight is deployed from `master`; this tag is deploy provenance.
+
+### Added
+
+- **`Scan.degradedReason`:** the CVE, license and dependency-age scanners record why a completed scan was degraded (the unreadable sources, cut to 500 characters without splitting a surrogate pair), null when every source was read. It is exposed as an additive `degradedReason` key by the `scan.completed` webhook payload, `POST /api/scan` (still `status: completed`), `GET /api/scan` and the MCP `depsight_rescan` answer, so a consumer can tell that a completed scan is partial. Which scan counts as the latest is unchanged (#153).
+
 ### Changed
 
 - Publish workflows now install npm with `npm install -g npm@^11.5.1` (the documented trusted-publishing floor) instead of the floating `npm@11`. CI only; no package code change.
 - CI: `release.yml` now passes step values into `run:` scripts through `env:` and shell variables instead of interpolating `${{ }}` expressions into the script text. No behavior change for normal tags and versions.
+
+### Fixed
+
+- A 404 on a repository's git tree or root listing is now confirmed once per scan against the repository lookup; when that also answers 404 the source is noted as "repository not readable" and the scan is marked degraded. A repository that exists but has no manifests stays a success (#152).
+- Lockfile-only security bumps, no app or package code change: `ip-address` 10.4.0 to 10.7.2 in the mcp tree (GHSA-rpw4-54j3-4h4q, GHSA-2vr4-cq9g-pvrc, #154); `brace-expansion` and `fast-uri` to their patched releases in the app and mcp trees (GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p, GHSA-hrr3-gc8f-f4qj, #156).
+
+### Docs
+
+- Known limitations now explain why a transitive-only advisory can be missing from a scan (the OSV channel queries manifest-declared dependencies only, and the Dependabot channel reports only alerts GitHub has already raised and that are open at scan time), name the fleet lockfile scan as the mitigation, and note that `state=all` is not a valid Dependabot alerts filter (#155). The README overview now says a transitive-only package surfaces once GitHub has raised a Dependabot alert (#157).
 
 ## [0.6.0] - 2026-09-29
 
