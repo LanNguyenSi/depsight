@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-04T12:54:27Z, `mcp-vs-web-api.md` re-verified after `mcp/src/server.ts` changed for the depsight-mcp 0.5.0 release (only the reported server version string moved from 0.4.0 to 0.5.0, `createServer` still spans `mcp/src/server.ts:15-34`); no claim in the doc names that version, re-stamped.
+
 - 2026-10-03T12:12:29Z, okf-staleness workflow re-synced from the okf-kit
   workflow template (fleet convergence ticket fdc01728): the workflow header
   now names the template as its source instead of calling the file a pattern
