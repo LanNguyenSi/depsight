@@ -77,6 +77,19 @@ describe('DELETE /api/webhooks/[id]', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await DELETE(makeDeleteRequest('wh-1'), makeParams('wh-1'));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(webhookConfigFindFirst).not.toHaveBeenCalled();
+    expect(webhookConfigDelete).not.toHaveBeenCalled();
+    expect(webhookConfigUpdate).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 404 when webhook does not belong to user (findFirst returns null)', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     webhookConfigFindFirst.mockResolvedValue(null);
@@ -136,6 +149,19 @@ describe('PATCH /api/webhooks/[id]', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await PATCH(makePatchRequest('wh-1', { enabled: false }), makeParams('wh-1'));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(webhookConfigFindFirst).not.toHaveBeenCalled();
+    expect(webhookConfigDelete).not.toHaveBeenCalled();
+    expect(webhookConfigUpdate).not.toHaveBeenCalled();
   });
 
   it('(5) returns 404 when webhook does not belong to user', async () => {

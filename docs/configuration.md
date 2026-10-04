@@ -61,7 +61,7 @@ Nothing to configure beyond the GitHub sign-in that connects your repositories. 
 - after each repository scanned by the dashboard's scan-all action;
 - on demand from the CI Health tab, or through the API.
 
-Each sync covers runs created in the last 30 days, at most 100 per workflow, and skips runs it already stored. To trigger one through the API, use a `WRITE`-scoped API token (a `READ` token gets 403) or a signed-in session; omit `repoId` to sync all tracked repositories:
+Each sync covers runs created in the last 30 days, at most 100 per workflow, and skips runs it already stored. To trigger one through the API, use a `WRITE`-scoped API token (a `READ` token gets 403) or a signed-in session; omit `repoId` to sync all tracked repositories. The endpoint is rate limited per user, see [Rate limits](api.md#rate-limits):
 
 ```bash
 curl -X POST https://<your-depsight>/api/ci/sync \

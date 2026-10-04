@@ -82,6 +82,19 @@ describe('GET /api/slack', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(slackConfigFindUnique).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
+    expect(slackConfigDeleteMany).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 200 with config when session is valid and config exists', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     const config = {
@@ -136,6 +149,19 @@ describe('POST /api/slack', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(slackConfigFindUnique).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
+    expect(slackConfigDeleteMany).not.toHaveBeenCalled();
   });
 
   it('(5) returns 400 when webhookUrl is missing', async () => {
@@ -263,6 +289,19 @@ describe('DELETE /api/slack', () => {
     expect(res.status).toBe(401);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('Unauthorized');
+  });
+
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await DELETE();
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(slackConfigFindUnique).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
+    expect(slackConfigDeleteMany).not.toHaveBeenCalled();
   });
 
   it('(12) returns 200 with success:true and calls deleteMany scoped to userId', async () => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { scanDependencies } from '@/lib/deps/scanner';
+import { depsRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,8 @@ function isDependencyScanCandidate(scan: {
 // POST /api/deps: trigger dependency age analysis. Persists scan results
 // and spends the owner's GitHub API quota, so it requires the WRITE scope
 // (a READ-scoped dsat_ token gets 403); GET below stays open to both scopes.
+// Rate limited per user (lib/rate-limit.ts), session and token callers alike:
+// over the limit the answer is 429 with Retry-After.
 export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {
@@ -29,6 +32,11 @@ export async function POST(req: NextRequest) {
   }
   if (!hasWriteScope(user)) {
     return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
+  }
+
+  const limit = depsRateLimiter.check(user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
   }
 
   const body = await req.json() as { repoId?: string };

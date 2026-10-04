@@ -66,6 +66,18 @@ describe('GET /api/dependabot/check', () => {
     expect(repoFindMany).not.toHaveBeenCalled();
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(repoFindMany).not.toHaveBeenCalled();
+    expect(createGitHubClientMock).not.toHaveBeenCalled();
+  });
+
   it('(2) empty repos list → 200 {total:0, disabledCount:0, disabled:[]}', async () => {
     authMock.mockResolvedValue(SESSION);
     repoFindMany.mockResolvedValue([]);

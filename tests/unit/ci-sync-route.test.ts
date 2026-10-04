@@ -4,7 +4,7 @@
 // Bearer dsat_ token are both covered. Body {repoId} triggers single-repo
 // sync; omitting repoId (or sending an empty body) triggers all-repos sync.
 // A sync persists data and spends GitHub quota, so a READ token gets 403.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -53,6 +53,12 @@ vi.mock('@/lib/ci/sync', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/ci/sync/route';
 import { NextRequest } from 'next/server';
+import {
+  ciSyncRepoRateLimiter,
+  ciSyncAllRateLimiter,
+  CI_SYNC_REPO_LIMIT_PER_HOUR,
+  CI_SYNC_ALL_LIMIT_PER_HOUR,
+} from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,6 +94,8 @@ function makePostRequest(body?: Record<string, unknown>): NextRequest {
 // ---------------------------------------------------------------------------
 describe('POST /api/ci/sync', () => {
   beforeEach(() => {
+    ciSyncRepoRateLimiter.reset();
+    ciSyncAllRateLimiter.reset();
     authMock.mockReset();
     headersMock.mockReset();
     apiTokenFindUnique.mockReset();
@@ -263,5 +271,108 @@ describe('POST /api/ci/sync', () => {
 
       expect(res.status).toBe(200);
     });
+  });
+});
+
+describe('POST /api/ci/sync: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    ciSyncRepoRateLimiter.reset();
+    ciSyncAllRateLimiter.reset();
+    authMock.mockReset();
+    headersMock.mockReset();
+    apiTokenFindUnique.mockReset();
+    apiTokenUpdate.mockReset();
+    repoFindFirst.mockReset();
+    syncRepoByIdMock.mockReset();
+    syncAllUserReposMock.mockReset();
+    apiTokenUpdate.mockResolvedValue({});
+    headersMock.mockResolvedValue(buildHeaders({}));
+    repoFindFirst.mockResolvedValue({ id: 'r1' });
+    syncRepoByIdMock.mockResolvedValue({ ok: true });
+    syncAllUserReposMock.mockResolvedValue({ reposAttempted: 0 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('answers 429 with Retry-After for the all-repos sync once the user is over its budget, without syncing', async () => {
+    authMock.mockResolvedValue(SESSION);
+    for (let i = 0; i < CI_SYNC_ALL_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({}))).status).toBe(200);
+    }
+    expect(syncAllUserReposMock).toHaveBeenCalledTimes(CI_SYNC_ALL_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body.error).toBe('Rate limit exceeded');
+    expect(body.retryAfterSeconds).toBe(WINDOW_MS / 1000);
+    expect(syncAllUserReposMock).toHaveBeenCalledTimes(CI_SYNC_ALL_LIMIT_PER_HOUR);
+  });
+
+  it('applies the limit to a WRITE Bearer token, keyed by the token owner, not only to a browser session', async () => {
+    mockBearerToken('WRITE');
+    for (let i = 0; i < CI_SYNC_ALL_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({}))).status).toBe(200);
+    }
+
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(429);
+    expect(syncAllUserReposMock).toHaveBeenCalledTimes(CI_SYNC_ALL_LIMIT_PER_HOUR);
+    expect(syncAllUserReposMock).toHaveBeenCalledWith('token-owner', { daysBack: 30 });
+
+    // the browser session of a different user is a different bucket
+    authMock.mockResolvedValue(SESSION);
+    headersMock.mockResolvedValue(buildHeaders({}));
+    expect((await POST(makePostRequest({}))).status).toBe(200);
+  });
+
+  it('answers 429 for the single-repo sync once its larger budget is spent, and the budgets are separate', async () => {
+    authMock.mockResolvedValue(SESSION);
+    for (let i = 0; i < CI_SYNC_REPO_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ repoId: 'r1' }))).status).toBe(200);
+    }
+
+    const blocked = await POST(makePostRequest({ repoId: 'r1' }));
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    expect(syncRepoByIdMock).toHaveBeenCalledTimes(CI_SYNC_REPO_LIMIT_PER_HOUR);
+
+    // all-repos budget is untouched
+    expect((await POST(makePostRequest({}))).status).toBe(200);
+  });
+
+  it('allows the sync again after the window has elapsed', async () => {
+    authMock.mockResolvedValue(SESSION);
+    for (let i = 0; i < CI_SYNC_ALL_LIMIT_PER_HOUR; i++) {
+      await POST(makePostRequest({}));
+    }
+    vi.advanceTimersByTime(WINDOW_MS - 1_000);
+    expect((await POST(makePostRequest({}))).status).toBe(429);
+
+    vi.advanceTimersByTime(1_000);
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('does not count a READ-token request (403) against the budget', async () => {
+    mockBearerToken('READ');
+    for (let i = 0; i < CI_SYNC_ALL_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({}))).status).toBe(403);
+    }
+    mockBearerToken('WRITE');
+
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(200);
   });
 });

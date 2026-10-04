@@ -2,7 +2,7 @@
 // Mocking @/lib/cve/scanner in this file is intentionally isolated from
 // scanner.test.ts because vi.mock is file-scoped: mixing a full mock of
 // scanRepository with the real implementation in one file breaks both sets.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -58,6 +58,7 @@ vi.mock('@/lib/cve/scanner', async (importOriginal) => {
 import { POST, GET } from '@/app/api/scan/route';
 import { NextRequest } from 'next/server';
 import { ScanAccessError } from '@/lib/cve/scanner';
+import { scanRateLimiter, SCAN_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +76,7 @@ function makeRequest(body: Record<string, unknown>): NextRequest {
 // ---------------------------------------------------------------------------
 describe('POST /api/scan — route status codes', () => {
   beforeEach(() => {
+    scanRateLimiter.reset();
     resolveRequestUserMock.mockReset();
     scanRepositoryMock.mockReset();
     resolveRequestUserMock.mockResolvedValue({
@@ -362,5 +364,105 @@ describe('GET /api/scan — route status codes', () => {
     // surface where each CVE came from.
     expect(body.scan.advisories[0].source).toBe('dependabot');
     expect(body.scan.advisories[1].source).toBe('osv');
+  });
+});
+
+describe('POST /api/scan: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  function asUser(id: string) {
+    resolveRequestUserMock.mockResolvedValue({
+      id,
+      githubLogin: 'octocat',
+      githubToken: 'gh_tok',
+      scope: 'WRITE',
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scanRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    scanRepositoryMock.mockReset();
+    scanRepositoryMock.mockResolvedValue({ scanId: 'scan-1', alreadyRunning: false });
+    asUser('me');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('answers 429 with Retry-After once the user is over the limit, without starting a scan', async () => {
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR; i++) {
+      const ok = await POST(makeRequest({ repoId: 'repo-1' }));
+      expect(ok.status).toBe(200);
+    }
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR);
+
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body.error).toBe('Rate limit exceeded');
+    expect(body.retryAfterSeconds).toBe(WINDOW_MS / 1000);
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user: another user is not affected by the first user hitting the limit', async () => {
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR; i++) {
+      await POST(makeRequest({ repoId: 'repo-1' }));
+    }
+    expect((await POST(makeRequest({ repoId: 'repo-1' }))).status).toBe(429);
+
+    asUser('someone-else');
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('allows scans again after the window has elapsed, and Retry-After shrinks as the window runs down', async () => {
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR; i++) {
+      await POST(makeRequest({ repoId: 'repo-1' }));
+    }
+    vi.advanceTimersByTime(WINDOW_MS - 30_000);
+    const blocked = await POST(makeRequest({ repoId: 'repo-1' }));
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBe('30');
+
+    vi.advanceTimersByTime(30_000);
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('does not count a request that fails authentication or the write-scope check', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR + 5; i++) {
+      expect((await POST(makeRequest({ repoId: 'repo-1' }))).status).toBe(401);
+    }
+    asUser('me');
+
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('does not count a READ-token request (403) against the budget', async () => {
+    resolveRequestUserMock.mockResolvedValue({
+      id: 'me',
+      githubLogin: 'octocat',
+      githubToken: 'gh_tok',
+      scope: 'READ',
+    });
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makeRequest({ repoId: 'repo-1' }))).status).toBe(403);
+    }
+    asUser('me');
+
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
   });
 });

@@ -57,6 +57,17 @@ describe('POST /api/pr-scan', () => {
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await POST(makePostRequest({ owner: 'acme', repo: 'api', prNumber: 42 }));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 400 when owner is missing', async () => {
     authMock.mockResolvedValue(SESSION);
 

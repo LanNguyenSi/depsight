@@ -1,6 +1,6 @@
 // Route-level tests for GET + POST /api/deps.
 // Covers isDependencyScanCandidate filtering branches with mutation-killing assertions.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -55,6 +55,7 @@ vi.mock('@/lib/deps/scanner', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/deps/route';
 import { NextRequest } from 'next/server';
+import { depsRateLimiter, DEPS_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,6 +76,7 @@ function makePostRequest(body: Record<string, unknown>): NextRequest {
 // ---------------------------------------------------------------------------
 describe('POST /api/deps', () => {
   beforeEach(() => {
+    depsRateLimiter.reset();
     resolveRequestUserMock.mockReset();
     repoFindFirst.mockReset();
     scanDependenciesMock.mockReset();
@@ -302,5 +304,74 @@ describe('GET /api/deps', () => {
     expect(body.scanId).toBe('scan-empty');
     expect(body.summary.total).toBe(0);
     expect(body.dependencies).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/deps: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/deps: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    depsRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    scanDependenciesMock.mockReset();
+    repoFindFirst.mockReset();
+    repoFindFirst.mockResolvedValue({ id: 'repo-1', fullName: 'owner/repo' });
+    scanDependenciesMock.mockResolvedValue({ scanId: 'scan-1', depsCount: 1 });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('answers 429 with Retry-After once the user is over the limit, without scanning', async () => {
+    for (let i = 0; i < DEPS_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+    }
+    expect(scanDependenciesMock).toHaveBeenCalledTimes(DEPS_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body.error).toBe('Rate limit exceeded');
+    expect(body.retryAfterSeconds).toBe(WINDOW_MS / 1000);
+    expect(scanDependenciesMock).toHaveBeenCalledTimes(DEPS_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and allows requests again after the window has elapsed', async () => {
+    for (let i = 0; i < DEPS_LIMIT_PER_HOUR; i++) {
+      await POST(makePostRequest({ repoId: 'repo-1' }));
+    }
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(429);
+
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+  });
+
+  it('does not count a request that fails authentication or the write-scope check', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < DEPS_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(401);
+    }
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    for (let i = 0; i < DEPS_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(403);
+    }
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
   });
 });
