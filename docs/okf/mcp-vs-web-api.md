@@ -3,7 +3,7 @@ type: overview
 title: MCP server versus the web API - a thin proxy, narrower than the dashboard
 description: every MCP tool calls the same authenticated REST API the dashboard uses, through one HTTP client with no direct database access; only one tool (depsight_rescan) writes, and the MCP surface has no equivalent for policy CRUD, tokens, webhooks, Slack config, Dependabot enable, repo sync, PR-triggered scans, CI sync, export, or direct license and dependency-age scans (depsight_rescan refreshes CVE data only).
 tags: [mcp, api, surface]
-timestamp: 2026-10-04T13:58:21Z
+timestamp: 2026-10-04T16:48:33Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts
@@ -58,7 +58,7 @@ Every route in this table resolves its caller with `resolveRequestUser` (`lib/au
 
 ## Exactly one tool writes; the other POST does not
 
-`depsight_rescan` is the only tool that mutates state: its `POST /api/scan` triggers `scanRepository()`, the CVE scan pipeline (`app/api/scan/route.ts:30`), the same one the dashboard's own rescan action uses. It refreshes CVE data only: neither the license scan (`scanLicenses`) nor the dependency-age scan (`scanDependencies`) runs as part of it, so a call to `depsight_get_deps` or `depsight_get_license_report` right after `depsight_rescan` can still return data from before that call, unchanged. `depsight_evaluate_policy` is also a `POST`, but its own description says "Read-only, does not mutate state" (`mcp/src/tools/policy.ts:26`), and the route it calls, `app/api/policies/evaluate/route.ts`, only calls `evaluatePolicies()` and returns the resulting JSON; no Prisma write call appears anywhere in that route. This confirms the "read-only apart from the scan trigger" framing in the MCP server sections of `docs/features.md` and `docs/api.md` precisely: it means read-only apart from the one tool that scans, not "every POST is a write."
+`depsight_rescan` is the only tool that mutates state: its `POST /api/scan` triggers `scanRepository()`, the CVE scan pipeline (`app/api/scan/route.ts:37`), the same one the dashboard's own rescan action uses. It refreshes CVE data only: neither the license scan (`scanLicenses`) nor the dependency-age scan (`scanDependencies`) runs as part of it, so a call to `depsight_get_deps` or `depsight_get_license_report` right after `depsight_rescan` can still return data from before that call, unchanged. `depsight_evaluate_policy` is also a `POST`, but its own description says "Read-only, does not mutate state" (`mcp/src/tools/policy.ts:26`), and the route it calls, `app/api/policies/evaluate/route.ts`, only calls `evaluatePolicies()` and returns the resulting JSON; no Prisma write call appears anywhere in that route. This confirms the "read-only apart from the scan trigger" framing in the MCP server sections of `docs/features.md` and `docs/api.md` precisely: it means read-only apart from the one tool that scans, not "every POST is a write."
 
 ## What the web API can do that MCP cannot
 
