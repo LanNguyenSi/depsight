@@ -54,7 +54,7 @@ Create an API token on the Settings page (or via `POST /api/tokens` from a signe
 
 | Doc | Description |
 |---|---|
-| [docs/configuration.md](docs/configuration.md) | Env vars, Make targets, GitHub OAuth, the CI Health (ci-insights) integration |
+| [docs/configuration.md](docs/configuration.md) | Env vars, Make targets, GitHub OAuth, how CI Health syncs GitHub Actions data |
 | [docs/api.md](docs/api.md) | REST API reference |
 | [docs/architecture.md](docs/architecture.md) | Architecture: Next.js App Router, Prisma, project layout |
 | [docs/features.md](docs/features.md) | Full feature list and known limitations |
