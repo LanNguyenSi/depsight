@@ -74,9 +74,24 @@ const HOUR_MS = 60 * 60 * 1000;
 export const SCAN_LIMIT_PER_HOUR = 300;
 export const CI_SYNC_REPO_LIMIT_PER_HOUR = 300;
 export const CI_SYNC_ALL_LIMIT_PER_HOUR = 12;
+// POST /api/license and POST /api/deps each scan one repo per call, like
+// POST /api/scan, so they get the same ceiling, each with its own budget (the
+// dashboard's "scan all" loop calls each of the three once per tracked repo).
+export const LICENSE_LIMIT_PER_HOUR = 300;
+export const DEPS_LIMIT_PER_HOUR = 300;
 
 /** POST /api/scan, keyed by user id. */
 export const scanRateLimiter = createRateLimiter({ limit: SCAN_LIMIT_PER_HOUR, windowMs: HOUR_MS });
+/** POST /api/license, keyed by user id. */
+export const licenseRateLimiter = createRateLimiter({
+  limit: LICENSE_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/deps, keyed by user id. */
+export const depsRateLimiter = createRateLimiter({
+  limit: DEPS_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
 /** POST /api/ci/sync with a repoId, keyed by user id. */
 export const ciSyncRepoRateLimiter = createRateLimiter({
   limit: CI_SYNC_REPO_LIMIT_PER_HOUR,

@@ -18,7 +18,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 | `depsight_ci_analytics` | GitHub Actions CI insights — per-repo (with `repoId`) or cross-repo (without) |
 | `depsight_get_sbom` | Export the CycloneDX 1.4 SBOM for a repo (requires a completed scan) |
 | `depsight_list_policies` | List the user's configured dependency policies |
-| `depsight_rescan` | Trigger a synchronous CVE scan for a tracked repository (the one write tool) |
+| `depsight_rescan` | Trigger a synchronous CVE scan for a tracked repository (the one write tool; the underlying `POST /api/scan` is rate limited per user, see [Rate limits](../docs/api.md#rate-limits)) |
 
 All tools are **read-only** except `depsight_rescan`, which triggers a CVE scan for a tracked repository. Webhook management and policy mutation are not exposed.
 

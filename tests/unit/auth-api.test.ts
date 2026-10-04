@@ -161,6 +161,45 @@ describe('resolveRequestUser', () => {
     expect(result && hasWriteScope(result)).toBe(false);
   });
 
+  // A JWT session whose user row is gone carries a token but no user id.
+  // Callers filter Prisma queries by user.id, and Prisma drops an undefined
+  // filter value, so such a session must never resolve to a user.
+  it('returns null for a session without a user id and no Authorization header', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'x' } });
+    headersMock.mockResolvedValue(buildHeaders({}));
+
+    const result = await resolveRequestUser();
+
+    expect(result).toBeNull();
+    expect(apiTokenFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('falls through to a valid dsat_ Bearer token when the session has no user id, resolving the token owner', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'x' } });
+    headersMock.mockResolvedValue(
+      buildHeaders({ authorization: 'Bearer dsat_valid_token' }),
+    );
+    apiTokenFindUnique.mockResolvedValue({
+      id: 'tok-owner',
+      revokedAt: null,
+      scope: 'READ',
+      user: {
+        id: 'token-owner',
+        githubLogin: 'owner',
+        githubToken: 'gh_token_owner',
+      },
+    });
+
+    const result = await resolveRequestUser();
+
+    expect(result).toEqual({
+      id: 'token-owner',
+      githubLogin: 'owner',
+      githubToken: 'gh_token_owner',
+      scope: 'READ',
+    });
+  });
+
   it('returns null when the bearer token is not dsat_ prefixed', async () => {
     authMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(

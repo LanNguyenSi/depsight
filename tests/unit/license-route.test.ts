@@ -1,6 +1,6 @@
 // Route-level tests for GET + POST /api/license.
 // Asserts Prisma.DbNull filter and computed summary shape.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Prisma } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
@@ -53,6 +53,7 @@ vi.mock('@/lib/license/scanner', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/license/route';
 import { NextRequest } from 'next/server';
+import { licenseRateLimiter, LICENSE_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,6 +74,7 @@ function makePostRequest(body: Record<string, unknown>): NextRequest {
 // ---------------------------------------------------------------------------
 describe('POST /api/license', () => {
   beforeEach(() => {
+    licenseRateLimiter.reset();
     resolveRequestUserMock.mockReset();
     scanLicensesMock.mockReset();
     resolveRequestUserMock.mockResolvedValue(mockUser);
@@ -221,5 +223,72 @@ describe('GET /api/license', () => {
     expect(body.licenses[2].license).toBe('GPL-3.0');
     expect(body.licenses[2].policyViolation).toBe(true);
     expect(body.licenses[2].isCompatible).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/license: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/license: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    licenseRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    scanLicensesMock.mockReset();
+    scanLicensesMock.mockResolvedValue({ scanId: 'scan-1', licenseCount: 0 });
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('answers 429 with Retry-After once the user is over the limit, without scanning', async () => {
+    for (let i = 0; i < LICENSE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+    }
+    expect(scanLicensesMock).toHaveBeenCalledTimes(LICENSE_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body.error).toBe('Rate limit exceeded');
+    expect(body.retryAfterSeconds).toBe(WINDOW_MS / 1000);
+    expect(scanLicensesMock).toHaveBeenCalledTimes(LICENSE_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and allows requests again after the window has elapsed', async () => {
+    for (let i = 0; i < LICENSE_LIMIT_PER_HOUR; i++) {
+      await POST(makePostRequest({ repoId: 'repo-1' }));
+    }
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(429);
+
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(200);
+  });
+
+  it('does not count a request that fails authentication or the write-scope check', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < LICENSE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(401);
+    }
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    for (let i = 0; i < LICENSE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ repoId: 'repo-1' }))).status).toBe(403);
+    }
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
   });
 });

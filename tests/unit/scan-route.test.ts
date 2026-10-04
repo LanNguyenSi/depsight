@@ -448,4 +448,21 @@ describe('POST /api/scan: per-user rate limit', () => {
 
     expect(res.status).toBe(200);
   });
+
+  it('does not count a READ-token request (403) against the budget', async () => {
+    resolveRequestUserMock.mockResolvedValue({
+      id: 'me',
+      githubLogin: 'octocat',
+      githubToken: 'gh_tok',
+      scope: 'READ',
+    });
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makeRequest({ repoId: 'repo-1' }))).status).toBe(403);
+    }
+    asUser('me');
+
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
+  });
 });
