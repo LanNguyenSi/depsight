@@ -22,9 +22,9 @@ function isDependencyScanCandidate(scan: {
 
 // POST /api/deps: trigger dependency age analysis. Persists scan results
 // and spends the owner's GitHub API quota, so it requires the WRITE scope
-// (a READ-scoped dsat_ token gets 403); GET below stays open to both scopes. Rate limited per user
-// (lib/rate-limit.ts), session and token callers alike: over the limit the
-// answer is 429 with Retry-After.
+// (a READ-scoped dsat_ token gets 403); GET below stays open to both scopes.
+// Rate limited per user (lib/rate-limit.ts), session and token callers alike:
+// over the limit the answer is 429 with Retry-After.
 export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {

@@ -67,10 +67,11 @@ export function createRateLimiter(options: { limit: number; windowMs: number }):
 
 const HOUR_MS = 60 * 60 * 1000;
 
-// Per-user limits for the routes that spend the owner's GitHub quota. They are
-// set well above the dashboard's "scan all" loop (one scan and one CI sync per
-// tracked repo, run sequentially) and above a CI job that syncs on every push,
-// while still stopping a looping token from draining the quota.
+// Per-user limits for the routes that spend the owner's GitHub quota. They cap
+// a looping caller at a number of requests per endpoint per hour (requests,
+// not GitHub API calls: one scan or sync can make several). They sit above the
+// dashboard's "scan all" loop (scan, license, deps and one CI sync per tracked
+// repo) and above a CI job that syncs on every push.
 export const SCAN_LIMIT_PER_HOUR = 300;
 export const CI_SYNC_REPO_LIMIT_PER_HOUR = 300;
 export const CI_SYNC_ALL_LIMIT_PER_HOUR = 12;
