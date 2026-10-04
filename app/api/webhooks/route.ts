@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 // GET /api/webhooks — list user's webhook configs
 export async function GET() {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const webhooks = await prisma.webhookConfig.findMany({
     where: { userId: session.user.id },
@@ -22,7 +22,7 @@ export async function GET() {
 // POST /api/webhooks — create a webhook config
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json() as {
     name?: string;

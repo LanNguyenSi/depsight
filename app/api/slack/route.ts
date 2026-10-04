@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 // GET /api/slack — get user's Slack config
 export async function GET() {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const config = await prisma.slackConfig.findUnique({
     where: { userId: session.user.id },
@@ -20,7 +20,7 @@ export async function GET() {
 // POST /api/slack — create or update Slack config
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json() as {
     webhookUrl?: string;
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
 // DELETE /api/slack — remove Slack config
 export async function DELETE() {
   const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   await prisma.slackConfig.deleteMany({ where: { userId: session.user.id } });
   return NextResponse.json({ success: true });

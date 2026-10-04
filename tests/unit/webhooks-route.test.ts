@@ -75,6 +75,19 @@ describe('GET /api/webhooks', () => {
     expect(body.error).toBe('Unauthorized');
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await GET();
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(webhookConfigFindMany).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 200 with webhooks list on valid session', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     webhookConfigFindMany.mockResolvedValue([
@@ -109,6 +122,19 @@ describe('POST /api/webhooks', () => {
     const res = await POST(makePostRequest({ name: 'n', url: 'https://x.com', events: ['cve.critical'] }));
 
     expect(res.status).toBe(401);
+  });
+
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await POST(makePostRequest({ name: 'n', url: 'https://x.com', events: ['cve.critical'] }));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(webhookConfigFindMany).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
   });
 
   it('(4) returns 400 when name is missing', async () => {

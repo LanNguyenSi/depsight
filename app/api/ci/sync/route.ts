@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { syncRepoById, syncAllUserRepos } from '@/lib/ci/sync';
+import {
+  ciSyncRepoRateLimiter,
+  ciSyncAllRateLimiter,
+  rateLimitedResponse,
+} from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,7 +14,9 @@ export const dynamic = 'force-dynamic';
 // Body: { repoId?: string } — if omitted, syncs all tracked repos for the user.
 // Reachable with a dsat_ Bearer token or a browser login. The sync persists
 // workflow runs and spends the owner's GitHub API quota, so it requires the
-// WRITE scope (a READ-scoped token gets 403), like POST /api/scan.
+// WRITE scope (a READ-scoped token gets 403), like POST /api/scan. Rate limited
+// per user (lib/rate-limit.ts): a single-repo sync and the all-repos sync use
+// separate budgets, and over the limit the answer is 429 with Retry-After.
 export async function POST(req: NextRequest) {
   const user = await resolveRequestUser();
   if (!user) {
@@ -24,6 +31,11 @@ export async function POST(req: NextRequest) {
     body = await req.json();
   } catch {
     // empty body is fine
+  }
+
+  const limit = (body.repoId ? ciSyncRepoRateLimiter : ciSyncAllRateLimiter).check(user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
   }
 
   if (body.repoId) {

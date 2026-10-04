@@ -2,6 +2,9 @@ import { defineConfig } from 'vitest/config';
 import { resolve } from 'path';
 
 export default defineConfig({
+  // tsconfig keeps jsx as "preserve" for Next; transform JSX here so a test can
+  // import a server page (app/**/page.tsx) with its client component mocked.
+  oxc: { jsx: { runtime: 'automatic' } },
   test: {
     environment: 'node',
     globals: true,
@@ -19,6 +22,14 @@ export default defineConfig({
         functions: 40,
         lines: 37,
         // Per-file high floors for the newly-covered security files.
+        // lib/rate-limit.ts measured 100/100/100/100 (fully covered files are
+        // not listed in the text report).
+        'lib/rate-limit.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
         'lib/net/safe-fetch.ts': {
           statements: 90,
           branches: 83,

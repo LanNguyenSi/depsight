@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function PoliciesPage() {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     redirect('/login');
   }
 

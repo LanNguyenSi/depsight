@@ -70,6 +70,18 @@ describe('POST /api/repos/sync', () => {
     expect(getUserReposMock).not.toHaveBeenCalled();
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await POST();
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(getUserReposMock).not.toHaveBeenCalled();
+    expect(syncUserReposMock).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 200 {synced, removed} on happy path', async () => {
     authMock.mockResolvedValue(SESSION);
     getUserReposMock.mockResolvedValue(GITHUB_REPOS);

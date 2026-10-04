@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 // POST /api/repos/sync — sync GitHub repos into DB for current user
 export async function POST() {
   const session = await auth();
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Every route and server page that filters by the session user id now requires `session.user.id`, not just `session.user`: a signed-in session whose user row is gone has no id, and Prisma drops an `undefined` filter value, so `/api/webhooks`, `/api/slack`, `/api/dependabot*`, `/api/export`, `/api/pr-scan`, `/api/repos/sync`, `/overview`, `/dashboard` and `/policies` could query or (for `DELETE /api/slack`) delete rows of every user. They now answer 401 (pages redirect to `/login`).
+- `POST /api/scan` and `POST /api/ci/sync` are rate limited per user (a `WRITE` token cannot drain the owner's GitHub quota): 300 requests per hour, and 12 per hour for the all-repos form of `/api/ci/sync`. Over the limit they answer 429 with `Retry-After`. See `docs/api.md`.
+
 ### Fixed
 
 - `GET /api/sbom` accepts a `dsat_` Bearer token of either scope, so the MCP `depsight_get_sbom` tool no longer gets 401. `POST /api/ci/sync` accepts a `WRITE`-scoped token; a `READ` token gets 403. Both routes keep their owner scoping, and a session without a user id now gets 401 on `/api/sbom`.

@@ -7,7 +7,7 @@ import { OverviewClient } from './OverviewClient';
 
 export default async function OverviewPage() {
   const session = await auth();
-  if (!session?.user) redirect('/login');
+  if (!session?.user?.id) redirect('/login');
 
   const overview = await getTeamHealthOverview(session.user.id);
 

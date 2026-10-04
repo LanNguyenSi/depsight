@@ -95,6 +95,21 @@ describe('POST /api/export', () => {
     expect(loadRepoExportDataMock).not.toHaveBeenCalled();
   });
 
+  it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
+    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Unauthorized');
+    expect(loadRepoExportDataMock).not.toHaveBeenCalled();
+    expect(scanRepositoryMock).not.toHaveBeenCalled();
+    expect(scanLicensesMock).not.toHaveBeenCalled();
+    expect(scanDependenciesMock).not.toHaveBeenCalled();
+    expect(buildRepoExportArchiveMock).not.toHaveBeenCalled();
+  });
+
   it('(2) returns 400 when repoId is missing from the request body', async () => {
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
 

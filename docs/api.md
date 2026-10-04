@@ -7,11 +7,13 @@ All endpoints except `GET /api/health` and the NextAuth sign-in handlers under `
 
 A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` accepts an optional `scope` body field, defaulting to `WRITE`); a `READ` token gets 403 on `POST /api/policies`, `PUT`/`DELETE /api/policies/[id]`, `POST /api/ci/sync`, and the three scan-triggering POSTs (`/api/scan`, `/api/license`, `/api/deps`); all other Bearer-capable endpoints work with either scope. A session always has full access.
 
+A session counts only when it carries a user id: a signed-in session whose user row no longer exists has none and is treated as no session (401 on every session-only route, and a Bearer token is then tried on the routes that accept one).
+
 This table is a curated subset; the app exposes more route handlers (e.g. `/api/me`, `/api/tokens`, `/api/webhooks`, `/api/slack`, `/api/history`, `/api/overview`, `/api/pr-scan`, `/api/ci/analytics/*`) than are listed here.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read |
+| `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read; rate limited, see [Rate limits](#rate-limits) |
 | `POST` | `/api/license` | Run license compliance check (body: `{ repoId }`) |
 | `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
 | `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |
@@ -24,8 +26,20 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `POST` | `/api/dependabot` | Enable Dependabot alerts for a repo (body: `{ repoId }`) |
 | `GET` | `/api/dependabot/check` | Check which repos have Dependabot disabled |
 | `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot for the caller's tracked repos among the given `repoIds` (body: `{ repoIds }`) |
-| `POST` | `/api/ci/sync` | Sync GitHub Actions run data into the CI Health analytics (session or `WRITE` Bearer token; optional body `{ repoId }`, omit to sync all tracked repos) |
+| `POST` | `/api/ci/sync` | Sync GitHub Actions run data into the CI Health analytics (session or `WRITE` Bearer token; optional body `{ repoId }`, omit to sync all tracked repos); rate limited, see [Rate limits](#rate-limits) |
 | `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
+
+## Rate limits
+
+`POST /api/scan` and `POST /api/ci/sync` spend the owner's GitHub API quota, so they are limited per user, for a browser session and a `WRITE` Bearer token alike (the limit follows the user the credential resolves to, so several tokens of one user share it). The limit is a fixed one-hour window per user:
+
+| Endpoint | Limit per user and hour |
+|----------|-------------------------|
+| `POST /api/scan` | 300 |
+| `POST /api/ci/sync` with a `repoId` | 300 |
+| `POST /api/ci/sync` without a `repoId` (30-day sync of every tracked repo) | 12 |
+
+Over the limit the endpoint answers `429` with a `Retry-After` header (whole seconds until the window resets) and a body `{ "error": "Rate limit exceeded", "retryAfterSeconds": <n> }`; no scan or sync is started. A request that fails authentication (401) or the write-scope check (403) does not count. The counters live in the app process, which matches the single-instance deployment (one `app` service); behind several instances each instance would enforce the limit separately. The limits sit above the dashboard's "scan all" run for an account with up to 300 tracked repositories and above a CI job that syncs one repository after every push (`/api/ci/sync` with a `repoId`).
 
 ## MCP server
 
