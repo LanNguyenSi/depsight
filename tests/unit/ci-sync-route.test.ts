@@ -1,13 +1,27 @@
 // Route-level tests for POST /api/ci/sync.
-// Uses auth() (PATTERN B). Body {repoId} triggers single-repo sync;
-// omitting repoId (or sending an empty body) triggers all-repos sync.
+// The route resolves its caller through the real resolveRequestUser (auth +
+// headers + apiToken lookup are the only stubs), so a browser session and a
+// Bearer dsat_ token are both covered. Body {repoId} triggers single-repo
+// sync; omitting repoId (or sending an empty body) triggers all-repos sync.
+// A sync persists data and spends GitHub quota, so a READ token gets 403.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, repoFindFirst, syncRepoByIdMock, syncAllUserReposMock } = vi.hoisted(() => ({
+const {
+  authMock,
+  headersMock,
+  apiTokenFindUnique,
+  apiTokenUpdate,
+  repoFindFirst,
+  syncRepoByIdMock,
+  syncAllUserReposMock,
+} = vi.hoisted(() => ({
   authMock: vi.fn(),
+  headersMock: vi.fn(),
+  apiTokenFindUnique: vi.fn(),
+  apiTokenUpdate: vi.fn(),
   repoFindFirst: vi.fn(),
   syncRepoByIdMock: vi.fn(),
   syncAllUserReposMock: vi.fn(),
@@ -17,8 +31,13 @@ const { authMock, repoFindFirst, syncRepoByIdMock, syncAllUserReposMock } = vi.h
 // Module mocks
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('next/headers', () => ({ headers: headersMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    apiToken: {
+      findUnique: apiTokenFindUnique,
+      update: apiTokenUpdate,
+    },
     repo: {
       findFirst: repoFindFirst,
     },
@@ -40,6 +59,21 @@ import { NextRequest } from 'next/server';
 // ---------------------------------------------------------------------------
 const SESSION = { user: { id: 'user-1', githubToken: 'tok-123' } };
 
+function buildHeaders(map: Record<string, string>) {
+  return { get: (k: string) => map[k.toLowerCase()] ?? null };
+}
+
+function mockBearerToken(scope: 'READ' | 'WRITE') {
+  authMock.mockResolvedValue(null);
+  headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_valid' }));
+  apiTokenFindUnique.mockResolvedValue({
+    id: 'tok-1',
+    revokedAt: null,
+    scope,
+    user: { id: 'token-owner', githubLogin: 'agent', githubToken: 'gh_tok' },
+  });
+}
+
 function makePostRequest(body?: Record<string, unknown>): NextRequest {
   const init: RequestInit = { method: 'POST' };
   if (body !== undefined) {
@@ -55,9 +89,15 @@ function makePostRequest(body?: Record<string, unknown>): NextRequest {
 describe('POST /api/ci/sync', () => {
   beforeEach(() => {
     authMock.mockReset();
+    headersMock.mockReset();
+    apiTokenFindUnique.mockReset();
+    apiTokenUpdate.mockReset();
     repoFindFirst.mockReset();
     syncRepoByIdMock.mockReset();
     syncAllUserReposMock.mockReset();
+    apiTokenUpdate.mockResolvedValue({});
+    // Default: no Authorization header (browser-session tests).
+    headersMock.mockResolvedValue(buildHeaders({}));
   });
 
   it('(1) returns 401 when there is no session', async () => {
@@ -138,5 +178,90 @@ describe('POST /api/ci/sync', () => {
     const body = await res.json() as { summary: unknown };
     expect(body).toHaveProperty('summary');
     expect(syncAllUserReposMock).toHaveBeenCalledWith('user-1', { daysBack: 30 });
+  });
+  describe('Bearer dsat_ token access', () => {
+    it('(7) a READ-scoped token gets 403 and nothing is synced', async () => {
+      mockBearerToken('READ');
+
+      const res = await POST(makePostRequest({ repoId: 'r1' }));
+
+      expect(res.status).toBe(403);
+      const body = await res.json() as { error: string };
+      expect(body.error).toBe('This token does not have write access');
+      expect(repoFindFirst).not.toHaveBeenCalled();
+      expect(syncRepoByIdMock).not.toHaveBeenCalled();
+      expect(syncAllUserReposMock).not.toHaveBeenCalled();
+    });
+
+    it('(8) a WRITE-scoped token syncs one repo, with the ownership check scoped to the token owner', async () => {
+      mockBearerToken('WRITE');
+      repoFindFirst.mockResolvedValue({ id: 'r1' });
+      syncRepoByIdMock.mockResolvedValue({ runsIngested: 2 });
+
+      const res = await POST(makePostRequest({ repoId: 'r1' }));
+
+      expect(res.status).toBe(200);
+      expect(repoFindFirst).toHaveBeenCalledWith({
+        where: { id: 'r1', userId: 'token-owner' },
+        select: { id: true },
+      });
+      expect(syncRepoByIdMock).toHaveBeenCalledWith('r1', { daysBack: 30 });
+    });
+
+    it('(9) a WRITE-scoped token without repoId syncs all repos of the token owner only', async () => {
+      mockBearerToken('WRITE');
+      syncAllUserReposMock.mockResolvedValue({ reposAttempted: 1 });
+
+      const res = await POST(makePostRequest({}));
+
+      expect(res.status).toBe(200);
+      expect(syncAllUserReposMock).toHaveBeenCalledWith('token-owner', { daysBack: 30 });
+    });
+
+    it('(10) a WRITE-scoped token cannot sync a repo it does not own (404)', async () => {
+      mockBearerToken('WRITE');
+      repoFindFirst.mockResolvedValue(null);
+
+      const res = await POST(makePostRequest({ repoId: 'someone-elses-repo' }));
+
+      expect(res.status).toBe(404);
+      expect(syncRepoByIdMock).not.toHaveBeenCalled();
+    });
+
+    it('(11) an unknown dsat_ token gets 401', async () => {
+      authMock.mockResolvedValue(null);
+      headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_unknown' }));
+      apiTokenFindUnique.mockResolvedValue(null);
+
+      const res = await POST(makePostRequest({ repoId: 'r1' }));
+
+      expect(res.status).toBe(401);
+      expect(syncRepoByIdMock).not.toHaveBeenCalled();
+    });
+
+    it('(12) a revoked dsat_ token gets 401', async () => {
+      authMock.mockResolvedValue(null);
+      headersMock.mockResolvedValue(buildHeaders({ authorization: 'Bearer dsat_revoked' }));
+      apiTokenFindUnique.mockResolvedValue({
+        id: 'tok-2',
+        revokedAt: new Date('2026-01-01T00:00:00Z'),
+        scope: 'WRITE',
+        user: { id: 'token-owner', githubLogin: 'agent', githubToken: 'gh_tok' },
+      });
+
+      const res = await POST(makePostRequest({ repoId: 'r1' }));
+
+      expect(res.status).toBe(401);
+      expect(syncRepoByIdMock).not.toHaveBeenCalled();
+    });
+
+    it('(13) a browser session keeps full access (resolves to WRITE)', async () => {
+      authMock.mockResolvedValue(SESSION);
+      syncAllUserReposMock.mockResolvedValue({ reposAttempted: 0 });
+
+      const res = await POST(makePostRequest({}));
+
+      expect(res.status).toBe(200);
+    });
   });
 });

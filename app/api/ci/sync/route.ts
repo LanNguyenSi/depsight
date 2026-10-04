@@ -1,16 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { syncRepoById, syncAllUserRepos } from '@/lib/ci/sync';
 
 export const dynamic = 'force-dynamic';
 
 // POST /api/ci/sync
-// Body: { repoId?: string } — if omitted, syncs all tracked repos for the user
+// Body: { repoId?: string } — if omitted, syncs all tracked repos for the user.
+// Reachable with a dsat_ Bearer token or a browser login. The sync persists
+// workflow runs and spends the owner's GitHub API quota, so it requires the
+// WRITE scope (a READ-scoped token gets 403), like POST /api/scan.
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!hasWriteScope(user)) {
+    return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
   let body: { repoId?: string } = {};
@@ -23,7 +29,7 @@ export async function POST(req: NextRequest) {
   if (body.repoId) {
     // Verify the repo belongs to this user
     const repo = await prisma.repo.findFirst({
-      where: { id: body.repoId, userId: session.user.id },
+      where: { id: body.repoId, userId: user.id },
       select: { id: true },
     });
     if (!repo) {
@@ -42,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
   } else {
     // Sync all tracked repos for this user
-    const summary = await syncAllUserRepos(session.user.id, { daysBack: 30 });
+    const summary = await syncAllUserRepos(user.id, { daysBack: 30 });
     return NextResponse.json({ summary });
   }
 }

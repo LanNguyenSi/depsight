@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { resolveRequestUser } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { generateSBOM } from '@/lib/sbom/cyclonedx';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/sbom?repoId=xxx — export SBOM for a repo
+// GET /api/sbom?repoId=xxx — export SBOM for a repo. Read-only, so it is
+// reachable with a dsat_ Bearer token of either scope (the MCP server's
+// depsight_get_sbom calls it that way) or a browser login.
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  const user = await resolveRequestUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -24,7 +26,7 @@ export async function GET(req: NextRequest) {
     where: {
       repoId,
       status: 'COMPLETED',
-      repo: { userId: session.user.id, tracked: true },
+      repo: { userId: user.id, tracked: true },
     },
     orderBy: { scannedAt: 'desc' },
     select: { id: true },
@@ -38,7 +40,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const bom = await generateSBOM(session.user.id, repoId);
+    const bom = await generateSBOM(user.id, repoId);
 
     const json = JSON.stringify(bom, null, 2);
     // Only prefix the component name when one is present; otherwise fall back to
