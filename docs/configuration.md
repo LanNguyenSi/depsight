@@ -47,19 +47,21 @@ npm run db:push        # Push schema changes (dev)
 npm run db:studio      # Database GUI
 ```
 
-## CI Health (ci-insights integration)
+## CI Health (GitHub Actions sync)
 
-The **CI Health** tab in the dashboard surfaces GitHub Actions analytics (fail rates, build times, flaky jobs) powered by [ci-insights](https://github.com/LanNguyenSi/ci-insights), a companion service that syncs and stores workflow data from GitHub Actions.
+The **CI Health** tab in the dashboard surfaces GitHub Actions analytics (fail rates, build times, flaky jobs). depsight ingests the data itself: it reads workflow runs and jobs from the GitHub API with the repository owner's stored GitHub token (`lib/ci/ingest.ts`) and stores them in its own database. No separate service is involved and nothing extra needs to be deployed.
 
-> The tab is only visible once CI data has been synced. depsight works fully without ci-insights; the CI Health tab simply won't appear if no data has been synced.
+> The tab is only visible for a repository once CI data has been synced for it. A repository with no GitHub Actions workflows never gets the tab.
 
 ### Setup
 
-1. Deploy [ci-insights](https://github.com/LanNguyenSi/ci-insights) and configure your GitHub token.
-2. Run a sync for the repository.
-3. The CI Health tab appears automatically in depsight once data is available.
+Nothing to configure beyond the GitHub sign-in that connects your repositories. The sync runs:
 
-To trigger a sync manually via the depsight API:
+- on every cycle of the auto-scan cron (`SCAN_INTERVAL_MINUTES`), for all of a user's tracked repositories;
+- after each repository scanned by the dashboard's scan-all action;
+- on demand from the CI Health tab, or through the API.
+
+Each sync covers runs created in the last 30 days, at most 100 per workflow, and skips runs it already stored. To trigger one through the API, use a `WRITE`-scoped API token (a `READ` token gets 403) or a signed-in session; omit `repoId` to sync all tracked repositories:
 
 ```bash
 curl -X POST https://<your-depsight>/api/ci/sync \

@@ -115,7 +115,7 @@ Every policy type has its rule shape validated when a policy is created or updat
 
 ## CI Health
 
-Workflow fail rates, build times, flaky-job detection. Powered by the companion [ci-insights](https://github.com/LanNguyenSi/ci-insights) service. See the [CI Health setup](configuration.md#ci-health-ci-insights-integration) section for how to wire it up.
+Workflow fail rates, build times, flaky-job detection. depsight syncs the GitHub Actions run data itself, with the owner's stored GitHub token: on the auto-scan cron, after a scan-all, from the CI Health tab, or through `POST /api/ci/sync`. See [CI Health](configuration.md#ci-health-github-actions-sync) for the details.
 
 ## MCP server
 
@@ -123,7 +123,7 @@ Queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-
 
 ## Settings
 
-- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only) or `WRITE` (read and write, the default) scope at creation time; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`).
+- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only) or `WRITE` (read and write, the default) scope at creation time; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`), on the scan-triggering POSTs and on `POST /api/ci/sync`. Which endpoints accept a token at all is listed in [docs/api.md](api.md).
 - **UI language switch:** English / German.
 
 ## Operational

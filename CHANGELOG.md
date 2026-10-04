@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /api/sbom` accepts a `dsat_` Bearer token of either scope, so the MCP `depsight_get_sbom` tool no longer gets 401. `POST /api/ci/sync` accepts a `WRITE`-scoped token; a `READ` token gets 403. Both routes keep their owner scoping, and a session without a user id now gets 401 on `/api/sbom`.
+
+### Docs
+
+- The API reference lists which endpoints accept a Bearer token and which are session-only. The CI Health docs describe depsight's own GitHub Actions sync instead of an external service.
+
 ## [0.7.0] - 2026-10-04
 
 **Headline: a completed scan now says why it was degraded, and a repository that cannot be read at all is no longer reported as a clean scan.** The deploy needs `prisma db push` (new nullable `Scan.degradedReason` column). The published MCP package is released as `@opentriologue/depsight-mcp` 0.5.0 (tag `depsight-mcp-v0.5.0`): the `depsight_rescan` answer carries a `degradedReason` key (null unless a source could not be read) and its message says so for a degraded scan (#153); the server reports version 0.5.0 in the MCP handshake. The mcp lockfile security bumps (ip-address, brace-expansion, fast-uri) only touch the repository's own dev and CI install; npm consumers do not receive them. depsight is deployed from `master`; this tag is deploy provenance.
