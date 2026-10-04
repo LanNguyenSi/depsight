@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-04T13:40:21Z, `mcp-vs-web-api.md`, `policy-rule-evaluation.md` and `rescan-and-staleness.md` re-verified after `docs/api.md`, `docs/features.md` and `docs/configuration.md` changed: the api doc now lists which endpoints accept a Bearer token and which are session-only, and the CI Health sections now describe depsight's own GitHub Actions sync instead of an external service. None of the sections these docs cite changed (the Policy engine section of `docs/features.md`, the MCP server sections of `docs/features.md` and `docs/api.md`, and the `SCAN_INTERVAL_MINUTES` row of `docs/configuration.md`), so the last two are re-stamped only. `mcp-vs-web-api.md` gained a statement that every route its tool table names resolves its caller through `resolveRequestUser` (checked with `rg` over those route files: each calls it, none calls `auth()`), after `GET /api/sbom` moved from the session-only check onto it; `app/api/sbom/route.ts` and `lib/auth-api.ts` joined its sources.
+
 - 2026-10-04T12:54:27Z, `mcp-vs-web-api.md` re-verified after `mcp/src/server.ts` changed for the depsight-mcp 0.5.0 release (only the reported server version string moved from 0.4.0 to 0.5.0, `createServer` still spans `mcp/src/server.ts:15-34`); no claim in the doc names that version, re-stamped.
 
 - 2026-10-03T12:12:29Z, okf-staleness workflow re-synced from the okf-kit

@@ -3,7 +3,7 @@ type: overview
 title: MCP server versus the web API - a thin proxy, narrower than the dashboard
 description: every MCP tool calls the same authenticated REST API the dashboard uses, through one HTTP client with no direct database access; only one tool (depsight_rescan) writes, and the MCP surface has no equivalent for policy CRUD, tokens, webhooks, Slack config, Dependabot enable, repo sync, PR-triggered scans, CI sync, export, or direct license and dependency-age scans (depsight_rescan refreshes CVE data only).
 tags: [mcp, api, surface]
-timestamp: 2026-10-04T12:54:27Z
+timestamp: 2026-10-04T13:40:21Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts
@@ -22,6 +22,8 @@ sources:
   - app/api/license/route.ts
   - app/api/deps/route.ts
   - app/api/scan/route.ts
+  - app/api/sbom/route.ts
+  - lib/auth-api.ts
   - docs/api.md
   - docs/features.md
 ---
@@ -45,6 +47,8 @@ sources:
 | `depsight_ci_analytics` | `GET /api/ci/analytics/[repoId]` or `.../cross-repo` (`mcp/src/client.ts:112-126`) |
 | `depsight_get_sbom` | `GET /api/sbom` (`mcp/src/client.ts:108-110`) |
 | `depsight_rescan` | `POST /api/scan` (`mcp/src/client.ts:135-137`) |
+
+Every route in this table resolves its caller with `resolveRequestUser` (`lib/auth-api.ts`), which accepts a browser session or a `dsat_` Bearer token; a route that called the session-only `auth()` would answer an MCP call with a 401 even for a valid token, which is why `GET /api/sbom` was moved onto `resolveRequestUser`. The token's scope is enforced only where a route persists data (`POST /api/scan`, 403 for a `READ` token), so every other tool works with either scope.
 
 ## Exactly one tool writes; the other POST does not
 
