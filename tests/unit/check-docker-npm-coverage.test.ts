@@ -805,6 +805,22 @@ describe('heredoc markers and bodies', () => {
     }
   });
 
+  it('does not take a spaced marker inside quotes for a heredoc, even when a later delimiter exists', () => {
+    // A quoted `<<EOF` followed by a later real heredoc: without quote tracking
+    // the quoted marker would open a body that runs to the later delimiter and
+    // swallow the install in between.
+    for (const run of ['RUN echo "a <<EOF b"', "RUN sed -i 's/ <<EOF //' f"]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, run, 'RUN npm install', 'RUN <<EOF', 'echo hi', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].line).toBe(4);
+      expect(r.findings[0].verdict).toBe('confirmed');
+      expect(r.warnings).toEqual([]);
+    }
+  });
+
   it('consumes nothing and warns for a heredoc without a delimiter line', () => {
     const r = scan({
       Dockerfile: dockerfile([...base, 'RUN cat <<NOPE > /tmp/x', 'RUN npm install']),

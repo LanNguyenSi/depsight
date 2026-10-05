@@ -42,7 +42,8 @@
  * `unterminated heredoc <<WORD at line N` (N = the RUN start line).
  * RUN text is split on `&&`, `||`, `;`, `|` and newlines; leading shell
  * keywords (`then`, `else`, `elif`, `do`, `if`, `while`, `until`, `!`) and
- * subshell or group brackets are ignored. Each `FROM` starts a stage (`AS name` names it).
+ * subshell or group brackets are ignored. Each `FROM` starts a stage
+ * (`AS name` names it).
  * Instructions are evaluated strictly in file order within a stage. A stage
  * `FROM <earlier stage>` also inherits that stage's copied manifests and
  * lockfile state (like image, npm major and the legacy-peer-deps ENV).
