@@ -3,7 +3,7 @@ type: overview
 title: MCP server versus the web API - a thin proxy, narrower than the dashboard
 description: every MCP tool calls the same authenticated REST API the dashboard uses, through one HTTP client with no direct database access; only one tool (depsight_rescan) writes, and the MCP surface has no equivalent for policy CRUD, tokens, webhooks, Slack config, Dependabot enable, repo sync, PR-triggered scans, CI sync, export, or direct license and dependency-age scans (depsight_rescan refreshes CVE data only).
 tags: [mcp, api, surface]
-timestamp: 2026-10-05T07:21:08Z
+timestamp: 2026-10-05T08:46:25Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts
@@ -42,17 +42,17 @@ sources:
 
 | MCP tool | Backing endpoint |
 |---|---|
-| `depsight_list_repos` | `GET /api/repos` (`mcp/src/client.ts:67`), merged with `GET /api/repos/tracked-ids` (`mcp/src/client.ts:81`) |
-| `depsight_get_overview` | `GET /api/overview` (`mcp/src/client.ts:71`) |
-| `depsight_get_cves` | `GET /api/scan` (`getScan`, `mcp/src/client.ts:84-86`) |
-| `depsight_get_deps` | `GET /api/deps` (`mcp/src/client.ts:88-90`) |
-| `depsight_get_license_report` | `GET /api/license` (`mcp/src/client.ts:92-94`) |
-| `depsight_get_history` | `GET /api/history` (`mcp/src/client.ts:96-98`) |
-| `depsight_list_policies` | `GET /api/policies` (`mcp/src/client.ts:100-102`) |
-| `depsight_evaluate_policy` | `POST /api/policies/evaluate` (`mcp/src/client.ts:104-106`) |
-| `depsight_ci_analytics` | `GET /api/ci/analytics/[repoId]` or `.../cross-repo` (`mcp/src/client.ts:112-126`) |
-| `depsight_get_sbom` | `GET /api/sbom` (`mcp/src/client.ts:108-110`) |
-| `depsight_rescan` | `POST /api/scan` (`mcp/src/client.ts:135-137`) |
+| `depsight_list_repos` | `GET /api/repos` (`mcp/src/client.ts:74`), merged with `GET /api/repos/tracked-ids` (`mcp/src/client.ts:88`) |
+| `depsight_get_overview` | `GET /api/overview` (`mcp/src/client.ts:78`) |
+| `depsight_get_cves` | `GET /api/scan` (`getScan`, `mcp/src/client.ts:91-93`) |
+| `depsight_get_deps` | `GET /api/deps` (`mcp/src/client.ts:95-97`) |
+| `depsight_get_license_report` | `GET /api/license` (`mcp/src/client.ts:99-101`) |
+| `depsight_get_history` | `GET /api/history` (`mcp/src/client.ts:103-105`) |
+| `depsight_list_policies` | `GET /api/policies` (`mcp/src/client.ts:107-109`) |
+| `depsight_evaluate_policy` | `POST /api/policies/evaluate` (`mcp/src/client.ts:111-113`) |
+| `depsight_ci_analytics` | `GET /api/ci/analytics/[repoId]` or `.../cross-repo` (`mcp/src/client.ts:119-133`) |
+| `depsight_get_sbom` | `GET /api/sbom` (`mcp/src/client.ts:115-117`) |
+| `depsight_rescan` | `POST /api/scan` (`mcp/src/client.ts:142-144`) |
 
 Every route in this table resolves its caller with `resolveRequestUser` (`lib/auth-api.ts`), which accepts a browser session or a `dsat_` Bearer token; a route that called the session-only `auth()` would answer an MCP call with a 401 even for a valid token, which is why `GET /api/sbom` was moved onto `resolveRequestUser`. The token's scope is enforced only where a route persists data (`POST /api/scan`, 403 for a `READ` token), so every other tool works with either scope.
 
