@@ -213,4 +213,15 @@ describe('GET /api/repos: per-user rate limit', () => {
     }
     expect((await GET(makeGetRequest())).status).toBe(429);
   });
+
+  it('counts a request answered 400 for a missing GitHub token', async () => {
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, githubToken: '' });
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
+      expect((await GET(makeGetRequest())).status).toBe(400);
+    }
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    expect((await GET(makeGetRequest())).status).toBe(429);
+    expect(getUserReposMock).not.toHaveBeenCalled();
+  });
 });

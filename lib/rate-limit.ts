@@ -80,7 +80,8 @@ export const CI_SYNC_ALL_LIMIT_PER_HOUR = 12;
 // dashboard's "scan all" loop calls each of the three once per tracked repo).
 export const LICENSE_LIMIT_PER_HOUR = 300;
 export const DEPS_LIMIT_PER_HOUR = 300;
-// GET /api/repos lists the owner's live GitHub repos (ceil(N/100) GitHub requests per call), so it gets the same ceiling.
+// GET /api/repos lists the owner's live GitHub repos (ceil(N/100) GitHub
+// requests per call), so it gets the same ceiling.
 export const REPOS_LIMIT_PER_HOUR = 300;
 
 /** POST /api/scan, keyed by user id. */
