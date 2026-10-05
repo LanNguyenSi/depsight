@@ -168,6 +168,10 @@ describe('GET /api/repos: per-user rate limit', () => {
     vi.useRealTimers();
   });
 
+  it('budgets 300 calls per user and hour, like the sibling limiters', () => {
+    expect(REPOS_LIMIT_PER_HOUR).toBe(300);
+  });
+
   it('answers 429 with Retry-After once the user is over the limit, without calling GitHub', async () => {
     for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
       expect((await GET(makeGetRequest())).status).toBe(200);
