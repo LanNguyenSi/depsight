@@ -114,6 +114,8 @@ Tool handlers never throw. On any failure (network, HTTP non-2xx, parse error), 
 
 HTTP errors carry the upstream status code and response body so you can tell a 401 (bad token) apart from a 404 (wrong `repoId`).
 
+A 429 from a per-user rate limit adds `retryAfterSeconds` to the error object and names the wait in `error`.
+
 ## Scope / limitations
 
 - Read-only except `depsight_rescan` (scan trigger). v1 intentionally omits the other write operations (webhook management, policy mutation, Slack config).

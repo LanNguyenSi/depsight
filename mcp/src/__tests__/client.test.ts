@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { DepsightClient, HttpError } from "../client.js";
+import {
+  DEFAULT_RETRY_AFTER_SECONDS,
+  DepsightClient,
+  HttpError,
+  RateLimitError,
+  parseRetryAfterSeconds,
+} from "../client.js";
 
 function makeResponse(body: unknown, init?: { status?: number }) {
   return new Response(typeof body === "string" ? body : JSON.stringify(body), {
@@ -487,5 +493,82 @@ describe("DepsightClient", () => {
       expect(e.path).toBe("/api/ci/analytics/cross-repo");
       expect((e.body as { error: string }).error).toBe("Internal Server Error");
     }
+  });
+});
+
+describe("DepsightClient 429 handling", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const config = { gatewayUrl: "https://depsight.example.com", apiToken: "dsat_test" };
+
+  it("throws a RateLimitError naming retryAfterSeconds from the body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: "Rate limit exceeded", retryAfterSeconds: 321 }),
+        { status: 429, headers: { "Retry-After": "5" } },
+      ),
+    );
+    const client = new DepsightClient(config);
+
+    const err = await client.rescan("repo-1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err).toBeInstanceOf(HttpError);
+    const e = err as RateLimitError;
+    expect(e.status).toBe(429);
+    expect(e.retryAfterSeconds).toBe(321);
+    expect(e.message).toContain("retryAfterSeconds: 321");
+  });
+
+  it("falls back to the Retry-After header, then to the default", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    spy.mockResolvedValueOnce(
+      new Response("slow down", { status: 429, headers: { "Retry-After": "90" } }),
+    );
+    const client = new DepsightClient(config);
+    const a = (await client.rescan("r").catch((e: unknown) => e)) as RateLimitError;
+    expect(a.retryAfterSeconds).toBe(90);
+
+    spy.mockResolvedValueOnce(new Response("slow down", { status: 429 }));
+    const b = (await client.rescan("r").catch((e: unknown) => e)) as RateLimitError;
+    expect(b.retryAfterSeconds).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+  });
+
+  it("keeps other non-2xx statuses as a plain HttpError", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ retryAfterSeconds: 9 }), { status: 503 }),
+    );
+    const err = await new DepsightClient(config).rescan("r").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).not.toBeInstanceOf(RateLimitError);
+  });
+});
+
+describe("parseRetryAfterSeconds", () => {
+  it("prefers the body retryAfterSeconds over the header", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 42 }, "7")).toBe(42);
+  });
+
+  it("rounds a fractional body value up", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 41.2 }, null)).toBe(42);
+  });
+
+  it("falls back to the header when the body value is 0, negative or non-numeric", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 0 }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: -5 }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: "soon" }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ error: "Rate limit exceeded" }, "120")).toBe(120);
+    expect(parseRetryAfterSeconds(null, "15")).toBe(15);
+  });
+
+  it("falls back to the default when neither source is usable", () => {
+    expect(parseRetryAfterSeconds(null, null)).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 0 }, "0")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: -5 }, "-1")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({}, "soon")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(
+      parseRetryAfterSeconds({}, "Wed, 21 Oct 2026 07:28:00 GMT"),
+    ).toBe(DEFAULT_RETRY_AFTER_SECONDS);
   });
 });
