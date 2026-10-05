@@ -2,7 +2,7 @@
 // Covers 401, 400 for missing/falsy githubToken, 200 happy path, 500 path,
 // the archived-by-default filter (including a payload without the field) and
 // the exact `includeArchived=true` opt-out.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -31,6 +31,7 @@ vi.mock('@/lib/github', () => ({
 // ---------------------------------------------------------------------------
 import { GET } from '@/app/api/repos/route';
 import { NextRequest } from 'next/server';
+import { reposRateLimiter, REPOS_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,6 +47,7 @@ function makeGetRequest(query?: string): NextRequest {
 // ---------------------------------------------------------------------------
 describe('GET /api/repos', () => {
   beforeEach(() => {
+    reposRateLimiter.reset();
     resolveRequestUserMock.mockReset();
     getUserReposMock.mockReset();
     resolveRequestUserMock.mockResolvedValue(mockUser);
@@ -143,5 +145,83 @@ describe('GET /api/repos', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { repos: typeof mockRepos };
     expect(body.repos).toEqual([mockRepos[0]]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/repos: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('GET /api/repos: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    reposRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    getUserReposMock.mockReset();
+    getUserReposMock.mockResolvedValue([]);
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 300 calls per user and hour, like the sibling limiters', () => {
+    expect(REPOS_LIMIT_PER_HOUR).toBe(300);
+  });
+
+  it('answers 429 with Retry-After once the user is over the limit, without calling GitHub', async () => {
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
+      expect((await GET(makeGetRequest())).status).toBe(200);
+    }
+    expect(getUserReposMock).toHaveBeenCalledTimes(REPOS_LIMIT_PER_HOUR);
+
+    const res = await GET(makeGetRequest());
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(getUserReposMock).toHaveBeenCalledTimes(REPOS_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and allows requests again after the window has elapsed', async () => {
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
+      await GET(makeGetRequest());
+    }
+    expect((await GET(makeGetRequest())).status).toBe(429);
+
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
+    expect((await GET(makeGetRequest())).status).toBe(200);
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    vi.advanceTimersByTime(WINDOW_MS);
+    expect((await GET(makeGetRequest())).status).toBe(200);
+  });
+
+  it('does not count an unauthenticated request', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR + 3; i++) {
+      expect((await GET(makeGetRequest())).status).toBe(401);
+    }
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
+      expect((await GET(makeGetRequest())).status).toBe(200);
+    }
+    expect((await GET(makeGetRequest())).status).toBe(429);
+  });
+
+  it('counts a request answered 400 for a missing GitHub token', async () => {
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, githubToken: '' });
+    for (let i = 0; i < REPOS_LIMIT_PER_HOUR; i++) {
+      expect((await GET(makeGetRequest())).status).toBe(400);
+    }
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    expect((await GET(makeGetRequest())).status).toBe(429);
+    expect(getUserReposMock).not.toHaveBeenCalled();
   });
 });
