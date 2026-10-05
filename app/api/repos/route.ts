@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getUserRepos } from '@/lib/github';
+import { rateLimitedResponse, reposRateLimiter } from '@/lib/rate-limit';
 
 export async function GET(req: NextRequest) {
   const user = await resolveRequestUser();
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const limit = reposRateLimiter.check(user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
   }
 
   if (!user.githubToken) {
