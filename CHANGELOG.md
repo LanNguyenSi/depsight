@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/check-docker-npm-coverage.ts`, a read-only standalone check (`npx tsx scripts/check-docker-npm-coverage.ts [--json] <repoDir>...`) for the npm 10 "edgesOut" crash class: it flags Dockerfiles that run a lockfile-less `npm install` in a builder with npm below 11 while a copied `package.json` carries `@vitest/coverage-v8`. Unknown builders count as findings, `--legacy-peer-deps` is reported as masked. Exit 0 no findings, 1 findings, 2 usage error. The human output and a JSON `reason` field give a short reason per finding (for example `lockfile bypassed: --no-package-lock, npm 10 < 11`). It understands RUN flags, RUN heredocs (BuildKit-style markers only; a body is read as shell text only for an empty or shell command, and a marker without a delimiter line gives a warning instead of swallowing the rest of the file), shell keywords, subshells and value-taking npm options, skips `.worktrees` directories, and does not read a copied `.npmrc` or COPY/ADD heredocs. It runs no docker, npm or network.
+
 ### Security
 
 - Every route and server page that filters by the session user id now requires `session.user.id`, not just `session.user`: a signed-in session whose user row is gone has no id, and Prisma drops an `undefined` filter value, so `/api/webhooks`, `/api/slack`, `/api/dependabot*`, `/api/export`, `/api/pr-scan`, `/api/repos/sync`, `/overview`, `/dashboard` and `/policies` could query or (for `DELETE /api/slack`) delete rows of every user. They now answer 401 (pages redirect to `/login`).
