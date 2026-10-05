@@ -578,7 +578,12 @@ describe('RUN flags, heredocs, shell keywords and subshells', () => {
   });
 
   it('finds the install inside a subshell or group', () => {
-    for (const run of ['RUN (cd /app && npm install)', 'RUN { cd /app && npm install; }']) {
+    for (const run of [
+      'RUN (cd /app && npm install)',
+      'RUN { cd /app && npm install; }',
+      'RUN (npm install)',
+      'RUN { npm install; }',
+    ]) {
       const r = scan({ Dockerfile: installWith(run), 'package.json': COVERAGE_PKG });
       expect(r.findings).toHaveLength(1);
     }
