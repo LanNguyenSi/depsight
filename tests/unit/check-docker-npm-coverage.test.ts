@@ -794,7 +794,7 @@ describe('heredoc markers and bodies', () => {
   const base = ['FROM node:22-alpine', 'COPY package.json ./'];
 
   it('does not take a quoted, arithmetic or sed `<<` for a heredoc', () => {
-    for (const run of ['RUN echo "x<<y"', 'RUN echo $((a<<b))', "RUN sed -i 's/<<HEAD//' f"]) {
+    for (const run of ['RUN echo "x<<y"', 'RUN echo $((a<<b))', 'RUN echo $(( a <<b))', "RUN sed -i 's/<<HEAD//' f"]) {
       const r = scan({
         Dockerfile: dockerfile([...base, run, 'RUN npm install']),
         'package.json': COVERAGE_PKG,
