@@ -789,3 +789,92 @@ describe('repo walk', () => {
     expect(r.findings).toEqual([]);
   });
 });
+
+describe('heredoc markers and bodies', () => {
+  const base = ['FROM node:22-alpine', 'COPY package.json ./'];
+
+  it('does not take a quoted, arithmetic or sed `<<` for a heredoc', () => {
+    for (const run of ['RUN echo "x<<y"', 'RUN echo $((a<<b))', "RUN sed -i 's/<<HEAD//' f"]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, run, 'RUN npm install']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].line).toBe(4);
+      expect(r.warnings).toEqual([]);
+    }
+  });
+
+  it('consumes nothing and warns for a heredoc without a delimiter line', () => {
+    const r = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<NOPE > /tmp/x', 'RUN npm install']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].line).toBe(4);
+    expect(r.warnings).toEqual(['Dockerfile: unterminated heredoc <<NOPE at line 3']);
+  });
+
+  it('does not take a here-string for a heredoc', () => {
+    // Without the here-string guard, `<<<EOF` would open a heredoc that runs
+    // to the delimiter of the later real heredoc and swallow the install.
+    const r = scan({
+      Dockerfile: dockerfile([...base, 'RUN read x <<<EOF', 'RUN npm install', 'RUN <<EOF', 'echo hi', 'EOF']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].line).toBe(4);
+    const inline = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<< hello && npm install']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(inline.findings).toHaveLength(1);
+    expect(inline.findings[0].line).toBe(3);
+  });
+
+  it('does not read the data body of a non-shell heredoc as shell text', () => {
+    const r = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', 'npm install', 'npm start', 'EOF']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toEqual([]);
+    // An rm of the lockfile inside a data body is no bypass.
+    const rm = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY package*.json ./',
+        'RUN cat <<EOF > /app/clean.sh',
+        'rm -f package-lock.json',
+        'EOF',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(rm.findings).toEqual([]);
+  });
+
+  it('reads the body of a shell heredoc (bash, sh -e, after a data heredoc) as shell text', () => {
+    for (const open of ['RUN bash <<EOF', 'RUN /bin/sh -e <<EOF', 'RUN set -e && dash -x <<EOF']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+    }
+    const two = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<A > /tmp/a && sh <<B', 'hello', 'A', 'npm install', 'B']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(two.findings).toHaveLength(1);
+    expect(two.findings[0].line).toBe(3);
+  });
+
+  it('finds the install behind while and until', () => {
+    for (const run of ['RUN while npm install; do break; done', 'RUN until npm install; do sleep 1; done']) {
+      const r = scan({ Dockerfile: dockerfile([...base, run]), 'package.json': COVERAGE_PKG });
+      expect(r.findings).toHaveLength(1);
+    }
+  });
+});

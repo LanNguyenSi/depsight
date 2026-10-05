@@ -24,15 +24,25 @@
  * -----
  * Input: one or more repository directories. Per repository, Dockerfiles are
  * searched recursively (file name `Dockerfile`, `Dockerfile.*` or
- * `*.Dockerfile`; `node_modules`, `.git` and `.worktrees` are skipped). The build context
- * of a Dockerfile is the directory that contains it.
+ * `*.Dockerfile`; `node_modules`, `.git` and `.worktrees` are skipped). The
+ * build context of a Dockerfile is the directory that contains it.
  *
  * Parsing: line continuations (`\`) are joined, comment lines dropped. Leading
- * RUN flags (`--mount=...`, `--network=...`) are ignored. The body of a RUN
- * heredoc (`RUN <<EOF`) belongs to that RUN and is reported at its start line.
+ * RUN flags (`--mount=...`, `--network=...`) are ignored. A RUN heredoc
+ * marker is a whitespace-separated word outside quotes that is exactly
+ * `<<WORD`, `<<-WORD`, `<<'WORD'` or `<<"WORD"` (BuildKit style), so
+ * `"x<<y"`, `$((a<<b))`, `'s/<<HEAD//'` and a here-string `<<<word` are no
+ * markers. The body lines up to the delimiter line belong to that RUN (they
+ * never become instructions) and an install in them is reported at the RUN
+ * start line. A body is read as shell text only when the command before the
+ * marker is empty (`RUN <<EOF`) or a shell (`sh`, `bash`, `ash`, `dash`,
+ * optionally with flags such as `-e` or `-x`); any other command
+ * (`RUN cat <<EOF > file`) gets data, which is not read. A marker without a
+ * delimiter line consumes nothing and gives the warning
+ * `unterminated heredoc <<WORD at line N` (N = the RUN start line).
  * RUN text is split on `&&`, `||`, `;`, `|` and newlines; leading shell
- * keywords (`then`, `else`, `elif`, `do`, `if`, `!`) and subshell or group
- * brackets are ignored. Each `FROM` starts a stage (`AS name` names it).
+ * keywords (`then`, `else`, `elif`, `do`, `if`, `while`, `until`, `!`) and
+ * subshell or group brackets are ignored. Each `FROM` starts a stage (`AS name` names it).
  * Instructions are evaluated strictly in file order within a stage. A stage
  * `FROM <earlier stage>` also inherits that stage's copied manifests and
  * lockfile state (like image, npm major and the legacy-peer-deps ENV).
@@ -92,9 +102,11 @@
  * Exit codes: 0 = no findings, 1 = at least one finding, 2 = usage error
  * (no arguments, unknown option, directory missing or not readable).
  *
- * Known limits: a COPY'd .npmrc with legacy-peer-deps is not read, no .dockerignore, no COPY --from hand-over of node_modules
- * or lockfiles, no workspaces, no ARG resolution, no docker-compose build
- * args, no corepack. The Node-to-npm table is maintained by hand (Node
+ * Known limits: a COPY'd .npmrc with legacy-peer-deps is not read, no
+ * .dockerignore, no COPY --from hand-over of node_modules or lockfiles, no
+ * workspaces, no ARG resolution, no docker-compose build args, no corepack.
+ * COPY/ADD heredocs (`COPY <<EOF /path`) are not recognised: their body lines
+ * are parsed as instructions. The Node-to-npm table is maintained by hand (Node
  * minors can differ; Node 22.x bundles npm 10.x to this day).
  */
 import fs from "node:fs";
@@ -164,9 +176,11 @@ const HELP = [
   "",
   "Exit codes: 0 no findings, 1 at least one finding, 2 usage error.",
   "",
-  "Known limits: no .npmrc, no .dockerignore, no COPY --from hand-over of node_modules or",
-  "lockfiles, no workspaces, no ARG resolution, no docker-compose build args,",
-  "no corepack, the Node-to-npm table is maintained by hand.",
+  "Known limits: no .npmrc, no .dockerignore, no COPY --from hand-over of",
+  "node_modules or lockfiles, no workspaces, no ARG resolution, no",
+  "docker-compose build args, no corepack, no COPY/ADD heredocs, RUN heredoc",
+  "bodies of non-shell commands are not read, the Node-to-npm table is",
+  "maintained by hand.",
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -181,13 +195,75 @@ interface Instruction {
 
 const HEREDOC = /(?<!<)<<-?\s*(["']?)([A-Za-z_][\w-]*)\1/g;
 
-export function parseInstructions(content: string): Instruction[] {
+/** Shells whose heredoc body is shell text (`RUN bash <<EOF`); other commands get data. */
+const HEREDOC_SHELLS = new Set(["sh", "bash", "ash", "dash"]);
+
+interface HeredocMark {
+  start: number;
+  end: number;
+  delimiter: string;
+  /** Whether the body is read as shell text (empty command or a shell before the marker). */
+  shell: boolean;
+}
+
+/**
+ * Heredoc markers in RUN text, BuildKit style: a whitespace-separated word
+ * outside quotes that starts with `<<` (optionally after a file descriptor
+ * number) and is exactly a heredoc marker. `x<<y`, `"x<<y"`, `$((a<<b))` and
+ * a here-string `<<<word` are no markers.
+ */
+function heredocMarks(text: string): HeredocMark[] {
+  const marks: HeredocMark[] = [];
+  let quote: string | null = null;
+  let wordStart = -1;
+  const finish = (end: number): void => {
+    if (wordStart < 0) return;
+    const word = text.slice(wordStart, end).replace(/^\d+/, "");
+    const start = wordStart;
+    wordStart = -1;
+    if (!word.startsWith("<<")) return;
+    HEREDOC.lastIndex = 0;
+    const m = HEREDOC.exec(word);
+    if (!m || m.index + m[0].length !== word.length) return;
+    const before = text.slice(0, start).split(/&&|\|\||;|\||\r?\n/).pop() ?? "";
+    // Leading RUN flags (`RUN --network=host <<EOF`) are no command words.
+    const tokens = before.split(/\s+/).filter((t) => t && !/^--[a-z-]+(?:=\S+)?$/i.test(t));
+    const shell =
+      tokens.length === 0 ||
+      (HEREDOC_SHELLS.has(path.posix.basename(tokens[0])) && tokens.slice(1).every((t) => /^-[a-z]+$/.test(t)));
+    marks.push({ start, end, delimiter: m[2], shell });
+  };
+  for (let k = 0; k < text.length; k++) {
+    const c = text[k];
+    if (quote !== null) {
+      if (c === "\\" && quote === '"') k++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      finish(k);
+      continue;
+    }
+    if (wordStart < 0) wordStart = k;
+    if (c === "\\") k++;
+    else if (c === '"' || c === "'") quote = c;
+  }
+  finish(text.length);
+  return marks;
+}
+
+/**
+ * Splits a Dockerfile into instructions. Warnings (such as an unterminated
+ * heredoc) are pushed onto `warnings` when given.
+ */
+export function parseInstructions(content: string, warnings: string[] = []): Instruction[] {
   const out: Instruction[] = [];
   const lines = content.split(/\r?\n/);
   let current: { line: number; text: string } | null = null;
   // Emits the finished instruction; for a RUN with heredocs the body lines up
-  // to each delimiter become part of the RUN (not separate instructions).
-  // Returns the index of the last line consumed.
+  // to each delimiter belong to the RUN (not separate instructions), and a
+  // shell body becomes part of the RUN text. A marker without a delimiter
+  // line consumes nothing and gives a warning. Returns the last line consumed.
   const emit = (startLine: number, rawText: string, index: number): number => {
     const m = /^(\S+)\s*(.*)$/s.exec(rawText.trim());
     if (!m) return index;
@@ -195,14 +271,15 @@ export function parseInstructions(content: string): Instruction[] {
     let args = m[2];
     let last = index;
     if (keyword === "RUN") {
-      for (const h of m[2].matchAll(HEREDOC)) {
-        const body: string[] = [];
-        while (last + 1 < lines.length) {
-          last++;
-          if (lines[last].trim() === h[2]) break;
-          body.push(lines[last]);
+      for (const h of heredocMarks(m[2])) {
+        let end = last + 1;
+        while (end < lines.length && lines[end].trim() !== h.delimiter) end++;
+        if (end >= lines.length) {
+          warnings.push(`unterminated heredoc <<${h.delimiter} at line ${startLine}`);
+          continue;
         }
-        args += "\n" + body.join("\n");
+        if (h.shell) args += "\n" + lines.slice(last + 1, end).join("\n");
+        last = end;
       }
     }
     out.push({ line: startLine, keyword, args });
@@ -302,7 +379,9 @@ function splitRun(args: string): RunCommand[] {
       // keep the raw text
     }
   }
-  text = text.replace(HEREDOC, " ");
+  for (const h of heredocMarks(text).reverse()) {
+    text = text.slice(0, h.start) + " " + text.slice(h.end);
+  }
   const parts = text.replace(/["']/g, " ").split(/&&|\|\||;|\||\r?\n/);
   const cmds: RunCommand[] = [];
   for (const part of parts) {
@@ -404,7 +483,10 @@ export function analyzeDockerfile(
 
   const rel = (p: string) => path.relative(repoDir, p).split(path.sep).join("/");
 
-  for (const ins of parseInstructions(content)) {
+  const parseWarnings: string[] = [];
+  const instructions = parseInstructions(content, parseWarnings);
+  for (const w of parseWarnings) warnings.push(`${dockerfile}: ${w}`);
+  for (const ins of instructions) {
     if (ins.keyword === "FROM") {
       const tokens = ins.args.split(/\s+/).filter((t) => t && !t.startsWith("--"));
       const baseRef = tokens[0] ?? "";
