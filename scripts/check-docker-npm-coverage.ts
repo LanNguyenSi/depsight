@@ -35,9 +35,16 @@
  * markers. The body lines up to the delimiter line belong to that RUN (they
  * never become instructions) and an install in them is reported at the RUN
  * start line. A body is read as shell text only when the command before the
- * marker is empty (`RUN <<EOF`) or a shell (`sh`, `bash`, `ash`, `dash`,
- * optionally with flags such as `-e` or `-x`); any other command
- * (`RUN cat <<EOF > file`) gets data, which is not read. A marker without a
+ * marker is empty (`RUN <<EOF`), or a shell (`sh`, `bash`, `ash`, `dash`)
+ * reached after skipping wrapper commands (`env` with `VAR=val` and its
+ * flags, `sudo` with its flags, `command`, `exec`, `nice`, `time`) and
+ * `VAR=val` prefixes, with only option flags (`-e`, `-x`, `-o pipefail`,
+ * `+o opt`, `--norc`, `-s`, `--`), or when the body is piped into such a shell
+ * (`cat <<EOF | sh`). An attached redirect (`<<EOF>/x`) does not change the
+ * consumer. Any other command
+ * (`RUN cat <<EOF > file`) gets data, which is not read; a skipped body that
+ * contains an `npm install`, `npm i` or `npm ci` gives a warning instead of
+ * passing silently. A marker without a
  * delimiter line consumes nothing and gives the warning
  * `unterminated heredoc <<WORD at line N` (N = the RUN start line).
  * RUN text is split on `&&`, `||`, `;`, `|` and newlines; leading shell
@@ -194,16 +201,97 @@ interface Instruction {
   args: string;
 }
 
-const HEREDOC = /(?<!<)<<-?\s*(["']?)([A-Za-z_][\w-]*)\1/g;
+/**
+ * A heredoc marker word: `<<WORD`, `<<-WORD`, `<<'WORD'` or `<<"WORD"`,
+ * optionally followed by an attached redirect or pipe (`<<EOF>/x`,
+ * `<<EOF>>/x`, `<<EOF|sh`). A here-string `<<<word` does not match.
+ */
+const HEREDOC_WORD = /^<<-?(["']?)([A-Za-z_][\w-]*)\1([<>|&;].*)?$/s;
 
 /** Shells whose heredoc body is shell text (`RUN bash <<EOF`); other commands get data. */
 const HEREDOC_SHELLS = new Set(["sh", "bash", "ash", "dash"]);
+
+/**
+ * Wrapper commands skipped before deciding whether the consumer of a heredoc
+ * is a shell, with the options that take a separate value token.
+ */
+const HEREDOC_WRAPPERS: Record<string, Set<string>> = {
+  env: new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
+  sudo: new Set([
+    "-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U", "-r", "-t",
+    "--user", "--group", "--host", "--prompt", "--chdir", "--chroot", "--role", "--type",
+  ]),
+  command: new Set(),
+  exec: new Set(["-a"]),
+  nice: new Set(["-n", "--adjustment"]),
+  time: new Set(["-f", "-o", "--format", "--output"]),
+};
+
+const HEREDOC_LEADING_KEYWORDS = new Set(["then", "else", "elif", "do", "if", "while", "until", "!"]);
+
+/** Drops wrapper commands (with their options), VAR=val prefixes and leading shell keywords. */
+function skipHeredocWrappers(input: string[]): string[] {
+  const tokens = input.map((t) => t.replace(/^[({]+/, "")).filter(Boolean);
+  for (;;) {
+    const t = tokens[0];
+    if (t === undefined) return tokens;
+    if (/^\w+=/.test(t) || HEREDOC_LEADING_KEYWORDS.has(t)) {
+      tokens.shift();
+      continue;
+    }
+    const valueFlags = HEREDOC_WRAPPERS[path.posix.basename(t)];
+    if (valueFlags === undefined) return tokens;
+    tokens.shift();
+    while (tokens.length > 0 && (tokens[0].startsWith("-") || /^\w+=/.test(tokens[0]))) {
+      const flag = tokens.shift() as string;
+      if (flag === "--") break;
+      if (valueFlags.has(flag)) tokens.shift();
+    }
+  }
+}
+
+/**
+ * Whether the command words consume a heredoc body as shell text: a shell
+ * (after wrappers and VAR=val prefixes) with only option flags (`-e`, `-x`,
+ * `-o pipefail`, `+o`, `--norc`, `-s`, `--`).
+ */
+function isShellConsumer(words: string[]): boolean {
+  const tokens = skipHeredocWrappers(words);
+  if (tokens.length === 0 || !HEREDOC_SHELLS.has(path.posix.basename(tokens[0]))) return false;
+  let seenS = false;
+  for (let k = 1; k < tokens.length; k++) {
+    const t = tokens[k];
+    if (/^[-+][A-Za-z]*[oO]$/.test(t)) {
+      // `-o`, `-eo`, `+o`, `-O`: the next token is the option name.
+      k++;
+      continue;
+    }
+    if (t === "--") return seenS;
+    if (/^[-+][A-Za-z]+$/.test(t)) {
+      if (t.includes("s")) seenS = true;
+      continue;
+    }
+    if (/^--[a-z][a-z-]*$/.test(t)) continue;
+    // A script file or script text: stdin is data, unless -s made the rest positional parameters.
+    return seenS;
+  }
+  return true;
+}
+
+/** Whether a pipeline stage after the marker (`cat <<EOF | sh`) feeds the body into a shell. */
+function pipesIntoShell(tail: string): boolean {
+  const segment = tail.split(/&&|\|\||;/)[0];
+  return segment
+    .split("|")
+    .slice(1)
+    .some((stage) => isShellConsumer(stage.replace(/["']/g, " ").split(/\s+/).filter(Boolean)));
+}
 
 interface HeredocMark {
   start: number;
   end: number;
   delimiter: string;
-  /** Whether the body is read as shell text (empty command or a shell before the marker). */
+  /** Whether the body is read as shell text (empty command, a shell before the marker, or a pipe into a shell). */
   shell: boolean;
 }
 
@@ -223,15 +311,13 @@ function heredocMarks(text: string): HeredocMark[] {
     const start = wordStart;
     wordStart = -1;
     if (!word.startsWith("<<")) return;
-    HEREDOC.lastIndex = 0;
-    const m = HEREDOC.exec(word);
-    if (!m || m.index + m[0].length !== word.length) return;
+    const m = HEREDOC_WORD.exec(word);
+    if (!m) return;
     const before = text.slice(0, start).split(/&&|\|\||;|\||\r?\n/).pop() ?? "";
     // Leading RUN flags (`RUN --network=host <<EOF`) are no command words.
     const tokens = before.split(/\s+/).filter((t) => t && !/^--[a-z-]+(?:=\S+)?$/i.test(t));
-    const shell =
-      tokens.length === 0 ||
-      (HEREDOC_SHELLS.has(path.posix.basename(tokens[0])) && tokens.slice(1).every((t) => /^-[a-z]+$/.test(t)));
+    const tail = (m[3] ?? "") + (text.slice(end).split(/\r?\n/)[0] ?? "");
+    const shell = tokens.length === 0 || isShellConsumer(tokens) || pipesIntoShell(tail);
     marks.push({ start, end, delimiter: m[2], shell });
   };
   for (let k = 0; k < text.length; k++) {
@@ -279,7 +365,13 @@ export function parseInstructions(content: string, warnings: string[] = []): Ins
           warnings.push(`unterminated heredoc <<${h.delimiter} at line ${startLine}`);
           continue;
         }
-        if (h.shell) args += "\n" + lines.slice(last + 1, end).join("\n");
+        const body = lines.slice(last + 1, end).join("\n");
+        if (h.shell) args += "\n" + body;
+        else if (/\bnpm\b[^\n]*\b(?:install|i|ci)\b/.test(body)) {
+          warnings.push(
+            `npm install/ci in heredoc body <<${h.delimiter} at line ${startLine} was not read (the command before the marker is not a recognised shell)`,
+          );
+        }
         last = end;
       }
     }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/check-docker-npm-coverage.ts` no longer skips (fails open on) the body of a RUN heredoc whose shell is reached through a wrapper or options: `env sh`, `sudo sh`, `command`, `exec`, `nice` and `time` (with their flags) and `VAR=val` prefixes are skipped, `bash -o pipefail`, `-eo pipefail`, `+o opt`, `--norc`, `-s` and `--` are accepted, a body piped into a shell (`cat <<EOF | sh`) is read, and an attached redirect (`<<EOF>/x`) is a marker. A body that is still not read (a non-shell consumer) and contains `npm install`, `npm i` or `npm ci` now gives a warning instead of passing silently. Tracker task 3c448be3.
+
 ## [0.8.0] - 2026-10-05
 
 **Headline: per-user rate limits on the scan, sync and repository-listing routes, and the 429 is now surfaced instead of swallowed.** The published MCP package is released as `@opentriologue/depsight-mcp` 0.6.0 (tag `depsight-mcp-v0.6.0`): its client throws a dedicated `RateLimitError` (status 429, `retryAfterSeconds`) and the `depsight_rescan` error answer carries a `retryAfterSeconds` key; the server reports version 0.6.0 in the MCP handshake. depsight is deployed from `master`; this tag is deploy provenance.
