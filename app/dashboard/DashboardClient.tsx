@@ -14,6 +14,7 @@ import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
+import { scanAllStopMessage } from '@/lib/rate-limit-client';
 
 interface ScanSummary {
   id: string;
@@ -202,6 +203,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const [scanAllRunning, setScanAllRunning] = useState(false);
   const [scanAllChecking, setScanAllChecking] = useState(false);
   const [scanAllProgress, setScanAllProgress] = useState({ current: 0, total: 0 });
+  const [scanAllError, setScanAllError] = useState<string | null>(null);
   const scanAllCancelRef = useRef(false);
 
   // Dependabot pre-check modal
@@ -695,6 +697,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   async function runScanAll() {
     setDependabotModal(null);
     scanAllCancelRef.current = false;
+    setScanAllError(null);
     setScanAllRunning(true);
     setScanAllProgress({ current: 0, total: repos.length });
 
@@ -709,6 +712,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        const cveStop = await scanAllStopMessage(cveRes, t['dashboard.scanAllRateLimited']);
+        if (cveStop) {
+          setScanAllError(cveStop);
+          break;
+        }
         if (cveRes.ok) {
           const cveData = (await cveRes.json()) as { dependabotDisabled?: boolean };
           if (!cveData.dependabotDisabled) {
@@ -723,11 +731,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
         if (scanAllCancelRef.current) break;
 
-        await fetch('/api/license', {
+        const licenseRes = await fetch('/api/license', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        const licenseStop = await scanAllStopMessage(licenseRes, t['dashboard.scanAllRateLimited']);
+        if (licenseStop) {
+          setScanAllError(licenseStop);
+          break;
+        }
         if (selectedRepoIdRef.current === repo.id) {
           const license = await fetchLicenseDetail(repo.id);
           applyLastScannedAt(repo.id, license.scannedAt);
@@ -736,11 +749,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
         if (scanAllCancelRef.current) break;
 
-        await fetch('/api/deps', {
+        const depsRes = await fetch('/api/deps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repoId: repo.id }),
         });
+        const depsStop = await scanAllStopMessage(depsRes, t['dashboard.scanAllRateLimited']);
+        if (depsStop) {
+          setScanAllError(depsStop);
+          break;
+        }
         const deps = await fetchDepsDetail(repo.id);
         applyLastScannedAt(repo.id, deps.scannedAt);
         if (selectedRepoIdRef.current === repo.id) {
@@ -825,6 +843,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
               </button>
             </div>
           </div>
+
+          {scanAllError && (
+            <p role="alert" className="mb-2 text-xs text-amber-400">
+              {scanAllError}
+            </p>
+          )}
 
           {/* Search */}
           <input

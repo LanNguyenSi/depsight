@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
+import { readRateLimit } from '@/lib/rate-limit-client';
 
 interface WorkflowFailRate {
   workflowId: string;
@@ -103,6 +104,11 @@ export function CIHealthTab({ repoId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoId }),
       });
+      const limit = await readRateLimit(res);
+      if (limit) {
+        setError(interpolate(t['ci.health.rateLimited'], { seconds: limit.retryAfterSeconds }));
+        return;
+      }
       if (!res.ok) throw new Error('Sync failed');
       await fetchAnalytics(period);
     } catch {

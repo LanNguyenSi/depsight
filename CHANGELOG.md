@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `POST /api/scan`, `POST /api/license`, `POST /api/deps` and `POST /api/ci/sync` are rate limited per user, session and `WRITE` token alike, so a looping `WRITE` token is capped at 300 scans, license scans, dependency analyses or per-repository syncs per hour (each its own budget), and at 12 all-repos syncs per hour. The limit counts requests, not GitHub API calls (one scan makes several). Over the limit they answer 429 with `Retry-After`; a request that fails authentication or the write-scope check is not counted. See `docs/api.md`.
 - `GET /api/repos` is rate limited per user (300 per hour, its own budget), session and `dsat_` Bearer token of either scope alike, because a token spends its owner's GitHub quota there (one call lists the live repos with ceil(N/100) GitHub requests). Over the limit it answers 429 with `Retry-After`; a 401 is not counted. The counter is per app instance. See `docs/api.md`.
 
+### Changed
+
+- A per-user rate limit (429) is now shown instead of being swallowed. The dashboard "scan all" run stops on the first 429 from the scan, license or dependency step and shows how many seconds to wait (`retryAfterSeconds` from the body, else the `Retry-After` header, else 60); repositories scanned before the stop stay updated. The CI Health tab's sync button shows the same wait instead of the generic sync error. The MCP client throws a dedicated `RateLimitError` (status 429, `retryAfterSeconds`) and the `depsight_rescan` error answer carries a `retryAfterSeconds` key, so an agent can back off. New messages exist in German and English.
+
 ### Fixed
 
 - `GET /api/sbom` accepts a `dsat_` Bearer token of either scope, so the MCP `depsight_get_sbom` tool no longer gets 401. `POST /api/ci/sync` accepts a `WRITE`-scoped token; a `READ` token gets 403. Both routes keep their owner scoping, and a session without a user id now gets 401 on `/api/sbom`.

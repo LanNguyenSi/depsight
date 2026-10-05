@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { DepsightClient, HttpError } from "../client.js";
+import { DepsightClient, HttpError, RateLimitError } from "../client.js";
 import { registerRescanTools } from "../tools/rescan.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolResult } from "../tools/shared.js";
@@ -249,5 +249,21 @@ describe("depsight_rescan tool wrapper", () => {
         );
       }
     });
+  });
+});
+
+describe("depsight_rescan on a rate limit", () => {
+  it("returns an error envelope that names retryAfterSeconds", async () => {
+    const handler = captureRescanHandler(async () => {
+      throw new RateLimitError("/api/scan", { error: "Rate limit exceeded", retryAfterSeconds: 321 }, 321);
+    });
+
+    const result = await handler({ repoId: "repo-abc" });
+
+    expect(result.isError).toBe(true);
+    const parsed = parseToolText(result);
+    expect(parsed.success).toBe(false);
+    expect(parsed.retryAfterSeconds).toBe(321);
+    expect(parsed.error).toContain("retryAfterSeconds: 321");
   });
 });

@@ -1,3 +1,5 @@
+import { RateLimitError } from "../client.js";
+
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: true;
@@ -15,7 +17,17 @@ export function errResult(error: unknown): ToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ success: false, error: message }, null, 2),
+        text: JSON.stringify(
+          {
+            success: false,
+            error: message,
+            ...(error instanceof RateLimitError
+              ? { retryAfterSeconds: error.retryAfterSeconds }
+              : {}),
+          },
+          null,
+          2,
+        ),
       },
     ],
     isError: true,

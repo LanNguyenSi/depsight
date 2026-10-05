@@ -55,6 +55,13 @@ export class DepsightClient {
         parsed = text;
       }
     }
+    if (res.status === 429) {
+      throw new RateLimitError(
+        path,
+        parsed,
+        parseRetryAfterSeconds(parsed, res.headers.get("Retry-After")),
+      );
+    }
     if (!res.ok) {
       throw new HttpError(res.status, path, parsed);
     }
@@ -135,4 +142,44 @@ export class DepsightClient {
   rescan(repoId: string): Promise<unknown> {
     return this.request("POST", "/api/scan", { body: { repoId } });
   }
+}
+
+/** Used when a 429 carries neither a usable body value nor a Retry-After header. */
+export const DEFAULT_RETRY_AFTER_SECONDS = 60;
+
+/**
+ * HTTP 429 from one of depsight's per-user rate limits. Names the wait in
+ * `retryAfterSeconds` (body value, else the Retry-After header, else a default)
+ * so an agent can back off instead of treating it as a generic failure.
+ */
+export class RateLimitError extends HttpError {
+  constructor(
+    path: string,
+    body: unknown,
+    public readonly retryAfterSeconds: number,
+  ) {
+    super(429, path, body);
+    this.name = "RateLimitError";
+    this.message = `Depsight ${path} → rate limit exceeded (HTTP 429), retryAfterSeconds: ${retryAfterSeconds}. Wait that long before retrying.`;
+  }
+}
+
+function positiveSeconds(value: unknown): number | null {
+  if (typeof value === "string" && value.trim() !== "") value = Number(value);
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.ceil(value);
+}
+
+export function parseRetryAfterSeconds(
+  body: unknown,
+  retryAfterHeader: string | null,
+): number {
+  const fromBody =
+    body !== null && typeof body === "object"
+      ? positiveSeconds((body as { retryAfterSeconds?: unknown }).retryAfterSeconds)
+      : null;
+  if (fromBody !== null) return fromBody;
+  const fromHeader =
+    retryAfterHeader === null ? null : positiveSeconds(retryAfterHeader);
+  return fromHeader ?? DEFAULT_RETRY_AFTER_SECONDS;
 }
