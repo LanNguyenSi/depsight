@@ -887,6 +887,104 @@ describe('heredoc markers and bodies', () => {
     expect(two.findings[0].line).toBe(3);
   });
 
+  it('reads the body when the shell sits behind wrappers or VAR=val prefixes', () => {
+    for (const open of [
+      'RUN env sh <<EOF',
+      'RUN env -i FOO=1 bash <<EOF',
+      'RUN env -u HOME sh <<EOF',
+      'RUN sudo sh <<EOF',
+      'RUN sudo -u root -E bash <<EOF',
+      'RUN FOO=1 sh <<EOF',
+      'RUN command sh <<EOF',
+      'RUN exec sh <<EOF',
+      'RUN nice -n 5 sh <<EOF',
+      'RUN time sh <<EOF',
+    ]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+      expect(r.warnings).toEqual([]);
+    }
+  });
+
+  it('reads the body of a shell started with -o <opt>, --, -s or long flags', () => {
+    for (const open of [
+      'RUN bash -o pipefail <<EOF',
+      'RUN bash -eo pipefail <<EOF',
+      'RUN sh +o nounset <<EOF',
+      'RUN bash --norc --noprofile <<EOF',
+      'RUN sh -s <<EOF',
+      'RUN sh -s -- arg1 <<EOF',
+    ]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+    }
+  });
+
+  it('reads the body piped into a shell (cat <<EOF | sh)', () => {
+    for (const open of ['RUN cat <<EOF | sh', 'RUN cat <<EOF | bash -e', 'RUN cat <<EOF|sh', 'RUN cat <<EOF | env sh -s']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+      expect(r.warnings).toEqual([]);
+    }
+  });
+
+  it('recognises a marker with an attached redirect', () => {
+    for (const open of ['RUN sh <<EOF>/tmp/x', 'RUN bash <<EOF>>/tmp/x', 'RUN <<EOF>/tmp/x']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+    }
+    // A data consumer with an attached redirect still swallows the body (no instruction leak).
+    const data = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<EOF>/x', 'FROM scratch', 'EOF', 'RUN npm install']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(data.findings).toHaveLength(1);
+    expect(data.findings[0].line).toBe(6);
+  });
+
+  it('does not read script-file or data consumers as shell text', () => {
+    for (const open of ['RUN sh script.sh <<EOF', 'RUN sh -- script.sh <<EOF', 'RUN cat <<EOF | tee /x', 'RUN env cat <<EOF']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toEqual([]);
+    }
+  });
+
+  it('warns instead of skipping silently when an unread body contains an npm install or ci', () => {
+    for (const body of ['npm install', 'npm ci', 'npm i --omit=dev']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', body, 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings).toEqual([]);
+      expect(r.warnings).toHaveLength(1);
+      expect(r.warnings[0]).toContain('npm install/ci in heredoc body <<EOF at line 3 was not read');
+    }
+    const quiet = scan({
+      Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', 'echo hi', 'EOF']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(quiet.warnings).toEqual([]);
+  });
+
   it('finds the install behind while and until', () => {
     for (const run of ['RUN while npm install; do break; done', 'RUN until npm install; do sleep 1; done']) {
       const r = scan({ Dockerfile: dockerfile([...base, run]), 'package.json': COVERAGE_PKG });
