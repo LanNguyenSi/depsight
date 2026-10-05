@@ -235,6 +235,9 @@ describe('lockfile detection edge cases', () => {
     });
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0].verdict).toBe('confirmed');
+    expect(r.findings[0].lockfile).toBe(true);
+    expect(r.findings[0].reason).toBe('lockfile bypassed: --no-package-lock, npm 10 < 11');
+    expect(formatHuman([r])).toContain('lockfile bypassed: --no-package-lock');
   });
 
   it('flags an earlier rm of the lockfile', () => {
@@ -466,6 +469,7 @@ describe('CLI', () => {
       manifest: 'package.json',
       lockfile: false,
       masked: false,
+      reason: 'lockfile-less install, npm 10 < 11',
     });
     expect(parsed.summary.findings).toBe(1);
   });
@@ -485,5 +489,298 @@ describe('CLI', () => {
     const c = capture();
     expect(run(['--help'], c.io)).toBe(0);
     expect(c.out.join('\n').toLowerCase()).toContain('known limits');
+  });
+});
+
+describe('RUN flags, heredocs, shell keywords and subshells', () => {
+  const installWith = (run: string, extra: string[] = []) =>
+    dockerfile(['FROM node:22-alpine', 'COPY package.json ./', ...extra, run]);
+
+  it('ignores leading RUN flags such as --mount and --network', () => {
+    for (const run of [
+      'RUN --mount=type=cache,target=/root/.npm npm install',
+      'RUN --network=host npm install',
+      'RUN --security=insecure --network=none npm install',
+    ]) {
+      const r = scan({ Dockerfile: installWith(run), 'package.json': COVERAGE_PKG });
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+    }
+  });
+
+  it('reads a RUN heredoc body as the RUN shell text at the RUN start line', () => {
+    for (const open of ['RUN <<EOF', 'RUN <<-EOF', "RUN <<'EOF'", 'RUN <<"EOF"', 'RUN --network=host <<EOF']) {
+      const r = scan({
+        Dockerfile: dockerfile(['FROM node:22-alpine', 'COPY package.json ./', open, 'set -e', 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+    }
+  });
+
+  it('does not turn heredoc body lines into instructions', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:24-alpine',
+        'COPY package.json ./',
+        'RUN <<EOF',
+        'FROM node:22-alpine',
+        'COPY package.json ./',
+        'EOF',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toEqual([]);
+  });
+
+  it('keeps parsing after a heredoc ends', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY package.json ./',
+        'RUN <<EOF',
+        'echo hi',
+        'EOF',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].line).toBe(6);
+  });
+
+  it('finds the install behind then/else/do and a negation', () => {
+    const cond = 'RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi';
+    const r = scan({
+      Dockerfile: dockerfile(['FROM node:22-alpine', 'COPY . .', cond]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].line).toBe(3);
+    for (const run of ['RUN true; then npm install', 'RUN for d in a; do npm install; done', 'RUN ! npm install']) {
+      expect(scan({ Dockerfile: installWith(run), 'package.json': COVERAGE_PKG }).findings).toHaveLength(1);
+    }
+  });
+
+  it('does not flag the if/else install when a lockfile is in the context', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY . .',
+        'RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(r.findings).toEqual([]);
+  });
+
+  it('finds the install inside a subshell or group', () => {
+    for (const run of ['RUN (cd /app && npm install)', 'RUN { cd /app && npm install; }']) {
+      const r = scan({ Dockerfile: installWith(run), 'package.json': COVERAGE_PKG });
+      expect(r.findings).toHaveLength(1);
+    }
+  });
+
+  it('splits RUN text on newlines', () => {
+    const r = scan({
+      Dockerfile: installWith('RUN <<EOF\ncd /app\nnpm install\nEOF'),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+  });
+});
+
+describe('npm argument parsing', () => {
+  const withRun = (run: string) =>
+    scan({
+      Dockerfile: dockerfile(['FROM node:22-alpine', 'COPY package.json ./', run]),
+      'package.json': COVERAGE_PKG,
+    });
+
+  it('lets value-taking flags consume their next token', () => {
+    for (const run of [
+      'RUN npm install --omit dev',
+      'RUN npm install --include dev',
+      'RUN npm install --prefix /app',
+      'RUN npm install -C /app',
+      'RUN npm install --loglevel verbose',
+      'RUN npm install --cache /tmp/c',
+      'RUN npm install --registry https://r.example',
+      'RUN npm install --workspace web',
+      'RUN npm install -w web',
+    ]) {
+      expect(withRun(run).findings, run).toHaveLength(1);
+    }
+  });
+
+  it('accepts global options before the subcommand', () => {
+    expect(withRun('RUN npm --prefix /app install').findings).toHaveLength(1);
+    expect(withRun('RUN npm -C /app i').findings).toHaveLength(1);
+    expect(withRun('RUN npm --legacy-peer-deps install').findings[0].masked).toBe(true);
+  });
+
+  it('treats npm install . as a project install but a package name as not', () => {
+    expect(withRun('RUN npm install .').findings).toHaveLength(1);
+    expect(withRun('RUN npm install ./').findings).toHaveLength(1);
+    expect(withRun('RUN npm install --omit dev lodash').findings).toEqual([]);
+  });
+
+  it('treats a bare npm i -g npm as latest, an unknown builder', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'RUN npm i -g npm',
+        'COPY package.json ./',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].verdict).toBe('unknown-builder');
+    expect(r.findings[0].npmMajor).toBeNull();
+  });
+});
+
+describe('rm bypass matching', () => {
+  it('matches the basename: an unrelated file ending in package-lock.json is no bypass', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY package*.json ./',
+        'RUN rm -rf /tmp/old-package-lock.json && npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(r.findings).toEqual([]);
+  });
+
+  it('still treats rm of a path to the lockfile as a bypass', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY package*.json ./',
+        'RUN rm -f /app/package-lock.json && npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].reason).toContain('lockfile bypassed: rm package-lock.json');
+  });
+});
+
+describe('stage inheritance of manifests and lockfile state', () => {
+  it('inherits copied manifests from the parent stage', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine AS deps',
+        'COPY package.json ./',
+        'FROM deps AS build',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].stage).toBe('build');
+    expect(r.findings[0].manifest).toBe('package.json');
+  });
+
+  it('inherits a copied lockfile from the parent stage', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine AS deps',
+        'COPY package.json package-lock.json ./',
+        'FROM deps AS build',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(r.findings).toEqual([]);
+  });
+
+  it('inherits a lockfile removal from the parent stage', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine AS deps',
+        'COPY package*.json ./',
+        'RUN rm package-lock.json',
+        'FROM deps AS build',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+      'package-lock.json': '{}',
+    });
+    expect(r.findings).toHaveLength(1);
+  });
+
+  it('masks a child stage when the base stage sets the legacy-peer-deps ENV', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine AS base',
+        'ENV npm_config_legacy_peer_deps=true',
+        'FROM base',
+        'COPY package.json ./',
+        'RUN npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].masked).toBe(true);
+  });
+});
+
+describe('masking, unknown builders and comments (extra fixtures)', () => {
+  it('masks an env-prefixed install npm_config_legacy_peer_deps=true npm install', () => {
+    const r = scan({
+      Dockerfile: incidentWith({ install: 'RUN npm_config_legacy_peer_deps=true npm install' }),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].masked).toBe(true);
+    expect(r.findings[0].verdict).toBe('masked');
+  });
+
+  it('gives unknown-builder for a variable after a node major (node:22-${V})', () => {
+    const r = scan({
+      Dockerfile: incidentWith({ from: 'FROM node:22-${V}' }),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].verdict).toBe('unknown-builder');
+    expect(r.findings[0].reason).toContain('unknown builder');
+    expect(npmMajorForImage('node:22-${V}')).toBeNull();
+  });
+
+  it('keeps the RUN start line when a comment line sits inside the continuation', () => {
+    const r = scan({
+      Dockerfile: dockerfile([
+        'FROM node:22-alpine',
+        'COPY package.json ./',
+        'RUN apk add git \\',
+        '# note inside the continuation',
+        '    && npm install',
+      ]),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].line).toBe(3);
+  });
+});
+
+describe('repo walk', () => {
+  it('skips .worktrees directories next to node_modules and .git', () => {
+    const r = scan({
+      'Dockerfile': dockerfile(['FROM node:24-alpine']),
+      '.worktrees/feature/Dockerfile': INCIDENT,
+      '.worktrees/feature/package.json': COVERAGE_PKG,
+      'sub/.worktrees/x/Dockerfile': INCIDENT,
+    });
+    expect(r.dockerfiles).toEqual(['Dockerfile']);
+    expect(r.findings).toEqual([]);
   });
 });

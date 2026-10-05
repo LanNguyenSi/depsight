@@ -24,16 +24,26 @@
  * -----
  * Input: one or more repository directories. Per repository, Dockerfiles are
  * searched recursively (file name `Dockerfile`, `Dockerfile.*` or
- * `*.Dockerfile`; `node_modules` and `.git` are skipped). The build context
+ * `*.Dockerfile`; `node_modules`, `.git` and `.worktrees` are skipped). The build context
  * of a Dockerfile is the directory that contains it.
  *
- * Parsing: line continuations (`\`) are joined, comment lines dropped. Each
- * `FROM` starts a stage (`AS name` names it). Instructions are evaluated
- * strictly in file order within a stage.
+ * Parsing: line continuations (`\`) are joined, comment lines dropped. Leading
+ * RUN flags (`--mount=...`, `--network=...`) are ignored. The body of a RUN
+ * heredoc (`RUN <<EOF`) belongs to that RUN and is reported at its start line.
+ * RUN text is split on `&&`, `||`, `;`, `|` and newlines; leading shell
+ * keywords (`then`, `else`, `elif`, `do`, `if`, `!`) and subshell or group
+ * brackets are ignored. Each `FROM` starts a stage (`AS name` names it).
+ * Instructions are evaluated strictly in file order within a stage. A stage
+ * `FROM <earlier stage>` also inherits that stage's copied manifests and
+ * lockfile state (like image, npm major and the legacy-peer-deps ENV).
  *
  * (a) Lockfile-less install: a `RUN` contains the command `npm install` or
  *     `npm i` (also after `&&`, `;`, `||`, `|` or inside `sh -c "..."`) with
- *     NO non-flag arguments (a project install) and no `-g`/`--global`.
+ *     NO non-flag arguments (a project install; `npm install .` counts) and
+ *     no `-g`/`--global`. Value-taking options (`--omit`, `--include`,
+ *     `--prefix`, `-C`, `--loglevel`, `--cache`, `--registry`, `--workspace`,
+ *     `-w`) consume their next token, also before the subcommand
+ *     (`npm --prefix /app install`). A bare `npm i -g npm` means latest.
  *     `npm install -g npm@11` and `npm install <pkg>` do not count; `npm ci`
  *     does not count. The lockfile counts as present when, earlier in the
  *     same stage, a `COPY`/`ADD` without `--from` copies package-lock.json or
@@ -41,7 +51,8 @@
  *     `package*.json`), or a directory copy such as `COPY . .` copies a
  *     context directory that contains the file. Explicit bypass (counts as
  *     lockfile-less even if the file is there): `--no-package-lock` on the
- *     install, or an earlier `rm` of package-lock.json in the stage.
+ *     install, or an earlier `rm` of package-lock.json (matched by file name)
+ *     in the stage.
  *     `COPY --from=<stage>` is not followed.
  * (b) coverage-v8: a package.json copied into the stage before the install
  *     (source path relative to the context; `COPY . .` means
@@ -63,7 +74,8 @@
  * Masking: `--legacy-peer-deps` on the install, or
  * `ENV npm_config_legacy_peer_deps=true` earlier in the stage, avoids the
  * crash. That is no finding, but a report entry with `masked: true` and
- * verdict `masked` (it does not count in the summary).
+ * verdict `masked` (it does not count in the summary). A COPY'd `.npmrc` with
+ * legacy-peer-deps is NOT detected (known limit below).
  *
  * Verdict per install with (a) and (b): npm major < 11 -> `confirmed`;
  * unknown -> `unknown-builder` (counts as a finding, never as a pass);
@@ -71,12 +83,16 @@
  *
  * Output: human readable by default, `--json` for the stable structure
  *   { repos: [ { repo, dockerfiles, findings: [ { dockerfile, stage, line,
- *     verdict, image, npmMajor, manifest, lockfile, masked } ], warnings } ],
+ *     verdict, image, npmMajor, manifest, lockfile, masked, reason } ], warnings } ],
  *     summary: { findings } }
+ * `lockfile` is true when a lockfile was copied into the stage (so true for a
+ * bypass case); `reason` is a short text such as "lockfile-less install,
+ * npm 10 < 11" or "lockfile bypassed: --no-package-lock, unknown builder", and
+ * the human line carries it as well.
  * Exit codes: 0 = no findings, 1 = at least one finding, 2 = usage error
  * (no arguments, unknown option, directory missing or not readable).
  *
- * Known limits: no .dockerignore, no COPY --from hand-over of node_modules
+ * Known limits: a COPY'd .npmrc with legacy-peer-deps is not read, no .dockerignore, no COPY --from hand-over of node_modules
  * or lockfiles, no workspaces, no ARG resolution, no docker-compose build
  * args, no corepack. The Node-to-npm table is maintained by hand (Node
  * minors can differ; Node 22.x bundles npm 10.x to this day).
@@ -94,8 +110,11 @@ export interface Finding {
   image: string;
   npmMajor: number | null;
   manifest: string;
+  /** Whether a lockfile was copied into the stage (true when the install bypasses it). */
   lockfile: boolean;
   masked: boolean;
+  /** Short human-readable reason, e.g. "lockfile-less install, npm 10 < 11". */
+  reason: string;
 }
 
 export interface RepoReport {
@@ -145,7 +164,7 @@ const HELP = [
   "",
   "Exit codes: 0 no findings, 1 at least one finding, 2 usage error.",
   "",
-  "Known limits: no .dockerignore, no COPY --from hand-over of node_modules or",
+  "Known limits: no .npmrc, no .dockerignore, no COPY --from hand-over of node_modules or",
   "lockfiles, no workspaces, no ARG resolution, no docker-compose build args,",
   "no corepack, the Node-to-npm table is maintained by hand.",
 ].join("\n");
@@ -160,10 +179,35 @@ interface Instruction {
   args: string;
 }
 
+const HEREDOC = /(?<!<)<<-?\s*(["']?)([A-Za-z_][\w-]*)\1/g;
+
 export function parseInstructions(content: string): Instruction[] {
   const out: Instruction[] = [];
   const lines = content.split(/\r?\n/);
   let current: { line: number; text: string } | null = null;
+  // Emits the finished instruction; for a RUN with heredocs the body lines up
+  // to each delimiter become part of the RUN (not separate instructions).
+  // Returns the index of the last line consumed.
+  const emit = (startLine: number, rawText: string, index: number): number => {
+    const m = /^(\S+)\s*(.*)$/s.exec(rawText.trim());
+    if (!m) return index;
+    const keyword = m[1].toUpperCase();
+    let args = m[2];
+    let last = index;
+    if (keyword === "RUN") {
+      for (const h of m[2].matchAll(HEREDOC)) {
+        const body: string[] = [];
+        while (last + 1 < lines.length) {
+          last++;
+          if (lines[last].trim() === h[2]) break;
+          body.push(lines[last]);
+        }
+        args += "\n" + body.join("\n");
+      }
+    }
+    out.push({ line: startLine, keyword, args });
+    return last;
+  };
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const trimmed = raw.trim();
@@ -179,16 +223,10 @@ export function parseInstructions(content: string): Instruction[] {
       continue;
     }
     current.text += raw;
-    const text = current.text.trim();
-    const m = /^(\S+)\s*(.*)$/s.exec(text);
-    if (m) out.push({ line: current.line, keyword: m[1].toUpperCase(), args: m[2] });
+    i = emit(current.line, current.text, i);
     current = null;
   }
-  if (current !== null) {
-    const text = current.text.trim();
-    const m = /^(\S+)\s*(.*)$/s.exec(text);
-    if (m) out.push({ line: current.line, keyword: m[1].toUpperCase(), args: m[2] });
-  }
+  if (current !== null) emit(current.line, current.text, lines.length - 1);
   return out;
 }
 
@@ -246,9 +284,16 @@ interface RunCommand {
 }
 
 const WRAPPERS = new Set(["sh", "bash", "ash", "-c", "-lc", "-ec", "-e", "sudo", "exec", "time"]);
+const SHELL_KEYWORDS = new Set(["then", "else", "elif", "do", "if", "while", "until", "!"]);
 
 function splitRun(args: string): RunCommand[] {
   let text = args.trim();
+  // Leading RUN flags such as --mount=..., --network=..., --security=...
+  for (;;) {
+    const f = /^--[a-z-]+(?:=\S+)?\s*/i.exec(text);
+    if (!f) break;
+    text = text.slice(f[0].length);
+  }
   if (text.startsWith("[")) {
     try {
       const parsed: unknown = JSON.parse(text);
@@ -257,18 +302,56 @@ function splitRun(args: string): RunCommand[] {
       // keep the raw text
     }
   }
-  const parts = text.replace(/["']/g, " ").split(/&&|\|\||;|\|/);
+  text = text.replace(HEREDOC, " ");
+  const parts = text.replace(/["']/g, " ").split(/&&|\|\||;|\||\r?\n/);
   const cmds: RunCommand[] = [];
   for (const part of parts) {
-    const tokens = part.split(/\s+/).filter(Boolean);
+    const tokens = part
+      .split(/\s+/)
+      .map((t) => t.replace(/^[({]+/, "").replace(/[)};]+$/, ""))
+      .filter(Boolean);
     let envLegacy = false;
-    while (tokens.length > 0 && (WRAPPERS.has(tokens[0]) || /^\w+=/.test(tokens[0]))) {
+    while (
+      tokens.length > 0 &&
+      (WRAPPERS.has(tokens[0]) || SHELL_KEYWORDS.has(tokens[0]) || /^\w+=/.test(tokens[0]))
+    ) {
       const t = tokens.shift() as string;
       if (/^npm_config_legacy_peer_deps=true$/i.test(t)) envLegacy = true;
     }
     if (tokens.length > 0) cmds.push({ tokens, envLegacy });
   }
   return cmds;
+}
+
+/** npm options that consume the next token as their value. */
+const NPM_VALUE_FLAGS = new Set([
+  "--omit",
+  "--include",
+  "--prefix",
+  "-C",
+  "--loglevel",
+  "--cache",
+  "--registry",
+  "--workspace",
+  "-w",
+]);
+
+/** Splits the tokens after `npm` into subcommand, flags (before or after it) and positional args. */
+function parseNpmArgs(tokens: string[]): { sub: string | null; flags: string[]; positional: string[] } {
+  const flags: string[] = [];
+  const positional: string[] = [];
+  let sub: string | null = null;
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
+    if (t.startsWith("-")) {
+      flags.push(t);
+      if (NPM_VALUE_FLAGS.has(t)) k++;
+      continue;
+    }
+    if (sub === null) sub = t;
+    else positional.push(t);
+  }
+  return { sub, flags, positional };
 }
 
 // ---------------------------------------------------------------------------
@@ -334,9 +417,9 @@ export function analyzeDockerfile(
         image: parent ? parent.image : baseRef,
         npmMajor: parent ? parent.npmMajor : npmMajorForImage(baseRef),
         legacyEnv: parent ? parent.legacyEnv : false,
-        lockfileCopied: false,
-        lockfileRemoved: false,
-        manifests: [],
+        lockfileCopied: parent ? parent.lockfileCopied : false,
+        lockfileRemoved: parent ? parent.lockfileRemoved : false,
+        manifests: parent ? [...parent.manifests] : [],
       };
       stages.push(stage);
       continue;
@@ -378,26 +461,33 @@ export function analyzeDockerfile(
     if (ins.keyword !== "RUN") continue;
 
     for (const cmd of splitRun(ins.args)) {
-      const [bin, sub, ...rest] = cmd.tokens;
-      if (bin === "rm" && cmd.tokens.some((t) => LOCKFILES.some((l) => t.endsWith(l)))) {
+      const [bin, ...after] = cmd.tokens;
+      if (bin === "rm" && after.some((t) => LOCKFILES.includes(path.posix.basename(t)))) {
         stage.lockfileRemoved = true;
         continue;
       }
-      if (bin !== "npm" || (sub !== "install" && sub !== "i")) continue;
-      const flags = rest.filter((t) => t.startsWith("-"));
-      const positional = rest.filter((t) => !t.startsWith("-"));
+      if (bin !== "npm") continue;
+      const { sub, flags, positional: rawPositional } = parseNpmArgs(after);
+      if (sub !== "install" && sub !== "i") continue;
+      // `npm install .` installs the project in the current directory.
+      const positional = rawPositional.filter((p) => p !== "." && p !== "./");
       const global = flags.includes("-g") || flags.includes("--global");
       if (global) {
-        const ref = positional.find((p) => p.startsWith("npm@"));
-        if (ref !== undefined) stage.npmMajor = majorFromNpmRef(ref.slice(4));
+        // A bare `npm i -g npm` means the latest npm: unknown.
+        const ref = positional.find((p) => p === "npm" || p.startsWith("npm@"));
+        if (ref !== undefined) stage.npmMajor = ref === "npm" ? null : majorFromNpmRef(ref.slice(4));
         continue;
       }
       if (positional.length > 0) continue; // `npm install <pkg>`: not a project install
 
       // Ingredient (a): lockfile-less project install.
-      const bypass = flags.includes("--no-package-lock") || stage.lockfileRemoved;
-      const lockfile = stage.lockfileCopied && !bypass;
-      if (lockfile) continue;
+      const bypassKind = flags.includes("--no-package-lock")
+        ? "--no-package-lock"
+        : stage.lockfileRemoved
+          ? "rm package-lock.json"
+          : null;
+      if (stage.lockfileCopied && bypassKind === null) continue;
+      const bypassed = stage.lockfileCopied;
 
       // Ingredient (b): coverage-v8 in a copied manifest.
       let manifest: string | null = null;
@@ -416,6 +506,8 @@ export function analyzeDockerfile(
       if (major !== null && major >= FIXED_NPM_MAJOR) continue;
       const masked =
         flags.includes("--legacy-peer-deps") || flags.includes("--legacy-peer-deps=true") || stage.legacyEnv || cmd.envLegacy;
+      const lockPart = bypassed ? `lockfile bypassed: ${bypassKind}` : "lockfile-less install";
+      const builderPart = major === null ? "unknown builder" : `npm ${major} < ${FIXED_NPM_MAJOR}`;
       findings.push({
         dockerfile,
         stage: stage.name ?? stage.index,
@@ -424,8 +516,9 @@ export function analyzeDockerfile(
         image: stage.image,
         npmMajor: major,
         manifest: rel(manifest),
-        lockfile: false,
+        lockfile: bypassed,
         masked,
+        reason: `${lockPart}, ${builderPart}`,
       });
     }
   }
@@ -444,7 +537,7 @@ function findDockerfiles(dir: string, base: string, out: string[]): void {
   const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
   for (const e of entries) {
     if (e.isDirectory()) {
-      if (e.name === "node_modules" || e.name === ".git") continue;
+      if (e.name === "node_modules" || e.name === ".git" || e.name === ".worktrees") continue;
       findDockerfiles(path.join(dir, e.name), base, out);
     } else if (e.isFile() && isDockerfileName(e.name)) {
       out.push(path.relative(base, path.join(dir, e.name)).split(path.sep).join("/"));
@@ -478,7 +571,7 @@ export function formatHuman(reports: RepoReport[]): string {
     for (const f of r.findings) {
       const npm = f.npmMajor === null ? "unknown" : String(f.npmMajor);
       lines.push(
-        `${r.repo}/${f.dockerfile}:${f.line} [${f.verdict}] stage ${f.stage}, image ${f.image}, npm ${npm}, manifest ${f.manifest}` +
+        `${r.repo}/${f.dockerfile}:${f.line} [${f.verdict}] stage ${f.stage}, image ${f.image}, npm ${npm}, manifest ${f.manifest}, ${f.reason}` +
           (f.masked ? " (masked by --legacy-peer-deps, not counted)" : ""),
       );
     }
