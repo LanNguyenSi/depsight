@@ -4,6 +4,7 @@ import {
   DepsightClient,
   HttpError,
   RateLimitError,
+  parseRetryAfterSeconds,
 } from "../client.js";
 
 function makeResponse(body: unknown, init?: { status?: number }) {
@@ -541,5 +542,33 @@ describe("DepsightClient 429 handling", () => {
     const err = await new DepsightClient(config).rescan("r").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect(err).not.toBeInstanceOf(RateLimitError);
+  });
+});
+
+describe("parseRetryAfterSeconds", () => {
+  it("prefers the body retryAfterSeconds over the header", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 42 }, "7")).toBe(42);
+  });
+
+  it("rounds a fractional body value up", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 41.2 }, null)).toBe(42);
+  });
+
+  it("falls back to the header when the body value is 0, negative or non-numeric", () => {
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 0 }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: -5 }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: "soon" }, "30")).toBe(30);
+    expect(parseRetryAfterSeconds({ error: "Rate limit exceeded" }, "120")).toBe(120);
+    expect(parseRetryAfterSeconds(null, "15")).toBe(15);
+  });
+
+  it("falls back to the default when neither source is usable", () => {
+    expect(parseRetryAfterSeconds(null, null)).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: 0 }, "0")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({ retryAfterSeconds: -5 }, "-1")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(parseRetryAfterSeconds({}, "soon")).toBe(DEFAULT_RETRY_AFTER_SECONDS);
+    expect(
+      parseRetryAfterSeconds({}, "Wed, 21 Oct 2026 07:28:00 GMT"),
+    ).toBe(DEFAULT_RETRY_AFTER_SECONDS);
   });
 });

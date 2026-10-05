@@ -3,7 +3,7 @@ type: module
 title: Rescan and staleness - per-scanner freshness beside one any-success timestamp
 description: staleness has no dedicated flag on Repo or Scan; the cron computes it each cycle from two Repo fields, lastScannedAt (the last time any scanner succeeded, written only by the three scanners) and lastScanAttemptAt (the cron's own attempt marker), while per-scanner freshness (cveScannedAt, licenseScannedAt, depsScannedAt plus a last-failure message each) lets a persistently failing scanner stay visible in the overview table and the dashboard even when the other scanners keep advancing lastScannedAt; the cron no longer stamps lastScannedAt after a failed attempt; a scanner whose source could not be read (revoked token, GitHub or OSV outage) still stores what it found but is recorded through the same error field instead of stamping a success, and the completed scan row carries the reason (Scan.degradedReason), which the scan.completed webhook, POST /api/scan and the MCP rescan answer expose.
 tags: [cron, scan, staleness, mcp]
-timestamp: 2026-10-05T08:46:25Z
+timestamp: 2026-10-05T08:53:23Z
 sources:
   - lib/cron/auto-scan.ts
   - lib/cve/scanner.ts
@@ -66,7 +66,7 @@ The cron is no longer a writer of `lastScannedAt`. After running the three scann
 
 ## What the UI shows
 
-`getScannerStatuses` (`lib/scan/freshness.ts:85-91`) turns the six per-scanner columns into a `{ lastSuccessAt, error }` pair per scanner, and `failingScanners` (`lib/scan/freshness.ts:94-96`) lists the ones with an error. The overview table shows the `lastScannedAt` date plus a warning marker whose tooltip names each failing scanner, its message and its last success (`components/overview/RepoComparisonTable.tsx:183-195`, fed by `lib/overview/team-health.ts:161`), and sorts its "scanned" column by `lastScannedAt` (`components/overview/RepoComparisonTable.tsx:45-49`). The dashboard header shows the same per scanner as a red line under "last scanned" (`app/dashboard/DashboardClient.tsx:943-955`), from the server-rendered status (`app/dashboard/page.tsx:67`); it is not refreshed after an in-page rescan until the page is reloaded. In the dashboard, the "last scanned" time itself is overwritten client-side from the latest completed scan rows (`app/dashboard/DashboardClient.tsx:352`, `app/dashboard/DashboardClient.tsx:365`), so it reflects completed scans, not attempts.
+`getScannerStatuses` (`lib/scan/freshness.ts:85-91`) turns the six per-scanner columns into a `{ lastSuccessAt, error }` pair per scanner, and `failingScanners` (`lib/scan/freshness.ts:94-96`) lists the ones with an error. The overview table shows the `lastScannedAt` date plus a warning marker whose tooltip names each failing scanner, its message and its last success (`components/overview/RepoComparisonTable.tsx:183-195`, fed by `lib/overview/team-health.ts:161`), and sorts its "scanned" column by `lastScannedAt` (`components/overview/RepoComparisonTable.tsx:45-49`). The dashboard header shows the same per scanner as a red line under "last scanned" (`app/dashboard/DashboardClient.tsx:967-979`), from the server-rendered status (`app/dashboard/page.tsx:67`); it is not refreshed after an in-page rescan until the page is reloaded. In the dashboard, the "last scanned" time itself is overwritten client-side from the latest completed scan rows (`app/dashboard/DashboardClient.tsx:354`, `app/dashboard/DashboardClient.tsx:367`), so it reflects completed scans, not attempts.
 
 ## Consequence
 

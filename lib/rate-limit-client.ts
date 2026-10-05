@@ -5,6 +5,8 @@
  * dashboard components stay thin wiring and the decisions are unit-testable.
  */
 
+import { interpolate } from '@/lib/i18n/context';
+
 /** Used when a 429 carries neither a usable body value nor a Retry-After header. */
 export const DEFAULT_RETRY_AFTER_SECONDS = 60;
 
@@ -57,5 +59,5 @@ export async function scanAllStopMessage(
 ): Promise<string | null> {
   const limit = await readRateLimit(res);
   if (!limit) return null;
-  return template.split('{seconds}').join(String(limit.retryAfterSeconds));
+  return interpolate(template, { seconds: limit.retryAfterSeconds });
 }
