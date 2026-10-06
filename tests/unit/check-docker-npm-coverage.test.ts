@@ -985,6 +985,85 @@ describe('heredoc markers and bodies', () => {
     expect(quiet.warnings).toEqual([]);
   });
 
+  it('keeps wrapper long options that follow the command word (not leading RUN flags)', () => {
+    for (const open of [
+      'RUN sudo --user node sh <<EOF',
+      'RUN env --unset HOME sh <<EOF',
+      'RUN nice --adjustment 5 sh <<EOF',
+      'RUN --network=host sudo --user node sh <<EOF',
+    ]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+      expect(r.warnings, open).toEqual([]);
+    }
+  });
+
+  it('still ignores several leading RUN flags before a data consumer', () => {
+    const r = scan({
+      Dockerfile: dockerfile([...base, 'RUN --mount=type=cache,target=/c --network=host cat <<EOF > /x', 'npm install', 'EOF']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+  });
+
+  it('does not warn for a flag -i or a non-install subcommand in an unread body', () => {
+    for (const body of ['npm run test -- -i', 'npm run ci', 'npm test -i']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', body, 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, body).toEqual([]);
+      expect(r.warnings, body).toEqual([]);
+    }
+  });
+
+  it('warns for an install in an unread body after npm options or another command', () => {
+    for (const body of ['npm --prefix /app install', 'cd /app && npm ci', 'npm -g i']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', body, 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.warnings, body).toHaveLength(1);
+    }
+  });
+
+  it('recognises a space-separated marker (<< EOF, << \'EOF\', <<- "EOF")', () => {
+    for (const open of ["RUN << 'EOF'", 'RUN << EOF', 'RUN <<- "EOF"', "RUN sh << 'EOF'", "RUN bash -e << 'EOF'"]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+      expect(r.warnings, open).toEqual([]);
+    }
+  });
+
+  it('treats the body of a space-separated marker for a data consumer as data', () => {
+    const r = scan({
+      Dockerfile: dockerfile([...base, "RUN cat << 'EOF' > /app/entry.sh", 'npm install', 'EOF', 'RUN echo done']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+  });
+
+  it('does not take a shift with a non-word right operand for a space-separated marker', () => {
+    for (const run of ['RUN echo $((1 << 2))', 'RUN echo $(( a << 2 ))', 'RUN echo "a << EOF"']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, run, 'RUN npm install', 'RUN <<EOF', 'echo hi', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, run).toHaveLength(1);
+      expect(r.findings[0].line).toBe(4);
+    }
+  });
+
   it('finds the install behind while and until', () => {
     for (const run of ['RUN while npm install; do break; done', 'RUN until npm install; do sleep 1; done']) {
       const r = scan({ Dockerfile: dockerfile([...base, run]), 'package.json': COVERAGE_PKG });

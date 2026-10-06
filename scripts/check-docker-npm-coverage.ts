@@ -28,9 +28,12 @@
  * build context of a Dockerfile is the directory that contains it.
  *
  * Parsing: line continuations (`\`) are joined, comment lines dropped. Leading
- * RUN flags (`--mount=...`, `--network=...`) are ignored. A RUN heredoc
- * marker is a whitespace-separated word outside quotes that is exactly
- * `<<WORD`, `<<-WORD`, `<<'WORD'` or `<<"WORD"` (BuildKit style), so
+ * RUN flags (`--mount=...`, `--network=...`, only before the first command
+ * word) are ignored. A RUN heredoc
+ * marker is a whitespace-separated word outside quotes that is
+ * `<<WORD`, `<<-WORD`, `<<'WORD'` or `<<"WORD"` (BuildKit style), or the
+ * space-separated form `<< WORD` / `<< 'WORD'` / `<<- WORD`, optionally
+ * followed by an attached redirect or pipe (`<<EOF>/x`, `<<EOF|sh`), so
  * `"x<<y"`, `$((a<<b))`, `'s/<<HEAD//'` and a here-string `<<<word` are no
  * markers. The body lines up to the delimiter line belong to that RUN (they
  * never become instructions) and an install in them is reported at the RUN
@@ -43,7 +46,8 @@
  * (`cat <<EOF | sh`). An attached redirect (`<<EOF>/x`) does not change the
  * consumer. Any other command
  * (`RUN cat <<EOF > file`) gets data, which is not read; a skipped body that
- * contains an `npm install`, `npm i` or `npm ci` gives a warning instead of
+ * contains an `npm install`, `npm i` or `npm ci` (the npm subcommand, not a flag such as
+ * `npm run test -- -i`) gives a warning instead of
  * passing silently. A marker without a
  * delimiter line consumes nothing and gives the warning
  * `unterminated heredoc <<WORD at line N` (N = the RUN start line).
@@ -227,7 +231,8 @@ const HEREDOC_WRAPPERS: Record<string, Set<string>> = {
   time: new Set(["-f", "-o", "--format", "--output"]),
 };
 
-const HEREDOC_LEADING_KEYWORDS = new Set(["then", "else", "elif", "do", "if", "while", "until", "!"]);
+/** Leading shell keywords ignored before a command (shared by the RUN splitter and the heredoc consumer check). */
+const SHELL_KEYWORDS = new Set(["then", "else", "elif", "do", "if", "while", "until", "!"]);
 
 /** Drops wrapper commands (with their options), VAR=val prefixes and leading shell keywords. */
 function skipHeredocWrappers(input: string[]): string[] {
@@ -235,7 +240,7 @@ function skipHeredocWrappers(input: string[]): string[] {
   for (;;) {
     const t = tokens[0];
     if (t === undefined) return tokens;
-    if (/^\w+=/.test(t) || HEREDOC_LEADING_KEYWORDS.has(t)) {
+    if (/^\w+=/.test(t) || SHELL_KEYWORDS.has(t)) {
       tokens.shift();
       continue;
     }
@@ -287,6 +292,21 @@ function pipesIntoShell(tail: string): boolean {
     .some((stage) => isShellConsumer(stage.replace(/["']/g, " ").split(/\s+/).filter(Boolean)));
 }
 
+/**
+ * Whether text runs `npm install`, `npm i` or `npm ci`: the npm subcommand
+ * (after any npm options) must be one of them, so `npm run test -- -i` is not.
+ */
+function bodyRunsNpmInstall(body: string): boolean {
+  for (const part of body.replace(/["']/g, " ").split(/&&|\|\||;|\||\r?\n/)) {
+    const tokens = part.split(/\s+/).map((t) => t.replace(/^[({]+/, "")).filter(Boolean);
+    const at = tokens.findIndex((t) => path.posix.basename(t) === "npm");
+    if (at < 0) continue;
+    const sub = parseNpmArgs(tokens.slice(at + 1)).sub;
+    if (sub === "install" || sub === "i" || sub === "ci") return true;
+  }
+  return false;
+}
+
 interface HeredocMark {
   start: number;
   end: number;
@@ -298,27 +318,18 @@ interface HeredocMark {
 /**
  * Heredoc markers in RUN text, BuildKit style: a whitespace-separated word
  * outside quotes that starts with `<<` (optionally after a file descriptor
- * number) and is exactly a heredoc marker. `x<<y`, `"x<<y"`, `$((a<<b))` and
+ * number) and is a heredoc marker, alone or followed by its delimiter word
+ * (`<< 'EOF'`), with an attached redirect or pipe allowed. `x<<y`, `"x<<y"`, `$((a<<b))` and
  * a here-string `<<<word` are no markers.
  */
 function heredocMarks(text: string): HeredocMark[] {
   const marks: HeredocMark[] = [];
+  const words: { start: number; end: number }[] = [];
   let quote: string | null = null;
   let wordStart = -1;
   const finish = (end: number): void => {
-    if (wordStart < 0) return;
-    const word = text.slice(wordStart, end).replace(/^\d+/, "");
-    const start = wordStart;
+    if (wordStart >= 0) words.push({ start: wordStart, end });
     wordStart = -1;
-    if (!word.startsWith("<<")) return;
-    const m = HEREDOC_WORD.exec(word);
-    if (!m) return;
-    const before = text.slice(0, start).split(/&&|\|\||;|\||\r?\n/).pop() ?? "";
-    // Leading RUN flags (`RUN --network=host <<EOF`) are no command words.
-    const tokens = before.split(/\s+/).filter((t) => t && !/^--[a-z-]+(?:=\S+)?$/i.test(t));
-    const tail = (m[3] ?? "") + (text.slice(end).split(/\r?\n/)[0] ?? "");
-    const shell = tokens.length === 0 || isShellConsumer(tokens) || pipesIntoShell(tail);
-    marks.push({ start, end, delimiter: m[2], shell });
   };
   for (let k = 0; k < text.length; k++) {
     const c = text[k];
@@ -336,6 +347,31 @@ function heredocMarks(text: string): HeredocMark[] {
     else if (c === '"' || c === "'") quote = c;
   }
   finish(text.length);
+  for (let w = 0; w < words.length; w++) {
+    const { start } = words[w];
+    let end = words[w].end;
+    let word = text.slice(start, end).replace(/^\d+/, "");
+    if (!word.startsWith("<<")) continue;
+    // Space-separated form (`<< 'EOF'`, `<<- EOF`): the delimiter is the next word.
+    if ((word === "<<" || word === "<<-") && w + 1 < words.length) {
+      end = words[w + 1].end;
+      word += text.slice(words[w + 1].start, end);
+    }
+    const m = HEREDOC_WORD.exec(word);
+    if (!m) continue;
+    if (end !== words[w].end) w++;
+    const beforeText = text.slice(0, start);
+    const before = beforeText.split(/&&|\|\||;|\||\r?\n/).pop() ?? "";
+    const tokens = before.split(/\s+/).filter(Boolean);
+    // Leading RUN flags (`RUN --network=host <<EOF`) are no command words, but
+    // only before the first command word: `sudo --user node sh` keeps its flag.
+    if (before === beforeText) {
+      while (tokens.length > 0 && /^--[a-z-]+(?:=\S+)?$/i.test(tokens[0])) tokens.shift();
+    }
+    const tail = (m[3] ?? "") + (text.slice(end).split(/\r?\n/)[0] ?? "");
+    const shell = tokens.length === 0 || isShellConsumer(tokens) || pipesIntoShell(tail);
+    marks.push({ start, end, delimiter: m[2], shell });
+  }
   return marks;
 }
 
@@ -367,7 +403,7 @@ export function parseInstructions(content: string, warnings: string[] = []): Ins
         }
         const body = lines.slice(last + 1, end).join("\n");
         if (h.shell) args += "\n" + body;
-        else if (/\bnpm\b[^\n]*\b(?:install|i|ci)\b/.test(body)) {
+        else if (bodyRunsNpmInstall(body)) {
           warnings.push(
             `npm install/ci in heredoc body <<${h.delimiter} at line ${startLine} was not read (the command before the marker is not a recognised shell)`,
           );
@@ -454,7 +490,6 @@ interface RunCommand {
 }
 
 const WRAPPERS = new Set(["sh", "bash", "ash", "-c", "-lc", "-ec", "-e", "sudo", "exec", "time"]);
-const SHELL_KEYWORDS = new Set(["then", "else", "elif", "do", "if", "while", "until", "!"]);
 
 function splitRun(args: string): RunCommand[] {
   let text = args.trim();
