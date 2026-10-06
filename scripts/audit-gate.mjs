@@ -32,8 +32,11 @@
 // HIGH/CRITICAL advisory in its chain keeps it a finding.
 //
 // The CLEAN outcome prints the line `npm audit gate: CLEAN: ...`; the workflow
-// step fails an exit 0 that is not accompanied by it (an invocation that never
-// reached the classifier, such as `node --import`, exits 0 without it). npm's
+// step fails an exit 0 that is not accompanied by it. A path to a missing
+// script exits 1 (MODULE_NOT_FOUND) on its own; only a path to a different
+// existing file, or an `--import`-style invocation that never reaches this
+// entry point, exits 0 without classifying, and the CLEAN-line check catches
+// that. npm's
 // stderr is printed by this script, sanitised, not by the workflow.
 //
 // Usage:
@@ -447,7 +450,29 @@ function parseArgs(argv) {
 
 export function main(argv, io = { log: console.log, readFile: fs.readFileSync }) {
   const args = parseArgs(argv);
+  // npm's stderr is printed (sanitised) before anything else, on every path,
+  // so an early exit never hides it and never prints it raw. On a usage error
+  // the --stderr value is looked up leniently, since the arguments did not parse.
+  const stderrFile =
+    args !== null
+      ? args.stderr
+      : argv.indexOf('--stderr') >= 0
+        ? argv[argv.indexOf('--stderr') + 1]
+        : undefined;
+  let stderr = '';
+  let stderrUnreadable = null;
+  if (stderrFile !== undefined) {
+    try {
+      stderr = io.readFile(stderrFile, 'utf8');
+    } catch (err) {
+      stderrUnreadable = err;
+    }
+  }
+  const printStderr = () => {
+    for (const line of sanitizeStderr(stderr)) io.log(line);
+  };
   if (args === null) {
+    printStderr();
     io.log(
       '::error::npm audit gate: UNCLASSIFIED: usage: audit-gate.mjs --allowlist <file> --status <npm exit code> --stdout <file> [--stderr <file>]',
     );
@@ -457,17 +482,18 @@ export function main(argv, io = { log: console.log, readFile: fs.readFileSync })
   try {
     allowlistText = io.readFile(args.allowlist, 'utf8');
   } catch (err) {
+    printStderr();
     io.log(
       `::error::npm audit gate: UNCLASSIFIED: allowlist ${clean(args.allowlist)}: cannot be read (${clean(err.code ?? err.message)})`,
     );
     return EXIT_UNCLASSIFIED;
   }
   let stdout = '';
-  let stderr = '';
   try {
     stdout = io.readFile(args.stdout, 'utf8');
-    if (args.stderr !== undefined) stderr = io.readFile(args.stderr, 'utf8');
+    if (stderrUnreadable !== null) throw stderrUnreadable;
   } catch (err) {
+    printStderr();
     io.log(
       `::error::npm audit gate: UNCLASSIFIED: captured npm audit output cannot be read (${clean(err.code ?? err.message)})`,
     );

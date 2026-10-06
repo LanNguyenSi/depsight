@@ -15,6 +15,7 @@ import {
   classify,
   main,
   parseAllowlist,
+  sanitizeStderr,
   advisoryId,
   todayUtc,
   MAX_REVIEW_HORIZON_DAYS,
@@ -726,6 +727,12 @@ describe('metadata cross-check', () => {
     expect(run(withTally('5' as unknown as number, 0)).exitCode).toBe(EXIT_UNCLASSIFIED);
   });
 
+  it('a negative count that sums to the map size is still UNCLASSIFIED', () => {
+    const { exitCode, text } = run(withTally(6, -1));
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('not non-negative integers');
+  });
+
   it('a matching tally keeps the allowlisted-only report CLEAN', () => {
     expect(run(withTally(5, 0)).exitCode).toBe(EXIT_CLEAN);
   });
@@ -763,6 +770,18 @@ describe('npm stderr sanitising', () => {
     const { text } = run(JSON.stringify(ROOT_REPORT), { stderr: 'x\n'.repeat(500) });
     expect(text.split('\n').length).toBeLessThan(80);
     expect(text).toContain('more line(s) omitted');
+  });
+
+  it('prints exactly 40 stderr lines plus one omitted marker for 500 input lines', () => {
+    const lines = sanitizeStderr('x\n'.repeat(500));
+    expect(lines).toHaveLength(41);
+    expect(lines.slice(0, 40).every((line) => line === 'npm stderr| x')).toBe(true);
+    expect(lines[40]).toBe('npm stderr| (460 more line(s) omitted)');
+  });
+
+  it('truncates a very long line to its 300 character prefix', () => {
+    const [line] = sanitizeStderr('a'.repeat(1500));
+    expect(line).toBe(`npm stderr| ${'a'.repeat(300)}`);
   });
 });
 
@@ -824,6 +843,31 @@ describe('main (CLI wrapper)', () => {
     const dir = tmpFiles({ 'allow.json': allowlist() });
     const { code } = cli(['--allowlist', path.join(dir, 'allow.json'), '--status', '1', '--stdout', path.join(dir, 'gone.json')]);
     expect(code).toBe(EXIT_UNCLASSIFIED);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('early exits still print the sanitised npm stderr', () => {
+    const forged = '::error::forged\nnpm error ::stop-commands::tok';
+    const dir = tmpFiles({ 'out.json': '{}', 'err.txt': forged, 'allow.json': allowlist() });
+    const err = path.join(dir, 'err.txt');
+    const cases = [
+      // allowlist unreadable
+      ['--allowlist', path.join(dir, 'nope.json'), '--status', '1', '--stdout', path.join(dir, 'out.json'), '--stderr', err],
+      // captured stdout unreadable
+      ['--allowlist', path.join(dir, 'allow.json'), '--status', '1', '--stdout', path.join(dir, 'gone.json'), '--stderr', err],
+      // usage error (bad status) with a --stderr file given
+      ['--allowlist', 'a', '--status', 'x', '--stdout', 'b', '--stderr', err],
+    ];
+    for (const argv of cases) {
+      const { code, text } = cli(argv);
+      expect(code).toBe(EXIT_UNCLASSIFIED);
+      expect(text).toContain('npm stderr| : :error: :forged');
+      expect(text).toContain('npm stderr| npm error : :stop-commands: :tok');
+      for (const line of text.split('\n')) {
+        expect(/^::(?!error::npm audit gate: )/.test(line)).toBe(false);
+        expect(line.startsWith('::error::forged')).toBe(false);
+      }
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
