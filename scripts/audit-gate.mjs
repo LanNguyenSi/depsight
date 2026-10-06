@@ -427,17 +427,15 @@ export function main(argv, io = { log: console.log, readFile: fs.readFileSync })
 // True when this module is the process entry point, whatever the spelling of
 // the path it was started through: import.meta.url is symlink-resolved while
 // process.argv[1] is not, so both sides go through realpath. A mismatch here
-// would skip main() and exit 0 silently, a green gate with findings.
+// would skip main() and exit 0 silently, a green gate with findings. A realpath
+// error is not caught: it can only happen if the file vanishes after Node loaded
+// it, and an uncaught error exits non-zero (fail closed), never 0.
 export function isEntryPoint(argv1, moduleUrl) {
   if (!argv1) return false;
-  try {
-    return (
-      pathToFileURL(fs.realpathSync(argv1)).href ===
-      pathToFileURL(fs.realpathSync(fileURLToPath(moduleUrl))).href
-    );
-  } catch {
-    return moduleUrl === pathToFileURL(argv1).href;
-  }
+  return (
+    pathToFileURL(fs.realpathSync(argv1)).href ===
+    pathToFileURL(fs.realpathSync(fileURLToPath(moduleUrl))).href
+  );
 }
 
 if (isEntryPoint(process.argv[1], import.meta.url)) {

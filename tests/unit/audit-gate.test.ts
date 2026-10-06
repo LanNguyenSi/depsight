@@ -377,6 +377,20 @@ describe('fail-open guards beside the allowlisted advisory', () => {
     expect(text).toContain('- braces (high): unresolvable:braces');
   });
 
+  it.each([
+    ['a number', 42],
+    ['a plain object', {}],
+  ])('a vulnerability node whose via is %s (not an array) is a classified finding', (_name, odd) => {
+    const stdout = report({
+      braces: bracesNode(),
+      micromatch: { ...node('micromatch', 'high', ['braces']), via: odd },
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain('npm audit gate: FINDINGS');
+    expect(text).toContain('- micromatch (high)');
+  });
+
   it('a null vulnerability node is a finding, not skipped', () => {
     const stdout = JSON.stringify({
       auditReportVersion: 2,
@@ -399,7 +413,7 @@ describe('fail-open guards beside the allowlisted advisory', () => {
     expect(text).toContain(`- mislabelled (moderate): ${OTHER_ID}`);
   });
 
-  it('a high-labelled package whose advisories are all moderate does not gate', () => {
+  it('a high-labelled package whose advisories are all moderate is still a finding (not vacuously excepted)', () => {
     const stdout = report({
       braces: bracesNode(),
       soft: node('soft', 'high', [advisory(OTHER_ID, 'moderate', 'soft')]),
@@ -511,6 +525,8 @@ describe('allowlist expiry and unmatched entries', () => {
   it('todayUtc uses the UTC date', () => {
     expect(todayUtc(new Date('2026-10-06T23:59:59-05:00'))).toBe('2026-10-07');
     expect(todayUtc(new Date('2026-10-06T00:00:00Z'))).toBe('2026-10-06');
+    // An instant whose local date is already the next day east of UTC.
+    expect(todayUtc(new Date('2026-10-06T23:30:00Z'))).toBe('2026-10-06');
   });
 });
 
@@ -779,6 +795,23 @@ describe('CLI entry point (spawned as a real process)', () => {
       const { code, stdout, stderr } = spawnGate(link, dir, '1');
       expect({ code, stderr }).toEqual({ code: EXIT_FINDINGS, stderr: '' });
       expect(stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('through a symlink with --preserve-symlinks-main: still exits 1 with a FINDINGS line', () => {
+    const dir = fixtureDir(FINDING_REPORT);
+    try {
+      const link = path.join(dir, 'gate-psm.mjs');
+      fs.symlinkSync(SCRIPT, link);
+      const result = spawnSync(
+        process.execPath,
+        ['--preserve-symlinks-main', link, '--allowlist', path.join(dir, 'allow.json'), '--status', '1', '--stdout', path.join(dir, 'out.json')],
+        { encoding: 'utf8', cwd: dir },
+      );
+      expect(result.status).toBe(EXIT_FINDINGS);
+      expect(result.stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
