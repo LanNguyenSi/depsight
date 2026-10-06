@@ -117,8 +117,8 @@
  * Known limits: a COPY'd .npmrc with legacy-peer-deps is not read, no
  * .dockerignore, no COPY --from hand-over of node_modules or lockfiles, no
  * workspaces, no ARG resolution, no docker-compose build args, no corepack.
- * In an unread heredoc body the npm subcommand is found after npm options that
- * take no value; an unknown value-taking option (`npm --userconfig /r ci`)
+ * In an unread heredoc body the npm subcommand is found after npm options; a
+ * value-taking option the script does not know (`npm --userconfig /r ci`)
  * hides it, so that body passes without a warning.
  * COPY/ADD heredocs (`COPY <<EOF /path`) are not recognised: their body lines
  * are parsed as instructions. The Node-to-npm table is maintained by hand (Node
@@ -305,7 +305,7 @@ function bodyRunsNpmInstall(body: string): boolean {
     const tokens = part
       .replace(/\$\(|`/g, " ")
       .split(/\s+/)
-      .map((t) => t.replace(/^[({]+/, "").replace(/[)}]+$/, ""))
+      .map((t) => t.replace(/^\(+/, "").replace(/\)+$/, ""))
       .filter(Boolean);
     const at = tokens.findIndex((t) => path.posix.basename(t) === "npm");
     if (at < 0) continue;
