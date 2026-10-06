@@ -53,8 +53,11 @@ name: Audit
 # with an exact GHSA id (matched against the advisory url in npm's JSON,
 # never by severity or package name) and a YYYY-MM-DD review date; the
 # entry stops passing the gate the day after reviewBy, so a renewal needs
-# a commit with a recorded reason. A package counts as excepted only when
-# every HIGH/CRITICAL advisory in its dependency chain is allowlisted.
+# a commit with a recorded reason. reviewBy may lie at most 90 days after
+# today (UTC); a later date makes the allowlist malformed (exit 3, naming
+# the file and the id), so no exception can be parked for long. A package
+# counts as excepted only when every HIGH/CRITICAL advisory in its
+# dependency chain is allowlisted.
 # An entry that matches nothing in a tree only warns (the same file is
 # used for both trees below).
 
@@ -117,7 +120,8 @@ jobs:
           ERR="$(mktemp)"
           trap 'rm -f "$OUT" "$ERR"' EXIT
 
-          # GitHub Actions runs `run:` steps as `bash -eo pipefail`;
+          # With no `shell:` key GitHub Actions runs `run:` steps as
+          # `bash -e {0}` (this step sets pipefail itself, above);
           # without this guard, `set -e` would kill the script right at
           # this command on any non-zero exit (findings, outage, or a
           # timeout alike), before the classification below ever runs.

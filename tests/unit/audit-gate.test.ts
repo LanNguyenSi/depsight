@@ -9,12 +9,15 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
+  addDays,
   classify,
   main,
   parseAllowlist,
   advisoryId,
   todayUtc,
+  MAX_REVIEW_HORIZON_DAYS,
   EXIT_CLEAN,
   EXIT_FINDINGS,
   EXIT_OUTAGE,
@@ -348,6 +351,67 @@ describe('findings beside the allowlisted advisory', () => {
   });
 });
 
+describe('fail-open guards beside the allowlisted advisory', () => {
+  // Each case keeps the allowlisted braces advisory in the report, so a guard
+  // that silently drops the odd entry would turn the whole run green.
+  const bracesNode = () => node('braces', 'high', [advisory(BRACES_ID, 'high', 'braces')], ['micromatch']);
+
+  it('a via string naming a package missing from the report keeps the allowlisted package red', () => {
+    const stdout = report({
+      braces: node('braces', 'high', [advisory(BRACES_ID, 'high', 'braces'), 'ghost']),
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain('- braces (high): unresolvable:ghost');
+  });
+
+  it.each([
+    ['a number', 42],
+    ['null', null],
+  ])('a via entry that is %s (neither string nor object) is a finding', (_name, odd) => {
+    const stdout = report({
+      braces: node('braces', 'high', [advisory(BRACES_ID, 'high', 'braces'), odd]),
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain('- braces (high): unresolvable:braces');
+  });
+
+  it('a null vulnerability node is a finding, not skipped', () => {
+    const stdout = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: { braces: bracesNode(), broken: null },
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain('- broken (unknown): unresolvable');
+  });
+
+  it('a moderate-labelled package carrying a high advisory is a finding', () => {
+    // npm labels a package by its own range severity; the advisory object in
+    // via can still be high. Checking only the node label would miss it.
+    const stdout = report({
+      braces: bracesNode(),
+      mislabelled: node('mislabelled', 'moderate', [advisory(OTHER_ID, 'high', 'mislabelled')]),
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain(`- mislabelled (moderate): ${OTHER_ID}`);
+  });
+
+  it('a high-labelled package whose advisories are all moderate does not gate', () => {
+    const stdout = report({
+      braces: bracesNode(),
+      soft: node('soft', 'high', [advisory(OTHER_ID, 'moderate', 'soft')]),
+    });
+    // No gating advisory resolves for `soft`, so it is reported rather than
+    // vacuously excepted.
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain('- soft (high): no-advisory-resolved');
+  });
+});
+
 describe('transitive via chains', () => {
   it('terminates on a cycle and keeps an allowlisted cycle excepted', () => {
     const stdout = report({
@@ -424,6 +488,23 @@ describe('allowlist expiry and unmatched entries', () => {
     const { exitCode, text } = run(JSON.stringify(MCP_REPORT), { status: 0 });
     expect(exitCode).toBe(EXIT_CLEAN);
     expect(text).toContain(`::warning::`);
+    expect(text).toContain(`${BRACES_ID} matched no advisory`);
+  });
+
+  it('no unmatched warning when the id matched but its package is still a finding', () => {
+    const stdout = report({
+      braces: node('braces', 'high', [advisory(BRACES_ID, 'high', 'braces'), advisory(OTHER_ID, 'high', 'braces')]),
+    });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
+    expect(text).toContain(`- braces (high): ${OTHER_ID}`);
+    expect(text).not.toContain('matched no advisory');
+  });
+
+  it('still warns for an id that appears in no via chain, beside a real finding', () => {
+    const stdout = report({ lodash: node('lodash', 'high', [advisory(OTHER_ID, 'high', 'lodash')]) });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_FINDINGS);
     expect(text).toContain(`${BRACES_ID} matched no advisory`);
   });
 
@@ -532,6 +613,34 @@ describe('malformed allowlist', () => {
     expect(exitCode).toBe(EXIT_UNCLASSIFIED);
   });
 
+  it('a reviewBy more than 90 days after today is UNCLASSIFIED naming the file and the id', () => {
+    const latest = addDays(TODAY, MAX_REVIEW_HORIZON_DAYS);
+    const far = addDays(TODAY, MAX_REVIEW_HORIZON_DAYS + 1);
+    const { exitCode, text } = run(JSON.stringify(ROOT_REPORT), {
+      allow: allowlist([defaultEntry({ reviewBy: far })]),
+    });
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('.github/audit-allowlist.json');
+    expect(text).toContain(BRACES_ID);
+    expect(text).toContain(`reviewBy ${far}`);
+    expect(text).toContain(`latest accepted date is ${latest}`);
+    expect(run(JSON.stringify(ROOT_REPORT), { allow: allowlist([defaultEntry({ reviewBy: '2999-01-01' })]) }).exitCode).toBe(
+      EXIT_UNCLASSIFIED,
+    );
+  });
+
+  it('exactly 90 days after today is still valid; the horizon is stated as 90 days', () => {
+    expect(MAX_REVIEW_HORIZON_DAYS).toBe(90);
+    expect(addDays('2026-10-06', 90)).toBe('2027-01-04');
+    const allow = allowlist([defaultEntry({ reviewBy: addDays(TODAY, 90) })]);
+    expect(run(JSON.stringify(ROOT_REPORT), { allow }).exitCode).toBe(EXIT_CLEAN);
+  });
+
+  it('the horizon is checked even when the audit result would be an outage', () => {
+    const allow = allowlist([defaultEntry({ reviewBy: addDays(TODAY, 91) })]);
+    expect(run('', { status: 124, allow }).exitCode).toBe(EXIT_UNCLASSIFIED);
+  });
+
   it('an empty entries list is valid', () => {
     expect(parseAllowlist('{"entries":[]}', 'f')).toEqual([]);
   });
@@ -564,6 +673,9 @@ describe('repository allowlist file', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].id).toBe(BRACES_ID);
     expect(entries[0].reason.length).toBeGreaterThan(0);
+    expect(entries[0].reviewBy).toBe('2026-11-06');
+    // Valid for the horizon check as of the date this entry was reviewed.
+    expect(() => parseAllowlist(fs.readFileSync(file, 'utf8'), file, '2026-10-06')).not.toThrow();
   });
 });
 
@@ -584,7 +696,7 @@ describe('main (CLI wrapper)', () => {
 
   it('classifies captured files and returns the exit code', () => {
     const dir = tmpFiles({
-      'allow.json': allowlist([defaultEntry({ reviewBy: '2999-01-01' })]),
+      'allow.json': allowlist([defaultEntry({ reviewBy: addDays(todayUtc(), 30) })]),
       'out.json': JSON.stringify(ROOT_REPORT),
       'err.txt': '',
     });
@@ -619,5 +731,92 @@ describe('main (CLI wrapper)', () => {
     expect(cli([]).code).toBe(EXIT_UNCLASSIFIED);
     expect(cli(['--allowlist', 'a', '--status', 'x', '--stdout', 'b']).code).toBe(EXIT_UNCLASSIFIED);
     expect(cli(['--bogus', 'a']).code).toBe(EXIT_UNCLASSIFIED);
+  });
+});
+
+describe('CLI entry point (spawned as a real process)', () => {
+  // The gate step runs `node scripts/audit-gate.mjs`. If the entry-point check
+  // ever fails to recognise the script, main() never runs and node exits 0:
+  // a green gate with findings. These tests spawn the real process, through
+  // the real path and through symlinks, and assert the verdict, not just the
+  // exit status (an uncaught exception also exits 1).
+  const SCRIPT = path.join(REPO_ROOT, 'scripts/audit-gate.mjs');
+  const FINDING_REPORT = report({ lodash: node('lodash', 'high', [advisory(OTHER_ID, 'high', 'lodash')]) });
+
+  function fixtureDir(stdout: string): string {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'depsight-audit-gate-cli-')));
+    fs.writeFileSync(path.join(dir, 'allow.json'), allowlist([defaultEntry({ reviewBy: addDays(todayUtc(), 30) })]));
+    fs.writeFileSync(path.join(dir, 'out.json'), stdout);
+    return dir;
+  }
+
+  function spawnGate(scriptPath: string, dir: string, status: string) {
+    const result = spawnSync(
+      process.execPath,
+      [scriptPath, '--allowlist', path.join(dir, 'allow.json'), '--status', status, '--stdout', path.join(dir, 'out.json')],
+      { encoding: 'utf8', cwd: dir },
+    );
+    return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  it('real path: a non-allowlisted high advisory exits 1 with a FINDINGS line', () => {
+    const dir = fixtureDir(FINDING_REPORT);
+    try {
+      const { code, stdout, stderr } = spawnGate(SCRIPT, dir, '1');
+      expect({ code, stderr }).toEqual({ code: EXIT_FINDINGS, stderr: '' });
+      expect(stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
+      expect(stdout).toContain(`- lodash (high): ${OTHER_ID}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('through a symlink to the script: still exits 1 with a FINDINGS line', () => {
+    const dir = fixtureDir(FINDING_REPORT);
+    try {
+      const link = path.join(dir, 'gate-link.mjs');
+      fs.symlinkSync(SCRIPT, link);
+      const { code, stdout, stderr } = spawnGate(link, dir, '1');
+      expect({ code, stderr }).toEqual({ code: EXIT_FINDINGS, stderr: '' });
+      expect(stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('through a symlinked directory and a chain of symlinks: still exits 1 with a FINDINGS line', () => {
+    const dir = fixtureDir(FINDING_REPORT);
+    try {
+      const dirLink = path.join(dir, 'scripts-link');
+      fs.symlinkSync(path.dirname(SCRIPT), dirLink);
+      const viaDir = spawnGate(path.join(dirLink, 'audit-gate.mjs'), dir, '1');
+      expect(viaDir.code).toBe(EXIT_FINDINGS);
+      expect(viaDir.stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
+
+      const first = path.join(dir, 'first.mjs');
+      const second = path.join(dir, 'second.mjs');
+      fs.symlinkSync(SCRIPT, first);
+      fs.symlinkSync(first, second);
+      const viaChain = spawnGate(second, dir, '1');
+      expect(viaChain.code).toBe(EXIT_FINDINGS);
+      expect(viaChain.stdout).toContain('npm audit gate: FINDINGS: 1 package(s)');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('negative control: the allowlisted-only report exits 0 with CLEAN through the real path and a symlink', () => {
+    const dir = fixtureDir(JSON.stringify(ROOT_REPORT));
+    try {
+      const link = path.join(dir, 'gate-link.mjs');
+      fs.symlinkSync(SCRIPT, link);
+      for (const scriptPath of [SCRIPT, link]) {
+        const { code, stdout } = spawnGate(scriptPath, dir, '1');
+        expect(code).toBe(EXIT_CLEAN);
+        expect(stdout).toContain('npm audit gate: CLEAN');
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

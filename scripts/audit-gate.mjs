@@ -17,9 +17,11 @@
 //   2  OUTAGE        the registry did not answer (npm error text, DNS or
 //                    connection failure, or the local timeout, status 124).
 //                    NOT an advisory finding; retry later.
-//   3  UNCLASSIFIED  anything else: a malformed or unreadable allowlist, a
-//                    report that cannot be parsed, an npm failure without an
-//                    outage marker (missing lockfile, wrong directory).
+//   3  UNCLASSIFIED  anything else: a malformed or unreadable allowlist (an
+//                    entry whose reviewBy lies more than 90 days after today
+//                    (UTC) counts as malformed), a report that cannot be
+//                    parsed, an npm failure without an outage marker (missing
+//                    lockfile, wrong directory).
 //
 // Matching is by exact GHSA id taken from `vulnerabilities.<pkg>.via[].url`;
 // never by severity or package name. A package whose via chain (string
@@ -32,7 +34,7 @@
 //     --stdout <file> [--stderr <file>]
 
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const EXIT_CLEAN = 0;
 export const EXIT_FINDINGS = 1;
@@ -50,6 +52,9 @@ const GHSA_ID = /^GHSA(?:-[2-9cfghjmpqrvwx]{4}){3}$/;
 const GHSA_URL = /^https:\/\/github\.com\/advisories\/(GHSA(?:-[2-9cfghjmpqrvwx]{4}){3})$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const ENTRY_KEYS = ['id', 'reason', 'reviewBy'];
+// An entry may postpone its review by at most this many days from today (UTC),
+// so a renewal cannot quietly park an exception for years.
+export const MAX_REVIEW_HORIZON_DAYS = 90;
 const NON_GATING_SEVERITIES = new Set(['info', 'low', 'moderate']);
 
 export class AllowlistError extends Error {}
@@ -75,9 +80,17 @@ export function todayUtc(now = new Date()) {
   return now.toISOString().slice(0, 10);
 }
 
+export function addDays(date, days) {
+  const result = new Date(`${date}T00:00:00Z`);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result.toISOString().slice(0, 10);
+}
+
 // Parses the allowlist file text. Throws AllowlistError (message names the
 // file) for anything other than { "entries": [ { id, reason, reviewBy } ] }.
-export function parseAllowlist(text, file) {
+// With `today` (YYYY-MM-DD, UTC) a reviewBy more than MAX_REVIEW_HORIZON_DAYS
+// after it is rejected as well.
+export function parseAllowlist(text, file, today) {
   const fail = (why) => {
     throw new AllowlistError(`allowlist ${clean(file)}: ${why}`);
   };
@@ -107,6 +120,14 @@ export function parseAllowlist(text, file) {
     if (!GHSA_ID.test(entry.id)) fail(`${where} id "${clean(entry.id)}" is not a GHSA id`);
     if (!isRealDate(entry.reviewBy)) {
       fail(`${where} reviewBy "${clean(entry.reviewBy)}" is not a YYYY-MM-DD date`);
+    }
+    if (today !== undefined) {
+      const latest = addDays(today, MAX_REVIEW_HORIZON_DAYS);
+      if (entry.reviewBy > latest) {
+        fail(
+          `${where} id ${entry.id} reviewBy ${entry.reviewBy} is more than ${MAX_REVIEW_HORIZON_DAYS} days after today (${today} UTC); the latest accepted date is ${latest}`,
+        );
+      }
     }
     if (seen.has(entry.id)) fail(`duplicate id ${entry.id}`);
     seen.add(entry.id);
@@ -160,9 +181,24 @@ function chainIsExcepted(name, vulns, allowIds, state) {
   return ok;
 }
 
+// Allowlist ids that appear as an advisory anywhere in the report's via
+// chains, whatever the package's severity or whether it ends up a finding.
+function matchedIds(vulns, allowIds) {
+  const matched = new Set();
+  for (const node of Object.values(vulns)) {
+    if (!isRecord(node) || !Array.isArray(node.via)) continue;
+    for (const via of node.via) {
+      const id = advisoryId(via);
+      if (id !== null && allowIds.has(id)) matched.add(id);
+    }
+  }
+  return matched;
+}
+
 // Classifies a parsed audit report against allowlisted ids. Returns the
 // findings (non-excepted HIGH/CRITICAL packages), the allowlist ids used and
-// the packages they excepted.
+// the packages they excepted, and the ids matched at all (an id can be
+// matched yet unused when its package is still a finding for another reason).
 export function evaluateReport(report, allowIds) {
   const vulns = report.vulnerabilities;
   const findings = [];
@@ -193,7 +229,7 @@ export function evaluateReport(report, allowIds) {
       });
     }
   }
-  return { findings, used };
+  return { findings, used, matched: matchedIds(vulns, allowIds) };
 }
 
 function parseReport(stdout) {
@@ -225,7 +261,7 @@ export function classify({ stdout = '', stderr = '', status, allowlistText, allo
 
   let entries;
   try {
-    entries = parseAllowlist(allowlistText, allowlistFile);
+    entries = parseAllowlist(allowlistText, allowlistFile, today);
   } catch (err) {
     if (err instanceof AllowlistError) return unclassified(err.message);
     throw err;
@@ -273,9 +309,9 @@ function classifyAudit({ stdout, stderr, status, allowIds, entries, lines, expir
       );
       return result(EXIT_UNCLASSIFIED);
     }
-    const { findings, used } = evaluateReport(data, allowIds);
+    const { findings, used, matched } = evaluateReport(data, allowIds);
     for (const entry of entries) {
-      if (!used.has(entry.id)) {
+      if (!matched.has(entry.id)) {
         lines.push(
           `::warning::npm audit gate: allowlist entry ${entry.id} matched no advisory in this tree (unmatched entries are warnings only)`,
         );
@@ -388,6 +424,22 @@ export function main(argv, io = { log: console.log, readFile: fs.readFileSync })
   return exitCode;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// True when this module is the process entry point, whatever the spelling of
+// the path it was started through: import.meta.url is symlink-resolved while
+// process.argv[1] is not, so both sides go through realpath. A mismatch here
+// would skip main() and exit 0 silently, a green gate with findings.
+export function isEntryPoint(argv1, moduleUrl) {
+  if (!argv1) return false;
+  try {
+    return (
+      pathToFileURL(fs.realpathSync(argv1)).href ===
+      pathToFileURL(fs.realpathSync(fileURLToPath(moduleUrl))).href
+    );
+  } catch {
+    return moduleUrl === pathToFileURL(argv1).href;
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   process.exit(main(process.argv.slice(2)));
 }
