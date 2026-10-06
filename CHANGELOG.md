@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - `scripts/check-docker-npm-coverage.ts` no longer skips (fails open on) the body of a RUN heredoc whose shell is reached through a wrapper or options: `env sh`, `sudo sh`, `command`, `exec`, `nice` and `time` (with their flags) and `VAR=val` prefixes are skipped, `bash -o pipefail`, `-eo pipefail`, `+o opt`, `--norc`, `-s` and `--` are accepted, a body piped into a shell (`cat <<EOF | sh`) is read, and an attached redirect (`<<EOF>/x`) is a marker. A body that is still not read (a non-shell consumer) and contains `npm install`, `npm i` or `npm ci` now gives a warning instead of passing silently. Tracker task 3c448be3.
+- `scripts/check-docker-npm-coverage.ts` heredoc residuals: only leading RUN flags are dropped before the consumer check, so `RUN sudo --user node sh <<EOF`, `env --unset HOME sh` and `nice --adjustment 5 sh` are findings instead of warnings; the unread-body warning is anchored to the npm subcommand (`npm run test -- -i` no longer warns); the space-separated marker `<< 'EOF'` (also `<< EOF`, `<<- EOF`) is recognised; the heredoc consumer check shares one shell keyword set with the RUN splitter, and the header wording no longer claims the marker is exactly `<<WORD`. Tracker task a0364b72.
 
 ## [0.8.0] - 2026-10-05
 
