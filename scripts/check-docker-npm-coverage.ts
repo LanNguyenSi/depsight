@@ -117,6 +117,9 @@
  * Known limits: a COPY'd .npmrc with legacy-peer-deps is not read, no
  * .dockerignore, no COPY --from hand-over of node_modules or lockfiles, no
  * workspaces, no ARG resolution, no docker-compose build args, no corepack.
+ * In an unread heredoc body the npm subcommand is found after npm options that
+ * take no value; an unknown value-taking option (`npm --userconfig /r ci`)
+ * hides it, so that body passes without a warning.
  * COPY/ADD heredocs (`COPY <<EOF /path`) are not recognised: their body lines
  * are parsed as instructions. The Node-to-npm table is maintained by hand (Node
  * minors can differ; Node 22.x bundles npm 10.x to this day).
@@ -298,7 +301,12 @@ function pipesIntoShell(tail: string): boolean {
  */
 function bodyRunsNpmInstall(body: string): boolean {
   for (const part of body.replace(/["']/g, " ").split(/&&|\|\||;|\||\r?\n/)) {
-    const tokens = part.split(/\s+/).map((t) => t.replace(/^[({]+/, "")).filter(Boolean);
+    // `$(` and a backtick open a command substitution: `x=$(npm install)`.
+    const tokens = part
+      .replace(/\$\(|`/g, " ")
+      .split(/\s+/)
+      .map((t) => t.replace(/^[({]+/, "").replace(/[)}]+$/, ""))
+      .filter(Boolean);
     const at = tokens.findIndex((t) => path.posix.basename(t) === "npm");
     if (at < 0) continue;
     const sub = parseNpmArgs(tokens.slice(at + 1)).sub;

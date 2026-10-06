@@ -1011,6 +1011,42 @@ describe('heredoc markers and bodies', () => {
     expect(r.warnings).toHaveLength(1);
   });
 
+  it('strips every leading RUN flag before an empty or shell consumer', () => {
+    for (const open of [
+      'RUN --mount=type=cache,target=/c --network=host <<EOF',
+      "RUN --mount=type=cache,target=/c --network=host sh << 'EOF'",
+    ]) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, open, 'npm install', 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, open).toHaveLength(1);
+      expect(r.findings[0].line).toBe(3);
+      expect(r.warnings, open).toEqual([]);
+    }
+  });
+
+  it('keeps a leading `--` token of a later command segment as a command word', () => {
+    // Only the first segment can carry RUN flags; a later `--x sh` is no shell.
+    const r = scan({
+      Dockerfile: dockerfile([...base, 'RUN echo hi && --x sh <<EOF', 'npm install', 'EOF']),
+      'package.json': COVERAGE_PKG,
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+  });
+
+  it('warns for an install in an unread body behind options, quotes, parentheses or substitutions', () => {
+    for (const body of ['npm -v && npm ci', '"npm" ci', '(npm ci)', 'x=$(npm install)', 'x=`npm ci`', '{ npm i; }']) {
+      const r = scan({
+        Dockerfile: dockerfile([...base, 'RUN cat <<EOF > /app/entry.sh', body, 'EOF']),
+        'package.json': COVERAGE_PKG,
+      });
+      expect(r.findings, body).toEqual([]);
+      expect(r.warnings, body).toHaveLength(1);
+    }
+  });
+
   it('does not warn for a flag -i or a non-install subcommand in an unread body', () => {
     for (const body of ['npm run test -- -i', 'npm run ci', 'npm test -i']) {
       const r = scan({
