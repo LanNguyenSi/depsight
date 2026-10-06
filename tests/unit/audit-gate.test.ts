@@ -846,6 +846,19 @@ describe('main (CLI wrapper)', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('an unreadable captured stderr is UNCLASSIFIED, not empty stderr', () => {
+    const dir = tmpFiles({ 'allow.json': allowlist(), 'out.json': JSON.stringify(ROOT_REPORT) });
+    const { code, text } = cli([
+      '--allowlist', path.join(dir, 'allow.json'),
+      '--status', '1',
+      '--stdout', path.join(dir, 'out.json'),
+      '--stderr', path.join(dir, 'gone.txt'),
+    ]);
+    expect(code).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('captured npm audit output cannot be read');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('early exits still print the sanitised npm stderr', () => {
     const forged = '::error::forged\nnpm error ::stop-commands::tok';
     const dir = tmpFiles({ 'out.json': '{}', 'err.txt': forged, 'allow.json': allowlist() });

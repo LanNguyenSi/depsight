@@ -108,9 +108,17 @@ jobs:
           # workflow command. The token is generated here, never taken from
           # event data. `|| true` keeps the step non-blocking.
           TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          # A failed od would leave an empty token, which the runner rejects
+          # without stopping commands: refuse to print npm output then.
+          if [ "${#TOKEN}" -ne 32 ]; then
+            echo "npm audit report: could not generate a stop-commands token" >&2
+            exit 1
+          fi
           echo "::stop-commands::$TOKEN"
           timeout 60s npm audit --no-fund 2>&1 || true
-          echo "::$TOKEN::"
+          # Leading newline: npm output without a trailing newline must not
+          # swallow the resume line.
+          printf '\n::%s::\n' "$TOKEN"
       - name: npm audit gate (high/critical fail)
         working-directory: ${{ matrix.working-directory }}
         # Per-step bound so a hanging endpoint cannot eat the whole job's
@@ -152,8 +160,9 @@ jobs:
           # so that exit 0 can be required to come with the CLEAN line: a
           # missing script path exits 1 (MODULE_NOT_FOUND) on its own, but a
           # path to a different existing file, or a `node --import` style
-          # invocation, exits 0 without classifying and must not pass. The status is captured inside a `set +e`
-          # guard so the pipe to tee cannot end the step early under -e.
+          # invocation, exits 0 without classifying and must not pass. The
+          # status is captured inside a `set +e` guard so the pipe to tee
+          # cannot end the step early under -e.
           GATE_LOG="$(mktemp)"
           trap 'rm -f "$OUT" "$ERR" "$GATE_LOG"' EXIT
           set +e

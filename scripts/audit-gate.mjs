@@ -36,8 +36,8 @@
 // script exits 1 (MODULE_NOT_FOUND) on its own; only a path to a different
 // existing file, or an `--import`-style invocation that never reaches this
 // entry point, exits 0 without classifying, and the CLEAN-line check catches
-// that. npm's
-// stderr is printed by this script, sanitised, not by the workflow.
+// that. npm's stderr is printed by this script, sanitised, not by the
+// workflow.
 //
 // Usage:
 //   node scripts/audit-gate.mjs --allowlist <file> --status <npm exit code> \
