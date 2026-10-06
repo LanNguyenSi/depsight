@@ -235,11 +235,22 @@ function node(name: string, severity: string, via: unknown[], effects: string[] 
   };
 }
 
+// The metadata tally is derived from the map, the way npm emits it.
+function tally(vulnerabilities: Record<string, Json>) {
+  const counts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 };
+  for (const entry of Object.values(vulnerabilities)) {
+    const severity = (entry as { severity?: string }).severity as keyof typeof counts;
+    if (severity in counts && severity !== 'total') counts[severity] += 1;
+    counts.total += 1;
+  }
+  return counts;
+}
+
 function report(vulnerabilities: Record<string, Json>): string {
   return JSON.stringify({
     auditReportVersion: 2,
     vulnerabilities,
-    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 } },
+    metadata: { vulnerabilities: tally(vulnerabilities) },
   });
 }
 
@@ -395,6 +406,7 @@ describe('fail-open guards beside the allowlisted advisory', () => {
     const stdout = JSON.stringify({
       auditReportVersion: 2,
       vulnerabilities: { braces: bracesNode(), broken: null },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 } },
     });
     const { exitCode, text } = run(stdout);
     expect(exitCode).toBe(EXIT_FINDINGS);
@@ -679,6 +691,78 @@ describe('log output hygiene', () => {
     }
     expect(text).not.toContain('\n::error::forged');
     expect(text).not.toContain('\n::warning::forged');
+  });
+});
+
+describe('metadata cross-check', () => {
+  const vulnerabilities = ROOT_REPORT.vulnerabilities as Record<string, Json>;
+  const withTally = (high: number, critical: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities,
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high, critical, total: high + critical } },
+      ...extra,
+    });
+
+  it('a tally with criticals the map does not show is UNCLASSIFIED, not CLEAN', () => {
+    const { exitCode, text } = run(withTally(5, 2));
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('UNCLASSIFIED: inconsistent audit report');
+    expect(text).not.toContain('CLEAN');
+  });
+
+  it('a tally lower than the map is UNCLASSIFIED as well', () => {
+    expect(run(withTally(1, 0)).exitCode).toBe(EXIT_UNCLASSIFIED);
+  });
+
+  it('a report without a metadata tally is UNCLASSIFIED', () => {
+    const stdout = JSON.stringify({ auditReportVersion: 2, vulnerabilities });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('no metadata.vulnerabilities tally');
+  });
+
+  it('non-integer counts are UNCLASSIFIED', () => {
+    expect(run(withTally('5' as unknown as number, 0)).exitCode).toBe(EXIT_UNCLASSIFIED);
+  });
+
+  it('a matching tally keeps the allowlisted-only report CLEAN', () => {
+    expect(run(withTally(5, 0)).exitCode).toBe(EXIT_CLEAN);
+  });
+});
+
+describe('npm stderr sanitising', () => {
+  const stderr = [
+    '::error::forged finding',
+    'npm error ::set-output name=x::y',
+    '::stop-commands::token',
+    'npm error line\u2028::warning::split',
+  ].join('\n');
+
+  it('no stderr line starts a workflow command', () => {
+    const { text } = run(JSON.stringify(ROOT_REPORT), { stderr });
+    for (const line of text.split('\n')) {
+      expect(/^::(?!(error|warning)::npm audit gate: )/.test(line)).toBe(false);
+    }
+    expect(text).not.toContain('::stop-commands::');
+    expect(text).not.toContain('::set-output');
+    expect(text).not.toContain('::error::forged');
+    expect(text).not.toContain('::warning::split');
+    expect(text).toContain('npm stderr| ');
+    expect(text).toContain('forged finding');
+  });
+
+  it('the same holds when the stderr text decides an OUTAGE', () => {
+    const { exitCode, text } = run('', { stderr: '::error::forged\nnpm error code ENOTFOUND' });
+    expect(exitCode).toBe(EXIT_OUTAGE);
+    expect(text).not.toContain('\n::error::forged');
+    expect(text.startsWith('::error::forged')).toBe(false);
+  });
+
+  it('a long stderr is bounded', () => {
+    const { text } = run(JSON.stringify(ROOT_REPORT), { stderr: 'x\n'.repeat(500) });
+    expect(text.split('\n').length).toBeLessThan(80);
+    expect(text).toContain('more line(s) omitted');
   });
 });
 

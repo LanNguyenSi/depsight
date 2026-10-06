@@ -17,7 +17,9 @@
 //   2  OUTAGE        the registry did not answer (npm error text, DNS or
 //                    connection failure, or the local timeout, status 124).
 //                    NOT an advisory finding; retry later.
-//   3  UNCLASSIFIED  anything else: a malformed or unreadable allowlist (an
+//   3  UNCLASSIFIED  anything else: a report whose metadata HIGH plus CRITICAL
+//                    count disagrees with its vulnerabilities map (or has no
+//                    metadata tally), a malformed or unreadable allowlist (an
 //                    entry whose reviewBy lies more than 90 days after today
 //                    (UTC) counts as malformed), a report that cannot be
 //                    parsed, an npm failure without an outage marker (missing
@@ -28,6 +30,11 @@
 // entries name other vulnerable packages, followed recursively with a cycle
 // guard) resolves only to allowlisted advisories counts as excepted; any other
 // HIGH/CRITICAL advisory in its chain keeps it a finding.
+//
+// The CLEAN outcome prints the line `npm audit gate: CLEAN: ...`; the workflow
+// step fails an exit 0 that is not accompanied by it (an invocation that never
+// reached the classifier, such as `node --import`, exits 0 without it). npm's
+// stderr is printed by this script, sanitised, not by the workflow.
 //
 // Usage:
 //   node scripts/audit-gate.mjs --allowlist <file> --status <npm exit code> \
@@ -64,6 +71,28 @@ export class AllowlistError extends Error {}
 // line.
 function clean(text) {
   return String(text).replace(/[^A-Za-z0-9@/._ ,;:()=+-]/g, '?');
+}
+
+// npm's stderr is registry- and proxy-influenced text. Every line is printed
+// behind a fixed prefix (a workflow command only counts at the start of a
+// line), reduced to the same safe character set as the script's own output,
+// with "::" broken up for good measure, and bounded in count and length.
+const STDERR_MAX_LINES = 40;
+const STDERR_MAX_LINE_LENGTH = 300;
+
+export function sanitizeStderr(stderr) {
+  const raw = String(stderr)
+    .split(/\r\n|\n|\r|\u2028|\u2029/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const lines = raw.slice(0, STDERR_MAX_LINES).map((line) => {
+    const text = clean(line.slice(0, STDERR_MAX_LINE_LENGTH)).replace(/:{2,}/g, ': :');
+    return `npm stderr| ${text}`;
+  });
+  if (raw.length > STDERR_MAX_LINES) {
+    lines.push(`npm stderr| (${raw.length - STDERR_MAX_LINES} more line(s) omitted)`);
+  }
+  return lines;
 }
 
 function isRecord(value) {
@@ -243,6 +272,30 @@ function parseReport(stdout) {
   return data;
 }
 
+// Cross-checks metadata.vulnerabilities (npm's own tally) against the
+// vulnerabilities map the classifier walks. Returns a reason string when the
+// report is inconsistent or the tally is absent, null when the HIGH plus
+// CRITICAL counts agree. A report whose tally claims more gating packages
+// than the map shows (or the reverse) cannot be trusted to be classified from
+// the map alone.
+export function metadataDisagreement(data) {
+  const tally = isRecord(data.metadata) ? data.metadata.vulnerabilities : undefined;
+  if (!isRecord(tally)) return 'the report has no metadata.vulnerabilities tally to cross-check';
+  const { high, critical } = tally;
+  const isCount = (n) => Number.isInteger(n) && n >= 0;
+  if (!isCount(high) || !isCount(critical)) {
+    return 'metadata.vulnerabilities.high and .critical are not non-negative integers';
+  }
+  let mapCount = 0;
+  for (const node of Object.values(data.vulnerabilities)) {
+    if (isRecord(node) && (node.severity === 'high' || node.severity === 'critical')) mapCount += 1;
+  }
+  if (high + critical !== mapCount) {
+    return `metadata counts ${high + critical} HIGH/CRITICAL package(s) but the vulnerabilities map holds ${mapCount}`;
+  }
+  return null;
+}
+
 function isAuditReport(data) {
   return (
     data !== null && data.auditReportVersion === 2 && isRecord(data.vulnerabilities)
@@ -253,7 +306,8 @@ function isAuditReport(data) {
 // Returns { exitCode, lines } where each line is a log line (workflow
 // annotations included).
 export function classify({ stdout = '', stderr = '', status, allowlistText, allowlistFile, today }) {
-  const lines = [];
+  // npm's own diagnostics go through the sanitiser, never straight to the log.
+  const lines = sanitizeStderr(stderr);
   const unclassified = (why) => {
     lines.push(`::error::npm audit gate: UNCLASSIFIED: ${why}`);
     return { exitCode: EXIT_UNCLASSIFIED, lines };
@@ -306,6 +360,13 @@ function classifyAudit({ stdout, stderr, status, allowIds, entries, lines, expir
     if (status !== 0 && status !== 1) {
       lines.push(
         `::error::npm audit gate: UNCLASSIFIED: npm audit exited with status ${clean(status)} but printed an audit report; check the log`,
+      );
+      return result(EXIT_UNCLASSIFIED);
+    }
+    const disagreement = metadataDisagreement(data);
+    if (disagreement !== null) {
+      lines.push(
+        `::error::npm audit gate: UNCLASSIFIED: inconsistent audit report: ${clean(disagreement)}; check the log`,
       );
       return result(EXIT_UNCLASSIFIED);
     }
