@@ -15,6 +15,7 @@ import {
   classify,
   main,
   parseAllowlist,
+  sanitizeStderr,
   advisoryId,
   todayUtc,
   MAX_REVIEW_HORIZON_DAYS,
@@ -235,11 +236,22 @@ function node(name: string, severity: string, via: unknown[], effects: string[] 
   };
 }
 
+// The metadata tally is derived from the map, the way npm emits it.
+function tally(vulnerabilities: Record<string, Json>) {
+  const counts = { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 };
+  for (const entry of Object.values(vulnerabilities)) {
+    const severity = (entry as { severity?: string }).severity as keyof typeof counts;
+    if (severity in counts && severity !== 'total') counts[severity] += 1;
+    counts.total += 1;
+  }
+  return counts;
+}
+
 function report(vulnerabilities: Record<string, Json>): string {
   return JSON.stringify({
     auditReportVersion: 2,
     vulnerabilities,
-    metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 } },
+    metadata: { vulnerabilities: tally(vulnerabilities) },
   });
 }
 
@@ -395,6 +407,7 @@ describe('fail-open guards beside the allowlisted advisory', () => {
     const stdout = JSON.stringify({
       auditReportVersion: 2,
       vulnerabilities: { braces: bracesNode(), broken: null },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 } },
     });
     const { exitCode, text } = run(stdout);
     expect(exitCode).toBe(EXIT_FINDINGS);
@@ -682,6 +695,96 @@ describe('log output hygiene', () => {
   });
 });
 
+describe('metadata cross-check', () => {
+  const vulnerabilities = ROOT_REPORT.vulnerabilities as Record<string, Json>;
+  const withTally = (high: number, critical: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities,
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high, critical, total: high + critical } },
+      ...extra,
+    });
+
+  it('a tally with criticals the map does not show is UNCLASSIFIED, not CLEAN', () => {
+    const { exitCode, text } = run(withTally(5, 2));
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('UNCLASSIFIED: inconsistent audit report');
+    expect(text).not.toContain('CLEAN');
+  });
+
+  it('a tally lower than the map is UNCLASSIFIED as well', () => {
+    expect(run(withTally(1, 0)).exitCode).toBe(EXIT_UNCLASSIFIED);
+  });
+
+  it('a report without a metadata tally is UNCLASSIFIED', () => {
+    const stdout = JSON.stringify({ auditReportVersion: 2, vulnerabilities });
+    const { exitCode, text } = run(stdout);
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('no metadata.vulnerabilities tally');
+  });
+
+  it('non-integer counts are UNCLASSIFIED', () => {
+    expect(run(withTally('5' as unknown as number, 0)).exitCode).toBe(EXIT_UNCLASSIFIED);
+  });
+
+  it('a negative count that sums to the map size is still UNCLASSIFIED', () => {
+    const { exitCode, text } = run(withTally(6, -1));
+    expect(exitCode).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('not non-negative integers');
+  });
+
+  it('a matching tally keeps the allowlisted-only report CLEAN', () => {
+    expect(run(withTally(5, 0)).exitCode).toBe(EXIT_CLEAN);
+  });
+});
+
+describe('npm stderr sanitising', () => {
+  const stderr = [
+    '::error::forged finding',
+    'npm error ::set-output name=x::y',
+    '::stop-commands::token',
+    'npm error line\u2028::warning::split',
+  ].join('\n');
+
+  it('no stderr line starts a workflow command', () => {
+    const { text } = run(JSON.stringify(ROOT_REPORT), { stderr });
+    for (const line of text.split('\n')) {
+      expect(/^::(?!(error|warning)::npm audit gate: )/.test(line)).toBe(false);
+    }
+    expect(text).not.toContain('::stop-commands::');
+    expect(text).not.toContain('::set-output');
+    expect(text).not.toContain('::error::forged');
+    expect(text).not.toContain('::warning::split');
+    expect(text).toContain('npm stderr| ');
+    expect(text).toContain('forged finding');
+  });
+
+  it('the same holds when the stderr text decides an OUTAGE', () => {
+    const { exitCode, text } = run('', { stderr: '::error::forged\nnpm error code ENOTFOUND' });
+    expect(exitCode).toBe(EXIT_OUTAGE);
+    expect(text).not.toContain('\n::error::forged');
+    expect(text.startsWith('::error::forged')).toBe(false);
+  });
+
+  it('a long stderr is bounded', () => {
+    const { text } = run(JSON.stringify(ROOT_REPORT), { stderr: 'x\n'.repeat(500) });
+    expect(text.split('\n').length).toBeLessThan(80);
+    expect(text).toContain('more line(s) omitted');
+  });
+
+  it('prints exactly 40 stderr lines plus one omitted marker for 500 input lines', () => {
+    const lines = sanitizeStderr('x\n'.repeat(500));
+    expect(lines).toHaveLength(41);
+    expect(lines.slice(0, 40).every((line) => line === 'npm stderr| x')).toBe(true);
+    expect(lines[40]).toBe('npm stderr| (460 more line(s) omitted)');
+  });
+
+  it('truncates a very long line to its 300 character prefix', () => {
+    const [line] = sanitizeStderr('a'.repeat(1500));
+    expect(line).toBe(`npm stderr| ${'a'.repeat(300)}`);
+  });
+});
+
 describe('repository allowlist file', () => {
   it('parses and holds exactly one entry, for GHSA-vfj7-8cjw-p6xm', () => {
     const file = path.join(REPO_ROOT, '.github/audit-allowlist.json');
@@ -740,6 +843,44 @@ describe('main (CLI wrapper)', () => {
     const dir = tmpFiles({ 'allow.json': allowlist() });
     const { code } = cli(['--allowlist', path.join(dir, 'allow.json'), '--status', '1', '--stdout', path.join(dir, 'gone.json')]);
     expect(code).toBe(EXIT_UNCLASSIFIED);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an unreadable captured stderr is UNCLASSIFIED, not empty stderr', () => {
+    const dir = tmpFiles({ 'allow.json': allowlist(), 'out.json': JSON.stringify(ROOT_REPORT) });
+    const { code, text } = cli([
+      '--allowlist', path.join(dir, 'allow.json'),
+      '--status', '1',
+      '--stdout', path.join(dir, 'out.json'),
+      '--stderr', path.join(dir, 'gone.txt'),
+    ]);
+    expect(code).toBe(EXIT_UNCLASSIFIED);
+    expect(text).toContain('captured npm audit output cannot be read');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('early exits still print the sanitised npm stderr', () => {
+    const forged = '::error::forged\nnpm error ::stop-commands::tok';
+    const dir = tmpFiles({ 'out.json': '{}', 'err.txt': forged, 'allow.json': allowlist() });
+    const err = path.join(dir, 'err.txt');
+    const cases = [
+      // allowlist unreadable
+      ['--allowlist', path.join(dir, 'nope.json'), '--status', '1', '--stdout', path.join(dir, 'out.json'), '--stderr', err],
+      // captured stdout unreadable
+      ['--allowlist', path.join(dir, 'allow.json'), '--status', '1', '--stdout', path.join(dir, 'gone.json'), '--stderr', err],
+      // usage error (bad status) with a --stderr file given
+      ['--allowlist', 'a', '--status', 'x', '--stdout', 'b', '--stderr', err],
+    ];
+    for (const argv of cases) {
+      const { code, text } = cli(argv);
+      expect(code).toBe(EXIT_UNCLASSIFIED);
+      expect(text).toContain('npm stderr| : :error: :forged');
+      expect(text).toContain('npm stderr| npm error : :stop-commands: :tok');
+      for (const line of text.split('\n')) {
+        expect(/^::(?!error::npm audit gate: )/.test(line)).toBe(false);
+        expect(line.startsWith('::error::forged')).toBe(false);
+      }
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
