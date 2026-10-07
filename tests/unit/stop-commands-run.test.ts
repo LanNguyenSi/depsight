@@ -98,19 +98,38 @@ describe('stop-commands-run.sh', () => {
 });
 
 
+// Strip one level of matching surrounding YAML quotes from a single-line
+// scalar (unescaping \" and \\ for double quotes, '' for single quotes).
+function unquote(v: string): string {
+  const t = v.trim();
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+    return t.slice(1, -1).replace(/\\(["\\])/g, '$1');
+  }
+  if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
+    return t.slice(1, -1).replace(/''/g, "'");
+  }
+  return v;
+}
+
 // Collect every `run:` body (single-line, block scalar `|` / `>`, or plain
 // multi-line) of a workflow file as {startLine, lines}.
 export function runBodies(text: string): { start: number; lines: string[] }[] {
   const all = text.split('\n');
   const out: { start: number; lines: string[] }[] = [];
   for (let i = 0; i < all.length; i++) {
+    // Flow-style step: `- { name: x, run: npm ci }`. Single line only.
+    const flow = /^\s*(?:- )?\{.*?\brun:[ \t]*(.*?)[ \t]*\}[ \t]*$/.exec(all[i]);
+    if (flow) {
+      out.push({ start: i + 1, lines: [unquote(flow[1])] });
+      continue;
+    }
     const m = /^(\s*)(?:- )?run:[ \t]*(.*)$/.exec(all[i]);
     if (!m) continue;
     // Column of the `run` key: continuation lines sit deeper than it.
     const keyIndent = all[i].indexOf('run:');
     const first = m[2];
     const lines: string[] = [];
-    if (first !== '' && !/^[|>][+-]?\d*\s*(#.*)?$/.test(first)) lines.push(first);
+    if (first !== '' && !/^[|>][+-]?\d*\s*(#.*)?$/.test(first)) lines.push(unquote(first));
     let j = i + 1;
     for (; j < all.length; j++) {
       const l = all[j];
@@ -181,6 +200,24 @@ describe('workflow steps that print npm output', () => {
     expect(Object.keys(ALLOWED).filter((k) => !used.has(k))).toEqual([]);
   });
 
+  it('keeps the inline stop-commands block around the audit report step', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS, 'audit.yml'), 'utf8');
+    const bodies = runBodies(text).filter((b) =>
+      b.lines.includes('timeout 60s npm audit --no-fund 2>&1 || true'),
+    );
+    expect(bodies).toHaveLength(1);
+    const lines = bodies[0].lines;
+    const stop = lines.indexOf('echo "::stop-commands::$TOKEN"');
+    const npm = lines.indexOf('timeout 60s npm audit --no-fund 2>&1 || true');
+    const resume = lines.indexOf("printf '\\n::%s::\\n' \"$TOKEN\"");
+    expect(stop).toBeGreaterThan(-1);
+    expect(resume).toBeGreaterThan(-1);
+    expect(stop).toBeLessThan(npm);
+    expect(npm).toBeLessThan(resume);
+    // Token length guard that fails the step before npm output is printed.
+    expect(lines).toContain('if [ "${#TOKEN}" -ne 32 ]; then');
+  });
+
   it('flags raw npm in a multi-line run body, env-prefixed and any verb', () => {
     const yml = [
       'steps:',
@@ -194,6 +231,11 @@ describe('workflow steps that print npm output', () => {
       '      FOO=bar npx tsc',
       '  - run: npm exec foo',
       '  - run: (cd x && npm update)',
+      '  - run: "npm ci --no-audit --no-fund"',
+      "  - run: 'npm publish --access public --provenance'",
+      '  - run: "CI=1 npm \\"ci\\""',
+      '  - { name: Flow, run: npm install }',
+      '  - { run: "npm view x" }',
       '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci',
       '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
     ].join('\n');
@@ -203,6 +245,11 @@ describe('workflow steps that print npm output', () => {
       'FOO=bar npx tsc',
       'npm exec foo',
       '(cd x && npm update)',
+      'npm ci --no-audit --no-fund',
+      'npm publish --access public --provenance',
+      'CI=1 npm "ci"',
+      'npm install',
+      'npm view x',
       'bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
     ]);
   });
