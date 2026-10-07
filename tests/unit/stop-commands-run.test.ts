@@ -101,7 +101,8 @@ describe('stop-commands-run.sh', () => {
 // Strip one level of matching surrounding YAML quotes from a single-line
 // scalar (unescaping \" and \\ for double quotes, '' for single quotes).
 function unquote(v: string): string {
-  const t = v.trim();
+  // A comment after the closing quote is not part of the scalar.
+  const t = v.trim().replace(/^(["'])(.*)\1[ \t]+#.*$/, '$1$2$1');
   if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
     return t.slice(1, -1).replace(/\\(["\\])/g, '$1');
   }
@@ -117,8 +118,10 @@ export function runBodies(text: string): { start: number; lines: string[] }[] {
   const all = text.split('\n');
   const out: { start: number; lines: string[] }[] = [];
   for (let i = 0; i < all.length; i++) {
-    // Flow-style step: `- { name: x, run: npm ci }`. Single line only.
-    const flow = /^\s*(?:- )?\{.*?\brun:[ \t]*(.*?)[ \t]*\}[ \t]*$/.exec(all[i]);
+    // Flow-style step: `- { name: x, run: npm ci }`. Single line only; the
+    // value ends at the first unquoted `,` or `}` (run need not be last).
+    const flow =
+      /^\s*(?:- )?\{.*?\brun:[ \t]*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,}]*?)[ \t]*[,}].*$/.exec(all[i]);
     if (flow) {
       out.push({ start: i + 1, lines: [unquote(flow[1])] });
       continue;
@@ -178,6 +181,9 @@ const ALLOWED: Record<string, string> = {
     'local tsc compile, no registry fetch (prepublishOnly runs inside the wrapped publish step)',
 };
 
+// GitHub Actions runs both extensions from .github/workflows.
+export const isWorkflowFile = (name: string): boolean => /\.ya?ml$/.test(name);
+
 function keyOf(file: string, line: string): string {
   return `${file}::${line}`;
 }
@@ -186,7 +192,7 @@ describe('workflow steps that print npm output', () => {
   it('route every npm or npx invocation through the wrapper unless allowlisted', () => {
     const offenders: string[] = [];
     const used = new Set<string>();
-    for (const f of fs.readdirSync(WORKFLOWS).filter((n) => n.endsWith('.yml'))) {
+    for (const f of fs.readdirSync(WORKFLOWS).filter(isWorkflowFile)) {
       const text = fs.readFileSync(path.join(WORKFLOWS, f), 'utf8');
       for (const line of rawNpmLines(text)) {
         const k = keyOf(f, line);
@@ -214,8 +220,21 @@ describe('workflow steps that print npm output', () => {
     expect(resume).toBeGreaterThan(-1);
     expect(stop).toBeLessThan(npm);
     expect(npm).toBeLessThan(resume);
-    // Token length guard that fails the step before npm output is printed.
-    expect(lines).toContain('if [ "${#TOKEN}" -ne 32 ]; then');
+    // Random token, and a length guard that fails the step before npm
+    // output is printed.
+    expect(lines).toContain('TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d \' \\n\')"');
+    const guard = lines.indexOf('if [ "${#TOKEN}" -ne 32 ]; then');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(stop);
+    const fi = lines.indexOf('fi', guard);
+    expect(lines.slice(guard + 1, fi)).toContain('exit 1');
+    expect(fi).toBeLessThan(stop);
+  });
+
+  it('scans .yaml as well as .yml workflow files', () => {
+    expect(isWorkflowFile('ci.yml')).toBe(true);
+    expect(isWorkflowFile('extra.yaml')).toBe(true);
+    expect(isWorkflowFile('README.md')).toBe(false);
   });
 
   it('flags raw npm in a multi-line run body, env-prefixed and any verb', () => {
@@ -238,6 +257,9 @@ describe('workflow steps that print npm output', () => {
       '  - { run: "npm view x" }',
       '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci',
       '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
+      '  - run: "npm ci --no-audit" # install',
+      '  - { run: "npm pack", name: x }',
+      '  - { run: npm ls } # c',
     ].join('\n');
     expect(rawNpmLines(yml)).toEqual([
       'npm publish --access public',
@@ -251,6 +273,9 @@ describe('workflow steps that print npm output', () => {
       'npm install',
       'npm view x',
       'bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
+      'npm ci --no-audit',
+      'npm pack',
+      'npm ls',
     ]);
   });
 });
