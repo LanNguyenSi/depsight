@@ -60,7 +60,11 @@ jobs:
         # alone here. Move this pin deliberately, never as an automatic
         # upgrade, and record each move in the bundle's log.md together with
         # the old and the new version's measured verdict on this bundle.
-        run: npm install -g okf-kit@0.16.0 --no-audit --no-fund
+        # DEVIATION from the template: the install output is registry-
+        # influenced text, so it runs through the repo's stop-commands
+        # wrapper (scripts/ci/stop-commands-run.sh) instead of printing raw.
+        # Exit status is the install's own.
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm install -g okf-kit@0.16.0 --no-audit --no-fund
 
       - name: Assert CLI is alive (output, not exit code)
         shell: bash
