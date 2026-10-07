@@ -75,23 +75,135 @@ describe('stop-commands-run.sh', () => {
     expect(r.stdout).toBe('');
   });
 
+  it('generates a different random token on each run', () => {
+    const tokens = [1, 2, 3].map((n) => {
+      const r = run(['fakecmd'], { fakecmd: `echo run${n}` });
+      return /^::stop-commands::([0-9a-f]{32})$/m.exec(r.stdout)![1];
+    });
+    expect(new Set(tokens).size).toBe(3);
+  });
+
+  it('draws a 32 hex char token that is not one repeated character', () => {
+    for (let n = 0; n < 5; n++) {
+      const r = run(['fakecmd'], { fakecmd: 'echo hi' });
+      const token = /^::stop-commands::(.*)$/m.exec(r.stdout)![1];
+      expect(token).toMatch(/^[0-9a-f]{32}$/);
+      expect(new Set(token.split('')).size).toBeGreaterThan(1);
+    }
+  });
+
   it('rejects an empty command line', () => {
     expect(run([], {}).status).toBe(2);
   });
 });
 
+
+// Collect every `run:` body (single-line, block scalar `|` / `>`, or plain
+// multi-line) of a workflow file as {startLine, lines}.
+export function runBodies(text: string): { start: number; lines: string[] }[] {
+  const all = text.split('\n');
+  const out: { start: number; lines: string[] }[] = [];
+  for (let i = 0; i < all.length; i++) {
+    const m = /^(\s*)(?:- )?run:[ \t]*(.*)$/.exec(all[i]);
+    if (!m) continue;
+    // Column of the `run` key: continuation lines sit deeper than it.
+    const keyIndent = all[i].indexOf('run:');
+    const first = m[2];
+    const lines: string[] = [];
+    if (first !== '' && !/^[|>][+-]?\d*\s*(#.*)?$/.test(first)) lines.push(first);
+    let j = i + 1;
+    for (; j < all.length; j++) {
+      const l = all[j];
+      if (l.trim() === '') {
+        lines.push('');
+        continue;
+      }
+      const indent = l.length - l.trimStart().length;
+      if (indent <= keyIndent) break;
+      lines.push(l.trim());
+    }
+    out.push({ start: i + 1, lines });
+    i = j - 1;
+  }
+  return out;
+}
+
+const WRAPPED = /stop-commands-run\.sh"?[ \t]+\S+/g;
+const NPM_CMD = /(^|[\s;&|(`{])(npm|npx)(?=\s|$)/;
+
+// Lines of every run body that invoke npm or npx (any verb, env-prefixed
+// or not, nested in a pipeline or subshell) outside the wrapper.
+export function rawNpmLines(text: string): string[] {
+  const hits: string[] = [];
+  for (const body of runBodies(text)) {
+    for (const line of body.lines) {
+      const t = line.trim();
+      if (t === '' || t.startsWith('#')) continue;
+      if (NPM_CMD.test(t.replace(WRAPPED, ''))) hits.push(t);
+    }
+  }
+  return hits;
+}
+
+// Steps that run npm without the wrapper on purpose. Key: `file::line`.
+const ALLOWED: Record<string, string> = {
+  'audit.yml::timeout 60s npm audit --no-fund 2>&1 || true':
+    'carries its own inline per-run stop-commands block (report step)',
+  'audit.yml::timeout "${AUDIT_TIMEOUT_SECS}s" npm audit --audit-level=high --no-fund --json >"$OUT" 2>"$ERR"':
+    'npm output goes to files; stderr is sanitised and printed by scripts/audit-gate.mjs',
+  'ci.yml::npm run lint': 'repo tool already installed, repo-derived output, no registry fetch',
+  'ci.yml::npm run test:coverage': 'repo tool already installed, repo-derived output, no registry fetch',
+  'ci.yml::npm run build': 'next build of repo code, no registry fetch',
+  'ci.yml::npm test': 'mcp test script, repo-derived output, no registry fetch',
+  'publish-npm.yml::npm run build':
+    'local tsc compile, no registry fetch (prepublishOnly runs inside the wrapped publish step)',
+};
+
+function keyOf(file: string, line: string): string {
+  return `${file}::${line}`;
+}
+
 describe('workflow steps that print npm output', () => {
-  it('run npm ci/install/publish/pack/view and npx through the wrapper', () => {
+  it('route every npm or npx invocation through the wrapper unless allowlisted', () => {
     const offenders: string[] = [];
+    const used = new Set<string>();
     for (const f of fs.readdirSync(WORKFLOWS).filter((n) => n.endsWith('.yml'))) {
-      fs.readFileSync(path.join(WORKFLOWS, f), 'utf8')
-        .split('\n')
-        .forEach((line, i) => {
-          if (/^\s*(- )?run:\s*(npm (ci|install|i|publish|pack|view)\b|npx\b)/.test(line)) {
-            offenders.push(`${f}:${i + 1}: ${line.trim()}`);
-          }
-        });
+      const text = fs.readFileSync(path.join(WORKFLOWS, f), 'utf8');
+      for (const line of rawNpmLines(text)) {
+        const k = keyOf(f, line);
+        if (k in ALLOWED) used.add(k);
+        else offenders.push(k);
+      }
     }
     expect(offenders).toEqual([]);
+    // A stale allowlist entry hides nothing today but would excuse a future
+    // step silently: keep it exact.
+    expect(Object.keys(ALLOWED).filter((k) => !used.has(k))).toEqual([]);
+  });
+
+  it('flags raw npm in a multi-line run body, env-prefixed and any verb', () => {
+    const yml = [
+      'steps:',
+      '  - name: Publish',
+      '    run: |',
+      '      set -e',
+      '      echo start',
+      '      npm publish --access public',
+      '  - run: CI=1 npm ci',
+      '  - run: >-',
+      '      FOO=bar npx tsc',
+      '  - run: npm exec foo',
+      '  - run: (cd x && npm update)',
+      '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci',
+      '  - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
+    ].join('\n');
+    expect(rawNpmLines(yml)).toEqual([
+      'npm publish --access public',
+      'CI=1 npm ci',
+      'FOO=bar npx tsc',
+      'npm exec foo',
+      '(cd x && npm update)',
+      'bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci && npm view x',
+    ]);
   });
 });
