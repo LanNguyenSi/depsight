@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Java scans read Gradle build files (`build.gradle`, `build.gradle.kts`): dependencies declared in `implementation`, `api`, `compileOnly`, `runtimeOnly` and `testImplementation`, in call and map notation, are reported when their version is written literally. Interpolated, catalog, platform and dynamic versions are skipped rather than guessed. Gradle and pom dependencies share the existing root-first dedupe, and a repo scanned without a manifest list also tries the root `build.gradle` and `build.gradle.kts`. Tracker task cbf3912e.
+- Java scans read Gradle build files (`build.gradle`, `build.gradle.kts`): dependencies declared in `implementation`, `api`, `compileOnly`, `runtimeOnly` and `testImplementation`, in call and map notation, are reported when their version is written literally. Interpolated coordinates, catalog, platform and dynamic versions, and declarations inside constraints blocks are skipped rather than guessed. Gradle and pom dependencies share the existing root-first dedupe, and a repo scanned without a manifest list also tries the root `build.gradle` and `build.gradle.kts`. Tracker task cbf3912e.
 
 ### Security
 

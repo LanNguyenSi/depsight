@@ -86,6 +86,12 @@ describe('parseGradleDependencies', () => {
     ['map form without version', "implementation group: 'org.x', name: 'map-noversion'"],
     ['line comment', "// implementation 'org.x:commented:1.0'"],
     ['block comment', "/* implementation 'org.x:block:1.0' */"],
+    ['interpolated group', 'implementation "$g:a:1.0"'],
+    ['interpolated artifact', 'implementation "g:$a:1.0"'],
+    ['${var} interpolated group', 'implementation "${grp}:a:1.0"'],
+    ['map form with interpolated group', "implementation group: \"$g\", name: 'a', version: '1.0'"],
+    ['separator-only version', "implementation 'org.x:dash:-'"],
+    ['constraints block', "dependencies { constraints { implementation 'org.x:constrained:1.0' } }"],
   ])('skips %s', (_label, body) => {
     expect(parseGradleDependencies(body)).toEqual([]);
   });
@@ -96,6 +102,32 @@ repositories { maven { url 'https://repo.example.com/maven' } }
 subprojects { dependencies { implementation "org.s:sub:1.0" } }
 implementation 'org.t:top:2.0' // trailing comment`;
     expect(coords(parseGradleDependencies(body))).toEqual(['org.s:sub:1.0', 'org.t:top:2.0']);
+  });
+
+  it('keeps dependencies next to comment-like text inside strings', () => {
+    const src = [
+      "def x = 'a//b'; implementation 'org.s:same-line:1.0'",
+      "sourceSets { main { java { include '**/*.kt' } } }",
+      "implementation 'org.s:between-globs:2.0'",
+      "sourceSets { test { java { include '**/*.java' } } }",
+      'def u = "https://example.com" // real comment implementation \'org.s:in-comment:9\'',
+      "implementation 'org.s:after:3.0'",
+    ].join('\n');
+    expect(coords(parseGradleDependencies(src))).toEqual([
+      'org.s:same-line:1.0',
+      'org.s:between-globs:2.0',
+      'org.s:after:3.0',
+    ]);
+  });
+
+  it('counts declarations outside a constraints block but not inside it', () => {
+    const src = "dependencies {\n  constraints {\n    implementation 'org.c:pinned:9.9'\n  }\n  implementation 'org.c:real:1.0'\n}";
+    expect(coords(parseGradleDependencies(src))).toEqual(['org.c:real:1.0']);
+  });
+
+  it('ignores dependency text inside a block comment that contains a string', () => {
+    const src = "/* implementation 'org.b:hidden:1.0' */\nimplementation 'org.b:shown:1.0'";
+    expect(coords(parseGradleDependencies(src))).toEqual(['org.b:shown:1.0']);
   });
 });
 
