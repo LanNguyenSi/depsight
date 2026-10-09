@@ -15,7 +15,9 @@
  * skipped. Known limitations (all yield no entry rather than a wrong one):
  * map form only in the order group, name, version; only the first coordinate
  * of a call with several; `testFixtures(...)`, triple-quoted coordinates, and
- * configurations other than the five above.
+ * configurations other than the five above. Braces inside strings within a
+ * `constraints { }` block can end the block early, and an unclosed block hides
+ * everything after it.
  */
 
 export interface GradleDependency {
