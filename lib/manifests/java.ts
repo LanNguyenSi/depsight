@@ -1,4 +1,5 @@
 import { fetchManifestContents, type Octokit } from '@/lib/manifest-discovery';
+import { parseGradleDependencies } from '@/lib/manifests/gradle';
 
 export interface MavenDependency {
   groupId: string;
@@ -14,7 +15,12 @@ interface RawMavenDep {
   version: string | null;
 }
 
-const DEFAULT_PATHS = ['pom.xml'];
+const DEFAULT_PATHS = ['pom.xml', 'build.gradle', 'build.gradle.kts'];
+
+function isGradlePath(path: string): boolean {
+  const base = path.split('/').pop() ?? path;
+  return base === 'build.gradle' || base === 'build.gradle.kts';
+}
 
 /**
  * Parse every `<dependency>` block in the given XML fragment into coordinates +
@@ -76,11 +82,12 @@ function stripDependencyManagement(pomXml: string): string {
 }
 
 /**
- * Read every discovered pom.xml (root + reactor modules) and union their
- * declared dependencies. Deduped by `groupId:artifactId` with first-seen
- * (root-first) wins. Gradle manifests (build.gradle[.kts]) carry no
- * `<dependency>` blocks and so contribute nothing — there is no Gradle parser
- * yet, as before.
+ * Read every discovered pom.xml and Gradle build file (root + modules) and
+ * union their declared dependencies. Deduped by `groupId:artifactId` with
+ * first-seen (root-first) wins. Gradle build files (build.gradle,
+ * build.gradle.kts) are read with the parser in lib/manifests/gradle.ts: only
+ * literal versions count, and they take part in the same first-seen dedupe as
+ * the poms, in path order.
  *
  * Versions managed by a parent pom's `<dependencyManagement>` are resolved: the
  * managed versions are aggregated across all discovered poms, then versionless
@@ -100,7 +107,8 @@ export async function collectJavaDeps(
 
   // Pass 1: aggregate dependencyManagement versions across the whole reactor.
   const managed = new Map<string, string>();
-  for (const { content } of contents) {
+  for (const { path, content } of contents) {
+    if (isGradlePath(path)) continue;
     for (const [key, version] of parseDependencyManagement(content)) {
       if (!managed.has(key)) managed.set(key, version);
     }
@@ -109,8 +117,11 @@ export async function collectJavaDeps(
   // Pass 2: union the actual <dependencies> (dependencyManagement stripped out),
   // resolving versionless ones from the managed map.
   const byKey = new Map<string, MavenDependency>();
-  for (const { content } of contents) {
-    for (const raw of parseDependencyBlocks(stripDependencyManagement(content))) {
+  for (const { path, content } of contents) {
+    const raws = isGradlePath(path)
+      ? parseGradleDependencies(content)
+      : parseDependencyBlocks(stripDependencyManagement(content));
+    for (const raw of raws) {
       const key = `${raw.groupId}:${raw.artifactId}`;
       const version = raw.version ?? managed.get(key) ?? null;
       if (version === null) continue; // unresolved versionless — skip, as before
