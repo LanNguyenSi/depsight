@@ -792,9 +792,12 @@ describe('repository allowlist file', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].id).toBe(BRACES_ID);
     expect(entries[0].reason.length).toBeGreaterThan(0);
-    expect(entries[0].reviewBy).toBe('2026-11-06');
-    // Valid for the horizon check as of the date this entry was reviewed.
-    expect(() => parseAllowlist(fs.readFileSync(file, 'utf8'), file, '2026-10-06')).not.toThrow();
+    // A renewal moves reviewBy; assert the shape and the gate's own horizon
+    // against the real current UTC day instead of pinning one date.
+    expect(entries[0].reviewBy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const today = todayUtc();
+    expect(entries[0].reviewBy <= addDays(today, MAX_REVIEW_HORIZON_DAYS)).toBe(true);
+    expect(() => parseAllowlist(fs.readFileSync(file, 'utf8'), file, today)).not.toThrow();
   });
 });
 
