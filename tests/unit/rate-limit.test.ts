@@ -1,6 +1,12 @@
 // Unit tests for the in-process fixed-window rate limiter.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import {
+  createRateLimiter,
+  rateLimitedResponse,
+  prScanWebhookPreAuthIpRateLimiter,
+  PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
+  PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
+} from '@/lib/rate-limit';
 
 describe('createRateLimiter', () => {
   beforeEach(() => {
@@ -22,13 +28,28 @@ describe('createRateLimiter', () => {
 
   it('blocks the request after the limit with the seconds left in the window', () => {
     const limiter = createRateLimiter({ limit: 2, windowMs: 60_000 });
+    const start = Date.now();
     limiter.check('u1');
     limiter.check('u1');
     vi.advanceTimersByTime(10_500);
 
     const result = limiter.check('u1');
 
-    expect(result).toEqual({ allowed: false, remaining: 0, retryAfterSeconds: 50 });
+    expect(result).toEqual({
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds: 50,
+      resetAt: start + 60_000,
+    });
+  });
+
+  it('reports the window end on an allowed call later in the same window', () => {
+    const limiter = createRateLimiter({ limit: 2, windowMs: 60_000 });
+    const start = Date.now();
+    limiter.check('u1');
+    vi.advanceTimersByTime(5_000);
+
+    expect(limiter.check('u1')).toMatchObject({ allowed: true, resetAt: start + 60_000 });
   });
 
   it('keeps counting separate keys separately', () => {
@@ -72,10 +93,78 @@ describe('createRateLimiter', () => {
 
 describe('rateLimitedResponse', () => {
   it('is a 429 carrying the Retry-After header and body', async () => {
-    const res = rateLimitedResponse({ allowed: false, remaining: 0, retryAfterSeconds: 42 });
+    const res = rateLimitedResponse({
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds: 42,
+      resetAt: 0,
+    });
 
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBe('42');
-    expect(await res.json()).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: 42 });
+    expect(await res.json()).toStrictEqual({ error: 'Rate limit exceeded', retryAfterSeconds: 42 });
+  });
+});
+
+describe('createRateLimiter maxKeys', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('counts keys beyond the cap in one shared overflow bucket and keeps existing keys apart', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2 });
+
+    expect(limiter.check('a').allowed).toBe(true);
+    expect(limiter.check('b').allowed).toBe(true);
+    // Table full: c and d are not given entries of their own.
+    expect(limiter.check('c').allowed).toBe(true);
+    expect(limiter.check('d').allowed).toBe(false);
+    // The keys that got in still count on their own.
+    expect(limiter.check('a').allowed).toBe(false);
+  });
+
+  it('frees lapsed windows when full so a new key gets its own bucket again', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2 });
+    limiter.check('a');
+    limiter.check('b');
+    limiter.check('c');
+
+    vi.advanceTimersByTime(61_000);
+
+    expect(limiter.check('c').allowed).toBe(true);
+    expect(limiter.check('c').allowed).toBe(false);
+    expect(limiter.check('d').allowed).toBe(true);
+  });
+});
+
+describe('prScanWebhookPreAuthIpRateLimiter table cap', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    prScanWebhookPreAuthIpRateLimiter.reset();
+  });
+
+  afterEach(() => {
+    prScanWebhookPreAuthIpRateLimiter.reset();
+    vi.useRealTimers();
+  });
+
+  it('stops giving new addresses their own window once the table is full', () => {
+    for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS; i++) {
+      expect(prScanWebhookPreAuthIpRateLimiter.check(`addr-${i}`).allowed).toBe(true);
+    }
+    // New addresses past the cap share one overflow bucket: the per-address
+    // budget runs out across them, where uncapped each would start afresh.
+    for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE; i++) {
+      expect(prScanWebhookPreAuthIpRateLimiter.check(`overflow-${i}`).allowed).toBe(true);
+    }
+    expect(prScanWebhookPreAuthIpRateLimiter.check('overflow-next').allowed).toBe(false);
+    // An address that already had a window keeps counting on its own.
+    expect(prScanWebhookPreAuthIpRateLimiter.check('addr-0').allowed).toBe(true);
   });
 });

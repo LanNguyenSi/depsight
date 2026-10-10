@@ -15,6 +15,8 @@ export interface RateLimitResult {
   remaining: number;
   /** Whole seconds until the window resets; always >= 1 when blocked. */
   retryAfterSeconds: number;
+  /** When the window this call was counted in ends (epoch ms); identifies the window. */
+  resetAt: number;
 }
 
 export interface RateLimiter {
@@ -29,18 +31,44 @@ interface Entry {
   resetAt: number;
 }
 
-export function createRateLimiter(options: { limit: number; windowMs: number }): RateLimiter {
-  const { limit, windowMs } = options;
-  // One small entry per user id that ever called, replaced when its window
-  // lapses; the key space is the user table, so no eviction is needed.
+/** Shared bucket for every key that arrives while a `maxKeys` limiter is full. */
+export const OVERFLOW_KEY = '__overflow__';
+
+/**
+ * `maxKeys` bounds the memory of a limiter whose keys a caller can choose (an
+ * IP read from a header): once that many windows are live, a new key is
+ * counted in one shared overflow bucket instead of getting an entry of its
+ * own. Without it the key space is the user table, so no eviction is needed.
+ */
+export function createRateLimiter(options: {
+  limit: number;
+  windowMs: number;
+  maxKeys?: number;
+}): RateLimiter {
+  const { limit, windowMs, maxKeys } = options;
+  // One small entry per key that ever called, replaced when its window lapses.
   const entries = new Map<string, Entry>();
+  let lastSweep = 0;
+
+  /** Drop lapsed windows, at most once a second so a full map is not rescanned per request. */
+  function sweep(now: number): void {
+    if (now - lastSweep < 1000) return;
+    lastSweep = now;
+    for (const [k, e] of entries) if (e.resetAt <= now) entries.delete(k);
+  }
 
   return {
     reset(): void {
       entries.clear();
+      lastSweep = 0;
     },
-    check(key: string): RateLimitResult {
+    check(requestedKey: string): RateLimitResult {
       const now = Date.now();
+      let key = requestedKey;
+      if (maxKeys !== undefined && !entries.has(key) && entries.size >= maxKeys) {
+        sweep(now);
+        if (entries.size >= maxKeys) key = OVERFLOW_KEY;
+      }
       let entry = entries.get(key);
       if (!entry || entry.resetAt <= now) {
         entry = { count: 0, resetAt: now + windowMs };
@@ -52,6 +80,7 @@ export function createRateLimiter(options: { limit: number; windowMs: number }):
           allowed: false,
           remaining: 0,
           retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+          resetAt: entry.resetAt,
         };
       }
 
@@ -60,6 +89,7 @@ export function createRateLimiter(options: { limit: number; windowMs: number }):
         allowed: true,
         remaining: limit - entry.count,
         retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+        resetAt: entry.resetAt,
       };
     },
   };
@@ -113,16 +143,16 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 });
 
 // POST /api/webhooks/github is unauthenticated apart from its HMAC, so only a
-// delivery verified against a tracked repository row's own secret reaches these
-// limiters. Each accepted delivery starts a PR scan that spends the tracking
-// user's own GitHub quota, so the per-row and per-user budgets are what bound
-// the scan load. The endpoint-wide budget is a ceiling that protects the
+// delivery verified against a tracked repository row's own secret reaches the
+// three limiters below. Each accepted delivery starts a PR scan that spends the
+// tracking user's own GitHub quota, so the per-row and per-user budgets are what
+// bound the scan load. The endpoint-wide budget is a ceiling that protects the
 // server, not a scan budget: it caps accepted deliveries (background scans and
 // replay-guard memory, ~25 MB at the cap), while one user's rows can take at
-// most 120 of it. It does not bound verification CPU: signature verification
+// most 120 of it. They do not bound verification CPU: signature verification
 // (one JSON parse of up to 1 MiB, measured at roughly 10-30 ms for a crafted body,
-// plus up to 25 HMACs at about 0.35 ms per candidate per MiB) runs before any
-// limiter, and there is no per-IP limit.
+// plus up to 25 HMACs at about 0.35 ms per candidate per MiB) is bounded by the
+// pre-verification limiters further down, which run before the body is read.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
 export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 3000;
 // All of one user's tracked repositories together. Twice a single repository's
@@ -143,6 +173,34 @@ export const prScanWebhookUserRateLimiter = createRateLimiter({
 export const prScanWebhookTotalRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
+});
+
+// Pre-verification limits for POST /api/webhooks/github. They run before the
+// body is read, parsed or hashed, count every request (verified or not) and
+// answer 429 without touching the body. Per source IP (see lib/client-ip.ts for
+// which header is trusted) plus one endpoint-wide ceiling. Fixed one-minute
+// windows. Legitimate traffic is a few deliveries a minute from GitHub's hook
+// addresses, far below both figures. The ceiling is what still bounds the CPU
+// when the client address cannot be trusted (an app reached without the proxy,
+// where a caller can invent a new address per request): at the ceiling a
+// crafted body costs roughly 25 s of CPU a minute at most. The per-IP table holds
+// at most PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS windows; further addresses share one
+// overflow bucket.
+export const PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE = 60;
+export const PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE = 600;
+export const PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS = 10_000;
+const MINUTE_MS = 60 * 1000;
+
+/** POST /api/webhooks/github before verification, keyed by the trusted client address. */
+export const prScanWebhookPreAuthIpRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
+  windowMs: MINUTE_MS,
+  maxKeys: PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
+});
+/** POST /api/webhooks/github before verification, one shared key for every caller. */
+export const prScanWebhookPreAuthTotalRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
+  windowMs: MINUTE_MS,
 });
 
 // POST /api/webhook-secrets/[repoId] mints (or rotates) a webhook secret. It is

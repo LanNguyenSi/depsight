@@ -15,7 +15,11 @@ import {
   unreadableSecretWarning,
   IGNORED_INSTANCE_SECRET_WARNING,
 } from '@/lib/pr/webhook-secret';
+import { clientIpFromForwardedFor, trustedProxyHops } from '@/lib/client-ip';
 import {
+  PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
+  prScanWebhookPreAuthIpRateLimiter,
+  prScanWebhookPreAuthTotalRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
@@ -60,6 +64,54 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
 function scansForks(row: { webhookScanForks: boolean | null }): boolean {
   if (row.webhookScanForks !== null) return row.webhookScanForks;
   return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
+}
+
+/** The operator switched the endpoint off (GITHUB_WEBHOOK_DISABLED=true). */
+function webhookDisabled(): boolean {
+  return process.env.GITHUB_WEBHOOK_DISABLED?.trim().toLowerCase() === 'true';
+}
+
+/** Limiter key for a caller whose address cannot be established from a trusted hop. */
+const UNKNOWN_CLIENT = 'unknown';
+
+/** End of the endpoint-wide window that was last reported (its resetAt, epoch ms). */
+let ceilingWarnedWindow = 0;
+
+/**
+ * The endpoint-wide pre-verification ceiling refused a request, which may be a
+ * GitHub delivery that GitHub does not redeliver by itself. Say so once per
+ * limiter window (keyed by the window's end, so the first refusal of every
+ * window is logged); the log line carries no request data.
+ */
+function warnCeilingReached(windowResetAt: number): void {
+  if (windowResetAt === ceilingWarnedWindow) return;
+  ceilingWarnedWindow = windowResetAt;
+  console.warn(
+    `PR scan webhook: the endpoint-wide pre-verification limit (${PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE} requests a minute) was reached; ` +
+      'requests are answered 429 until the window ends and GitHub does not redeliver them automatically',
+  );
+}
+
+/**
+ * Limits applied before anything of the request is read: per trusted client
+ * address, then one endpoint-wide ceiling. Returns the 429 to send, or null.
+ * The address comes only from the hop the trusted proxy appended to
+ * X-Forwarded-For (see lib/client-ip.ts); a caller that is not behind the
+ * proxy can write that value itself, and what still bounds it is the shared
+ * ceiling and the capped size of the per-address table.
+ */
+function preAuthRateLimited(req: NextRequest): Response | null {
+  const ip =
+    clientIpFromForwardedFor(req.headers.get('x-forwarded-for'), trustedProxyHops()) ??
+    UNKNOWN_CLIENT;
+  const ipLimit = prScanWebhookPreAuthIpRateLimiter.check(ip);
+  if (!ipLimit.allowed) return rateLimitedResponse(ipLimit);
+  const totalLimit = prScanWebhookPreAuthTotalRateLimiter.check('all');
+  if (!totalLimit.allowed) {
+    warnCeilingReached(totalLimit.resetAt);
+    return rateLimitedResponse(totalLimit);
+  }
+  return null;
 }
 
 /**
@@ -144,6 +196,11 @@ function claimedRepository(
  * secret of user B never triggers a scan, or a comment under the token, of
  * user A, even for a repository both track. There is no instance-wide secret.
  *
+ * Before the body is read, a per-address limit (the client address is the hop
+ * the trusted proxy appended to X-Forwarded-For) and an endpoint-wide ceiling
+ * bound what an unauthenticated caller can make the server parse and hash.
+ * GITHUB_WEBHOOK_DISABLED=true switches the endpoint off (404, body unread).
+ *
  * The payload is parsed before the signature is checked, but only to read the
  * owner and repository name for the candidate lookup; the lookup result is
  * discarded unless a secret verifies. Nothing else from the payload is used
@@ -162,11 +219,21 @@ function claimedRepository(
  * verified the delivery.
  */
 export async function POST(req: NextRequest) {
+  // The operator opt-out answers before anything else, body unread.
+  if (webhookDisabled()) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
   warnIgnoredInstanceSecretOnce();
   if (!getWebhookSecretKey()) {
     // Fail closed: without a sealing key no stored secret can be opened.
     return NextResponse.json({ error: 'Webhook disabled' }, { status: 503 });
   }
+
+  // Cheap rejection first: over the per-address or endpoint-wide pre-verification
+  // limit the request is answered 429 without its body being read, parsed or
+  // hashed. Every later step (body read, JSON parse, lookup, HMACs) costs more.
+  const tooMany = preAuthRateLimited(req);
+  if (tooMany) return tooMany;
 
   const rawBody = await readBodyCapped(req, MAX_BODY_BYTES);
   if (!rawBody) {
