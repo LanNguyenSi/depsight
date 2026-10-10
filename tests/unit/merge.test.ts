@@ -114,4 +114,41 @@ describe('mergeCveAdvisories()', () => {
     expect(result[0].source).toBe('dependabot');
     expect(result[1].source).toBe('osv');
   });
+
+  it('collapses repeated Dependabot alerts for one advisory and package (one per manifest) to the first', () => {
+    const first = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash', vulnerableRange: '< 4.17.21' });
+    const second = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash', vulnerableRange: '< 4.17.20' });
+    const result = mergeCveAdvisories([first, second], []);
+    expect(result).toEqual([first]);
+  });
+
+  it('keeps the same advisory for two different packages, and the same package for two advisories', () => {
+    const a = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash' });
+    const b = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash-es' });
+    const c = makeAdvisory({ ghsaId: 'GHSA-dddd-eeee-ffff', packageName: 'lodash' });
+    expect(mergeCveAdvisories([a, b, c], [])).toEqual([a, b, c]);
+  });
+
+  it('still drops an OSV twin of a collapsed Dependabot alert', () => {
+    const dep1 = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash' });
+    const dep2 = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash' });
+    const osv = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'lodash', source: 'osv' });
+    expect(mergeCveAdvisories([dep1, dep2], [osv])).toEqual([dep1]);
+  });
+
+  it('never yields two rows with the same (ghsaId, packageName), the key the Advisory table enforces', () => {
+    const rows = [
+      makeAdvisory({ ghsaId: 'GHSA-1', packageName: 'a' }),
+      makeAdvisory({ ghsaId: 'GHSA-1', packageName: 'a' }),
+      makeAdvisory({ ghsaId: 'GHSA-1', packageName: 'b', cveId: 'CVE-1' }),
+    ];
+    const osv = [
+      makeAdvisory({ ghsaId: 'PYSEC-1', cveId: 'CVE-1', packageName: 'b', source: 'osv' }),
+      makeAdvisory({ ghsaId: 'GHSA-2', packageName: 'c', source: 'osv' }),
+      makeAdvisory({ ghsaId: 'GHSA-2', packageName: 'c', source: 'osv' }),
+    ];
+    const keys = mergeCveAdvisories(rows, osv).map((x) => `${x.ghsaId} ${x.packageName}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual(['GHSA-1 a', 'GHSA-1 b', 'GHSA-2 c']);
+  });
 });

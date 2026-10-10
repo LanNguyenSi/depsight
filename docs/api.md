@@ -2,10 +2,10 @@
 
 All endpoints except `GET /api/health` and the NextAuth sign-in handlers under `/api/auth/*` require authentication. Which credentials an endpoint accepts depends on the route:
 
-- **Session or Bearer token:** `/api/scan`, `/api/license`, `/api/deps`, `/api/history`, `/api/overview`, `/api/sbom`, `/api/repos`, `/api/repos/tracked-ids`, `/api/policies`, `/api/policies/[id]`, `/api/policies/evaluate`, `/api/ci/analytics/*` and `/api/ci/sync` accept either a NextAuth session (the dashboard) or an `Authorization: Bearer dsat_...` API token (headless agents such as the MCP server).
+- **Session or Bearer token:** `/api/scan`, `/api/license`, `/api/deps`, `/api/history`, `/api/overview`, `/api/sbom`, `/api/repos`, `/api/repos/tracked-ids`, `/api/policies`, `/api/policies/[id]`, `/api/policies/evaluate`, `/api/advisory-state`, `/api/ci/analytics/*` and `/api/ci/sync` accept either a NextAuth session (the dashboard) or an `Authorization: Bearer dsat_...` API token (headless agents such as the MCP server).
 - **Session only:** `/api/export`, `/api/repos/sync`, `/api/dependabot`, `/api/dependabot/check`, `/api/dependabot/enable-all`, `/api/pr-scan`, `/api/me`, `/api/tokens` and `/api/tokens/[id]`, `/api/webhooks` and `/api/webhooks/[id]`, and `/api/slack` reject a Bearer token with 401. Token management is session-only on purpose: a `dsat_` token can never mint, list, or revoke tokens.
 
-A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` accepts an optional `scope` body field, defaulting to `WRITE`); a `READ` token gets 403 on `POST /api/policies`, `PUT`/`DELETE /api/policies/[id]`, `POST /api/ci/sync`, and the three scan-triggering POSTs (`/api/scan`, `/api/license`, `/api/deps`); all other Bearer-capable endpoints work with either scope. A session always has full access.
+A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` accepts an optional `scope` body field, defaulting to `WRITE`); a `READ` token gets 403 on `POST /api/policies`, `PUT`/`DELETE /api/policies/[id]`, `POST /api/ci/sync`, `PUT`/`DELETE /api/advisory-state`, and the three scan-triggering POSTs (`/api/scan`, `/api/license`, `/api/deps`); all other Bearer-capable endpoints work with either scope. A session always has full access.
 
 A session counts only when it carries a user id: a signed-in session whose user row no longer exists has none and is treated as no session (401 on every session-only route, and a Bearer token is then tried on the routes that accept one).
 
@@ -14,6 +14,9 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read; rate limited, see [Rate limits](#rate-limits) |
+| `GET` | `/api/scan` | Latest completed CVE scan of a repository (`?repoId=`). Each advisory carries `state`: null while the finding is open, else `{ status: 'ACKNOWLEDGED' \| 'IGNORED', note, setBy, setAt }`. The counts and risk score include ignored findings |
+| `PUT` | `/api/advisory-state` | Acknowledge or ignore one finding (body: `{ repoId, ghsaId, packageName, status: 'ACKNOWLEDGED' \| 'IGNORED', note? }`, note up to 500 characters). 404 for a repository the caller does not own or an advisory that repository never reported. Session or `WRITE` Bearer token |
+| `DELETE` | `/api/advisory-state` | Clear the state of one finding, it is open again (body: `{ repoId, ghsaId, packageName }`). Idempotent. Session or `WRITE` Bearer token |
 | `POST` | `/api/license` | Run license compliance check (body: `{ repoId }`); rate limited, see [Rate limits](#rate-limits) |
 | `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
 | `POST` | `/api/deps` | Run the dependency age analysis for a repository (body: `{ repoId }`); rate limited, see [Rate limits](#rate-limits) |

@@ -25,6 +25,7 @@ model User {
   apiTokens     ApiToken[]
   webhooks      WebhookConfig[]
   slackConfig   SlackConfig?
+  advisoryStates AdvisoryState[]
 }
 
 model Repo {
@@ -68,6 +69,7 @@ model Repo {
 
   scans         Scan[]
   workflows     Workflow[]
+  advisoryStates AdvisoryState[]
 
   @@unique([userId, githubId])
   @@index([userId])
@@ -125,8 +127,43 @@ model Advisory {
   publishedAt     DateTime?
   url             String?
 
+  // One row per advisory and package within a scan. The scanner collapses
+  // repeats before writing (lib/cve/merge.ts); a database that already holds
+  // duplicates needs prisma/pre-push/dedupe-advisories.sql run first, which
+  // `npm run db:push` does.
+  @@unique([scanId, ghsaId, packageName])
   @@index([scanId])
   @@index([ghsaId])
+}
+
+// Per-repo triage state of one finding, keyed by the advisory identity
+// (ghsaId + packageName), not by an Advisory row: Advisory rows are replaced
+// by every scan, the triage decision has to survive that. No row means the
+// finding is open. Counts and risk scores still include acknowledged and
+// ignored findings.
+model AdvisoryState {
+  id          String         @id @default(cuid())
+  repoId      String
+  repo        Repo           @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  ghsaId      String
+  packageName String
+  status      AdvisoryStatus
+  note        String?
+
+  setByUserId String
+  setBy       User           @relation(fields: [setByUserId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([repoId, ghsaId, packageName])
+  @@index([repoId])
+}
+
+enum AdvisoryStatus {
+  ACKNOWLEDGED
+  IGNORED
 }
 
 model Dependency {

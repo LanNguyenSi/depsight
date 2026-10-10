@@ -197,6 +197,14 @@ const de = {
   'advisory.details': 'Details →',
   'advisory.source.dependabot': 'Dependabot',
   'advisory.source.osv': 'OSV',
+  'advisory.state.acknowledged': 'Bestätigt',
+  'advisory.state.ignored': 'Ignoriert',
+  'advisory.action.acknowledge': 'Bestätigen',
+  'advisory.action.ignore': 'Ignorieren',
+  'advisory.action.reopen': 'Wieder öffnen',
+  'advisory.hideIgnored': 'Ignorierte ausblenden',
+  'advisory.state.error': 'Status konnte nicht gespeichert werden.',
+  'advisory.state.by': 'von {user}',
 
   // Severity
   'severity.title': 'CVE Zusammenfassung',
@@ -560,6 +568,14 @@ const en = {
   'advisory.details': 'Details →',
   'advisory.source.dependabot': 'Dependabot',
   'advisory.source.osv': 'OSV',
+  'advisory.state.acknowledged': 'Acknowledged',
+  'advisory.state.ignored': 'Ignored',
+  'advisory.action.acknowledge': 'Acknowledge',
+  'advisory.action.ignore': 'Ignore',
+  'advisory.action.reopen': 'Reopen',
+  'advisory.hideIgnored': 'Hide ignored',
+  'advisory.state.error': 'Could not save the status.',
+  'advisory.state.by': 'by {user}',
 
   // Severity
   'severity.title': 'CVE Summary',

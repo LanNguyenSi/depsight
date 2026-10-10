@@ -4,7 +4,10 @@ import type { GitHubAdvisory } from './github-advisories';
  * Merge Dependabot and OSV advisories, deduplicating by (identifier, packageName).
  *
  * Rules:
- * - All dependabot advisories are kept unconditionally.
+ * - Dependabot advisories are kept, except that a second alert for the same
+ *   (ghsaId, packageName) collapses into the first: Dependabot raises one alert
+ *   per manifest, so a monorepo reports the same advisory and package several
+ *   times, and the Advisory table holds one row per (scan, ghsaId, packageName).
  * - OSV advisories are kept only if neither their (ghsaId, packageName) nor
  *   (cveId, packageName) pair is already covered by a dependabot advisory or
  *   a previously-kept OSV advisory.
@@ -15,9 +18,18 @@ export function mergeCveAdvisories(
   dependabot: GitHubAdvisory[],
   osv: GitHubAdvisory[],
 ): GitHubAdvisory[] {
+  // Collapse repeated Dependabot alerts for one advisory and package (first wins)
+  const seenDependabot = new Set<string>();
+  const uniqueDependabot = dependabot.filter((a) => {
+    const key = `${a.ghsaId} ${a.packageName}`;
+    if (seenDependabot.has(key)) return false;
+    seenDependabot.add(key);
+    return true;
+  });
+
   // Seed covered keys from all Dependabot advisories keyed by (identifier, packageName)
   const covered = new Set<string>();
-  for (const a of dependabot) {
+  for (const a of uniqueDependabot) {
     covered.add(`${a.ghsaId} ${a.packageName}`);
     if (a.cveId) covered.add(`${a.cveId} ${a.packageName}`);
   }
@@ -44,5 +56,5 @@ export function mergeCveAdvisories(
     for (const k of candidateKeys) covered.add(k);
   }
 
-  return [...dependabot, ...keptOsv];
+  return [...uniqueDependabot, ...keptOsv];
 }

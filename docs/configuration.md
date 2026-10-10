@@ -43,9 +43,40 @@ These run inside the Docker container automatically on `make dev`. For manual us
 
 ```bash
 npm run db:generate    # Generate Prisma client
-npm run db:push        # Push schema changes (dev)
+npm run db:dedupe      # Remove duplicate Advisory rows (idempotent, see below)
+npm run db:push        # db:dedupe, then prisma db push
 npm run db:studio      # Database GUI
 ```
+
+### Deploying the Advisory unique key
+
+`Advisory` carries a unique key over `(scanId, ghsaId, packageName)`. A database
+that already holds duplicate rows (a monorepo scan stored the same advisory and
+package once per manifest) cannot take that key: `prisma db push` fails with
+`P2002`. The schema is applied with `db push` and there is no migrations
+directory, and the production image does not run a push at start, so the step
+is part of the deploy and is wired through the `db:push` script, not through
+the container:
+
+```bash
+# from a checkout of the deployed commit, with DATABASE_URL of the target database
+npm run db:push -- --accept-data-loss   # once, for this release
+```
+
+`npm run db:push` runs `prisma/pre-push/dedupe-advisories.sql` first, then
+`prisma db push`. Do not run a bare `prisma db push` against a database that
+may still hold duplicates. The SQL keeps the most complete row of each
+`(scanId, ghsaId, packageName)` group (a fixed version first, then an affected
+range, then a published date, ties by smallest id), recomputes the CVE counts
+and risk score of every scan that lost rows, does nothing on a fresh database
+and is safe to repeat. `--accept-data-loss` is needed once because Prisma warns
+for every new unique key, whether or not the table has duplicates; after the
+dedupe this release's push carries no other data-loss warning and drops
+nothing (without the dedupe the push still fails). Once
+the key exists, the warning does not return and a plain `npm run db:push`
+suffices. The development container (`docker/entrypoint.dev.sh`) calls
+`npm run db:push` too; an existing development volume stops at the warning with
+the command to run, or can be reset with `make dev-clean`.
 
 ## CI Health (GitHub Actions sync)
 
