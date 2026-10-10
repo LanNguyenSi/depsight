@@ -74,19 +74,18 @@ function webhookDisabled(): boolean {
 /** Limiter key for a caller whose address cannot be established from a trusted hop. */
 const UNKNOWN_CLIENT = 'unknown';
 
-/** End of the window in which the endpoint-wide ceiling was last reported (epoch ms). */
-let ceilingWarnedUntil = 0;
+/** End of the endpoint-wide window that was last reported (its resetAt, epoch ms). */
+let ceilingWarnedWindow = 0;
 
 /**
  * The endpoint-wide pre-verification ceiling refused a request, which may be a
  * GitHub delivery that GitHub does not redeliver by itself. Say so once per
- * window so an operator sees lost deliveries; the log line carries no request
- * data.
+ * limiter window (keyed by the window's end, so the first refusal of every
+ * window is logged); the log line carries no request data.
  */
-function warnCeilingReached(retryAfterSeconds: number): void {
-  const now = Date.now();
-  if (now < ceilingWarnedUntil) return;
-  ceilingWarnedUntil = now + retryAfterSeconds * 1000;
+function warnCeilingReached(windowResetAt: number): void {
+  if (windowResetAt === ceilingWarnedWindow) return;
+  ceilingWarnedWindow = windowResetAt;
   console.warn(
     `PR scan webhook: the endpoint-wide pre-verification limit (${PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE} requests a minute) was reached; ` +
       'requests are answered 429 until the window ends and GitHub does not redeliver them automatically',
@@ -109,7 +108,7 @@ function preAuthRateLimited(req: NextRequest): Response | null {
   if (!ipLimit.allowed) return rateLimitedResponse(ipLimit);
   const totalLimit = prScanWebhookPreAuthTotalRateLimiter.check('all');
   if (!totalLimit.allowed) {
-    warnCeilingReached(totalLimit.retryAfterSeconds);
+    warnCeilingReached(totalLimit.resetAt);
     return rateLimitedResponse(totalLimit);
   }
   return null;

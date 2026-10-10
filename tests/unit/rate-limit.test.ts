@@ -28,13 +28,19 @@ describe('createRateLimiter', () => {
 
   it('blocks the request after the limit with the seconds left in the window', () => {
     const limiter = createRateLimiter({ limit: 2, windowMs: 60_000 });
+    const start = Date.now();
     limiter.check('u1');
     limiter.check('u1');
     vi.advanceTimersByTime(10_500);
 
     const result = limiter.check('u1');
 
-    expect(result).toEqual({ allowed: false, remaining: 0, retryAfterSeconds: 50 });
+    expect(result).toEqual({
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds: 50,
+      resetAt: start + 60_000,
+    });
   });
 
   it('keeps counting separate keys separately', () => {

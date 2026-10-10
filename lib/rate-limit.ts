@@ -15,6 +15,8 @@ export interface RateLimitResult {
   remaining: number;
   /** Whole seconds until the window resets; always >= 1 when blocked. */
   retryAfterSeconds: number;
+  /** When the window this call was counted in ends (epoch ms); identifies the window. */
+  resetAt: number;
 }
 
 export interface RateLimiter {
@@ -78,6 +80,7 @@ export function createRateLimiter(options: {
           allowed: false,
           remaining: 0,
           retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+          resetAt: entry.resetAt,
         };
       }
 
@@ -86,6 +89,7 @@ export function createRateLimiter(options: {
         allowed: true,
         remaining: limit - entry.count,
         retryAfterSeconds: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+        resetAt: entry.resetAt,
       };
     },
   };

@@ -171,6 +171,34 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
       }
     });
 
+    it('warns for the first ceiling refusal of the next window even right after the window turns', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const warnings = () =>
+          vi.mocked(console.warn).mock.calls.filter((c) => String(c[0]).includes('endpoint-wide'));
+        const exhaustTotal = () => {
+          for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE; i++) {
+            prScanWebhookPreAuthTotalRateLimiter.check('all');
+          }
+        };
+        const windowStart = Date.now() + 4 * 60 * 60 * 1000;
+        vi.setSystemTime(windowStart);
+        exhaustTotal();
+        vi.setSystemTime(windowStart + 59_900);
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        expect(warnings()).toHaveLength(1);
+
+        // 50 ms into the next window: a rounded-up retry time would still cover this.
+        vi.setSystemTime(windowStart + 60_050);
+        prScanWebhookPreAuthIpRateLimiter.reset();
+        exhaustTotal();
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        expect(warnings()).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not warn about the ceiling for a request refused for its own address', async () => {
       exhaustIp(GOOD_IP);
       await POST(request({ forwardedFor: GOOD_IP }));
