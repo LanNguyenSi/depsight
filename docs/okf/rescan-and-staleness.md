@@ -3,9 +3,10 @@ type: module
 title: Rescan and staleness - per-scanner freshness beside one any-success timestamp
 description: staleness has no dedicated flag on Repo or Scan; the cron computes it each cycle from two Repo fields, lastScannedAt (the last time any scanner succeeded, written only by the three scanners) and lastScanAttemptAt (the cron's own attempt marker), while per-scanner freshness (cveScannedAt, licenseScannedAt, depsScannedAt plus a last-failure message each) lets a persistently failing scanner stay visible in the overview table and the dashboard even when the other scanners keep advancing lastScannedAt; the cron no longer stamps lastScannedAt after a failed attempt; a scanner whose source could not be read (revoked token, GitHub or OSV outage) still stores what it found but is recorded through the same error field instead of stamping a success, and the completed scan row carries the reason (Scan.degradedReason), which the scan.completed webhook, POST /api/scan and the MCP rescan answer expose.
 tags: [cron, scan, staleness, mcp]
-timestamp: 2026-10-10T10:29:29Z
+timestamp: 2026-10-10T11:39:00Z
 sources:
   - lib/cron/auto-scan.ts
+  - instrumentation.ts
   - lib/cve/scanner.ts
   - lib/license/scanner.ts
   - lib/deps/scanner.ts
@@ -31,7 +32,7 @@ sources:
 
 ## Three trigger paths, one underlying pipeline
 
-A rescan reaches the same CVE scan pipeline three ways: `POST /api/scan`, called directly by the dashboard's rescan action and by the MCP `depsight_rescan` tool (`mcp/src/tools/rescan.ts:10-52` via `mcp/src/client.ts:142-144`), runs `scanRepository()` synchronously for one repo. `POST /api/export` runs a scanner only for a scan type with no completed scan to export (`getMissingExportScans`, `lib/export/repo-bundle.ts:166-172`; for CVE and license that means no COMPLETED scan with a payload, `:56-58`, `:79-81`; for deps, no candidate among the 20 most recent COMPLETED scans, `:113-132`), and only when the request sets `runMissingScans`; otherwise it answers 409 `missing_scans` (`app/api/export/route.ts:33-73`). An export of a repo that has a usable completed scan of every type does not rescan anything; a repo whose scans all failed, or whose last usable deps scan fell out of that 20-scan window, does get rescanned. The auto-scan cron (`lib/cron/auto-scan.ts`) runs on an interval read from `SCAN_INTERVAL_MINUTES` (default 60, a whole number from 1 to 35791; any other value stops startup, `lib/cron/auto-scan.ts:9-31`; documented in `docs/configuration.md`) and, for each stale repo, runs all three scanners (CVE, license, and dependency age) in parallel via `Promise.allSettled` (`lib/cron/auto-scan.ts:118-122`).
+A rescan reaches the same CVE scan pipeline three ways: `POST /api/scan`, called directly by the dashboard's rescan action and by the MCP `depsight_rescan` tool (`mcp/src/tools/rescan.ts:10-52` via `mcp/src/client.ts:142-144`), runs `scanRepository()` synchronously for one repo. `POST /api/export` runs a scanner only for a scan type with no completed scan to export (`getMissingExportScans`, `lib/export/repo-bundle.ts:166-172`; for CVE and license that means no COMPLETED scan with a payload, `:56-58`, `:79-81`; for deps, no candidate among the 20 most recent COMPLETED scans, `:113-132`), and only when the request sets `runMissingScans`; otherwise it answers 409 `missing_scans` (`app/api/export/route.ts:33-73`). An export of a repo that has a usable completed scan of every type does not rescan anything; a repo whose scans all failed, or whose last usable deps scan fell out of that 20-scan window, does get rescanned. The auto-scan cron (`lib/cron/auto-scan.ts`) runs on an interval read from `SCAN_INTERVAL_MINUTES` (default 60, a whole number from 1 to 35791; any other value stops startup with exit status 1, `lib/cron/auto-scan.ts:9-31` and `instrumentation.ts`; documented in `docs/configuration.md`) and, for each stale repo, runs all three scanners (CVE, license, and dependency age) in parallel via `Promise.allSettled` (`lib/cron/auto-scan.ts:118-122`).
 
 ## "Stale" is computed, not stored
 
