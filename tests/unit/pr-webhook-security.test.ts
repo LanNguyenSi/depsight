@@ -87,6 +87,11 @@ describe('readBodyCapped', () => {
     expect(await readBodyCapped(req, 10)).toBeNull();
   });
 
+  it('ignores a Content-Length that is not a number and falls back to counting', async () => {
+    const req = streamRequest([Buffer.from('abc')], { 'content-length': 'abc' });
+    expect((await readBodyCapped(req, 10))?.toString()).toBe('abc');
+  });
+
   it('returns an empty buffer for a request without a body', async () => {
     const out = await readBodyCapped(new Request('http://localhost/x', { method: 'POST' }), 10);
     expect(out?.length).toBe(0);

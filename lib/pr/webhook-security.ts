@@ -53,7 +53,11 @@ export async function readBodyCapped(req: Request, maxBytes: number): Promise<Bu
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
+      try {
+        await reader.cancel();
+      } catch {
+        // The stream is already being dropped; nothing to recover.
+      }
       return null;
     }
     chunks.push(Buffer.from(value));
