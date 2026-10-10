@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
+import { SecretRowActions } from '@/components/settings/SecretRowActions';
 import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
 
 interface RepoRow {
@@ -11,6 +12,7 @@ interface RepoRow {
   configured: boolean;
   usable: boolean;
   rotatedAt: string | null;
+  scanForks: boolean | null;
 }
 
 interface Pending {
@@ -27,6 +29,7 @@ export function PrWebhookSecrets() {
   const { t, locale } = useLocale();
   const [repos, setRepos] = useState<RepoRow[]>([]);
   const [available, setAvailable] = useState(true);
+  const [forksDefault, setForksDefault] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -38,9 +41,14 @@ export function PrWebhookSecrets() {
     try {
       const res = await fetch('/api/webhook-secrets');
       if (!res.ok) throw new Error('load failed');
-      const data = (await res.json()) as { available?: boolean; repos: RepoRow[] };
+      const data = (await res.json()) as {
+        available?: boolean;
+        scanForksDefault?: boolean;
+        repos: RepoRow[];
+      };
       setRepos(data.repos);
       setAvailable(data.available !== false);
+      setForksDefault(data.scanForksDefault === true);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -81,6 +89,24 @@ export function PrWebhookSecrets() {
       });
       if (!res.ok) throw new Error('remove failed');
       if (revealed?.repository === repo.fullName) setRevealed(null);
+      await load();
+    } catch {
+      setActionError(true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setScanForks(repo: RepoRow, value: boolean | null) {
+    setBusyId(repo.id);
+    setActionError(false);
+    try {
+      const res = await fetch(`/api/webhook-secrets/${encodeURIComponent(repo.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanForks: value }),
+      });
+      if (!res.ok) throw new Error('update failed');
       await load();
     } catch {
       setActionError(true);
@@ -170,6 +196,23 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
+                <label className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                  <span>{t['settings.prwh.forks']}</span>
+                  <select
+                    value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
+                    disabled={busyId === repo.id}
+                    onChange={(e) =>
+                      void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
+                    }
+                    className="rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
+                  >
+                    <option value="default">
+                      {forksDefault ? t['settings.prwh.forksDefaultOn'] : t['settings.prwh.forksDefaultOff']}
+                    </option>
+                    <option value="true">{t['settings.prwh.forksOn']}</option>
+                    <option value="false">{t['settings.prwh.forksOff']}</option>
+                  </select>
+                </label>
                 {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}
@@ -177,35 +220,21 @@ export function PrWebhookSecrets() {
                 )}
               </div>
               <div className="flex shrink-0 gap-3 text-xs">
-                {repo.configured ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busyId === repo.id}
-                      onClick={() => setPending({ kind: 'rotate', repo })}
-                      className="text-gray-300 hover:text-white disabled:opacity-50 transition-colors"
-                    >
-                      {busyId === repo.id ? t['settings.prwh.working'] : t['settings.prwh.rotate']}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === repo.id}
-                      onClick={() => setPending({ kind: 'remove', repo })}
-                      className="text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
-                    >
-                      {t['settings.prwh.remove']}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={busyId === repo.id}
-                    onClick={() => void generate(repo)}
-                    className="text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
-                  >
-                    {busyId === repo.id ? t['settings.prwh.working'] : t['settings.prwh.generate']}
-                  </button>
-                )}
+                <SecretRowActions
+                  configured={repo.configured}
+                  available={available}
+                  busy={busyId === repo.id}
+                  labels={{
+                    generate: t['settings.prwh.generate'],
+                    rotate: t['settings.prwh.rotate'],
+                    remove: t['settings.prwh.remove'],
+                    working: t['settings.prwh.working'],
+                    unavailable: t['settings.prwh.unavailable'],
+                  }}
+                  onGenerate={() => void generate(repo)}
+                  onRotate={() => setPending({ kind: 'rotate', repo })}
+                  onRemove={() => setPending({ kind: 'remove', repo })}
+                />
               </div>
             </li>
           ))}

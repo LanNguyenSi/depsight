@@ -82,3 +82,43 @@ export async function DELETE(
 
   return NextResponse.json({ success: true }, { headers: NO_STORE });
 }
+
+/**
+ * PATCH /api/webhook-secrets/[repoId]
+ * Body `{ "scanForks": true | false | null }`: whether the PR-scan webhook
+ * scans pull requests from forks for this tracking row. `null` clears the
+ * setting so the row follows the instance default (GITHUB_WEBHOOK_SCAN_FORKS).
+ * Session only, owner only: the setting lives on the caller's own row, so it
+ * never changes what the webhook does for another user tracking the same
+ * GitHub repository, and a row of another user is a 404.
+ */
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ repoId: string }> },
+) {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const scanForks =
+    body !== null && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).scanForks
+      : undefined;
+  if (scanForks !== true && scanForks !== false && scanForks !== null) {
+    return NextResponse.json({ error: 'scanForks must be true, false or null' }, { status: 400 });
+  }
+
+  const { repoId } = await params;
+  const result = await prisma.repo.updateMany({
+    where: { id: repoId, userId: session.user.id, tracked: true },
+    data: { webhookScanForks: scanForks },
+  });
+  if (result.count !== 1) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  return NextResponse.json({ success: true, scanForks }, { headers: NO_STORE });
+}

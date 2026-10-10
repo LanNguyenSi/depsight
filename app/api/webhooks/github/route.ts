@@ -54,8 +54,15 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
   return headFullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase();
 }
 
-/** Fork pull requests are scanned only when the operator opts in. */
-function scansForks(): boolean {
+/**
+ * Whether fork pull requests are scanned for one tracking row. The row's own
+ * setting (set by its owner) wins; null follows the instance default
+ * GITHUB_WEBHOOK_SCAN_FORKS, which scans forks only when it is `true`. The
+ * argument is the verified row alone, so one row's opt-in never reaches the
+ * row of another owner that tracks the same GitHub repository.
+ */
+function scansForks(row: { webhookScanForks: boolean | null }): boolean {
+  if (row.webhookScanForks !== null) return row.webhookScanForks;
   return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
 }
 
@@ -201,8 +208,9 @@ function claimedRepository(
  * before verification, and after it only the PR number and action (no URL from
  * the payload is ever fetched).
  *
- * Pull requests from forks are ignored (200) unless GITHUB_WEBHOOK_SCAN_FORKS
- * is `true`, because on a public repository any outsider can open one and the
+ * Pull requests from forks are ignored (200) unless the verified row's owner
+ * opted in (Repo.webhookScanForks) or, for a row without a setting,
+ * GITHUB_WEBHOOK_SCAN_FORKS is `true`, because on a public repository any outsider can open one and the
  * comment publishes alert data.
  *
  * The scan runs in the background and the route answers 202 at once: GitHub
@@ -259,6 +267,7 @@ export async function POST(req: NextRequest) {
       owner: true,
       name: true,
       webhookSecretEnc: true,
+      webhookScanForks: true,
       user: { select: { githubToken: true } },
     },
   });
@@ -301,7 +310,7 @@ export async function POST(req: NextRequest) {
   // sits after the signature check, so only a verified caller can ever see this
   // answer and it tells an unverified one nothing, and before the replay guard
   // and the rate limiters, so a fork delivery spends no scan budget.
-  if (!scansForks() && isForkPullRequest(payload, tracked.owner, tracked.name)) {
+  if (!scansForks(tracked) && isForkPullRequest(payload, tracked.owner, tracked.name)) {
     return ignored('fork pull request');
   }
 
