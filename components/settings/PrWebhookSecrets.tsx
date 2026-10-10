@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { SecretRowActions } from '@/components/settings/SecretRowActions';
-import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
+import { forkControlState, showRotateHint } from '@/lib/pr/webhook-secret-notice';
 
 interface RepoRow {
   id: string;
@@ -13,6 +13,7 @@ interface RepoRow {
   usable: boolean;
   rotatedAt: string | null;
   scanForks: boolean | null;
+  private: boolean;
 }
 
 interface Pending {
@@ -200,7 +201,7 @@ export function PrWebhookSecrets() {
                   <span>{t['settings.prwh.forks']}</span>
                   <select
                     value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
-                    disabled={busyId === repo.id}
+                    disabled={busyId === repo.id || forkControlState(repo) !== 'editable'}
                     onChange={(e) =>
                       void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
                     }
@@ -213,6 +214,12 @@ export function PrWebhookSecrets() {
                     <option value="false">{t['settings.prwh.forksOff']}</option>
                   </select>
                 </label>
+                {forkControlState(repo) === 'publicIgnored' && (
+                  <div className="text-xs text-amber-400">{t['settings.prwh.forksPublic']}</div>
+                )}
+                {forkControlState(repo) === 'noSecret' && (
+                  <div className="text-xs text-gray-600">{t['settings.prwh.forksNoSecret']}</div>
+                )}
                 {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}

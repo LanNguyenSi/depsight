@@ -21,7 +21,8 @@ export const dynamic = 'force-dynamic';
  * an operator notice instead of telling every user to rotate.
  *
  * `scanForks` is the row's own fork setting (null = follows the instance
- * default, which `scanForksDefault` reports).
+ * default, which `scanForksDefault` reports). `private` is the stored
+ * visibility; the page shows that the opt-in has no effect on a public one.
  */
 export async function GET() {
   const session = await auth();
@@ -36,6 +37,7 @@ export async function GET() {
       webhookSecretEnc: true,
       webhookSecretRotatedAt: true,
       webhookScanForks: true,
+      private: true,
     },
   });
 
@@ -49,6 +51,7 @@ export async function GET() {
       usable: row.webhookSecretEnc !== null && openWebhookSecret(row.webhookSecretEnc, row.id) !== null,
       rotatedAt: row.webhookSecretRotatedAt,
       scanForks: row.webhookScanForks,
+      private: row.private,
     })),
   });
 }

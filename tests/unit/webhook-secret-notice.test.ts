@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
+import { forkControlState, showRotateHint } from '@/lib/pr/webhook-secret-notice';
 
 describe('showRotateHint', () => {
   it('hints rotation only for a configured, unusable secret while key material is available', () => {
@@ -12,5 +12,20 @@ describe('showRotateHint', () => {
     expect(showRotateHint(false, { configured: true, usable: false })).toBe(false);
     expect(showRotateHint(false, { configured: true, usable: true })).toBe(false);
     expect(showRotateHint(false, { configured: false, usable: false })).toBe(false);
+  });
+});
+
+describe('forkControlState', () => {
+  it('is editable only for a private repository with a configured secret', () => {
+    expect(forkControlState({ configured: true, private: true })).toBe('editable');
+  });
+
+  it('says the opt-in is ignored for a public repository with a secret', () => {
+    expect(forkControlState({ configured: true, private: false })).toBe('publicIgnored');
+  });
+
+  it('says the setting has no effect without a secret, public or private', () => {
+    expect(forkControlState({ configured: false, private: true })).toBe('noSecret');
+    expect(forkControlState({ configured: false, private: false })).toBe('noSecret');
   });
 });

@@ -384,6 +384,8 @@ const de = {
   'settings.prwh.forksDefaultOff': 'Instanz-Standard (ignorieren)',
   'settings.prwh.forksOn': 'Scannen (nur bei vertrauenswürdigen Beitragenden)',
   'settings.prwh.forksOff': 'Ignorieren',
+  'settings.prwh.forksPublic': 'Öffentliches Repository: die Einstellung wird ignoriert.',
+  'settings.prwh.forksNoSecret': 'Ohne Webhook-Secret hat diese Einstellung keine Wirkung.',
 
   // Pagination
   'pagination.prev': 'Zurück',
@@ -781,6 +783,8 @@ const en = {
   'settings.prwh.forksDefaultOff': 'Instance default (ignore)',
   'settings.prwh.forksOn': 'Scan (only for trusted contributors)',
   'settings.prwh.forksOff': 'Ignore',
+  'settings.prwh.forksPublic': 'Public repository: this setting is ignored.',
+  'settings.prwh.forksNoSecret': 'Without a webhook secret this setting has no effect.',
 
   // Pagination
   'pagination.prev': 'Previous',

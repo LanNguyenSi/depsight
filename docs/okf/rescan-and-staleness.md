@@ -3,7 +3,7 @@ type: module
 title: Rescan and staleness - per-scanner freshness beside one any-success timestamp
 description: staleness has no dedicated flag on Repo or Scan; the cron computes it each cycle from two Repo fields, lastScannedAt (the last time any scanner succeeded, written only by the three scanners) and lastScanAttemptAt (the cron's own attempt marker), while per-scanner freshness (cveScannedAt, licenseScannedAt, depsScannedAt plus a last-failure message each) lets a persistently failing scanner stay visible in the overview table and the dashboard even when the other scanners keep advancing lastScannedAt; the cron no longer stamps lastScannedAt after a failed attempt; a scanner whose source could not be read (revoked token, GitHub or OSV outage) still stores what it found but is recorded through the same error field instead of stamping a success, and the completed scan row carries the reason (Scan.degradedReason), which the scan.completed webhook, POST /api/scan and the MCP rescan answer expose.
 tags: [cron, scan, staleness, mcp]
-timestamp: 2026-10-10T11:54:00Z
+timestamp: 2026-10-10T14:09:01Z
 sources:
   - lib/cron/auto-scan.ts
   - instrumentation.ts

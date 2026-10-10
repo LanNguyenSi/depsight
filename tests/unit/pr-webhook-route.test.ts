@@ -40,6 +40,7 @@ interface Row {
   tracked: boolean;
   webhookSecretEnc: string | null;
   webhookScanForks: boolean | null;
+  private: boolean;
   user: { githubToken: string };
   createdAt: number;
 }
@@ -56,6 +57,7 @@ function row(over: Partial<Row> & { secret?: string | null } = {}): Row {
     tracked: true,
     webhookSecretEnc: plain === null ? null : sealWebhookSecret(plain, id),
     webhookScanForks: null,
+    private: false,
     user: { githubToken: 'tok-123' },
     createdAt: 1,
     ...rest,
@@ -754,7 +756,11 @@ describe('POST /api/webhooks/github', () => {
       expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
     });
     describe('per-row fork setting', () => {
-      const fork = () => withHead({ repo: { full_name: 'mallory/api' } });
+      // These tests are about the row's setting, so the payload says the repository is private.
+      const fork = () => ({
+        ...withHead({ repo: { full_name: 'mallory/api' } }),
+        repository: { name: 'api', owner: { login: 'acme' }, private: true },
+      });
 
       it('scans a fork pull request for a row that opted in, with the env default off', async () => {
         table = [row({ webhookScanForks: true })];
@@ -811,6 +817,58 @@ describe('POST /api/webhooks/github', () => {
         expect(forA.status).toBe(202);
         expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
         expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-A', 'acme', 'api', 42, 'user-a');
+      });
+
+      describe('repository visibility', () => {
+        const forkOf = (repository: Record<string, unknown>) =>
+          payload({
+            repository: { name: 'api', owner: { login: 'acme' }, ...repository },
+            pull_request: { head: { repo: { full_name: 'mallory/api' } } },
+          });
+
+        it('scans a fork pull request of a private repository whose row opted in', async () => {
+          table = [row({ webhookScanForks: true, private: true })];
+          const res = await POST(signed(forkOf({ private: true, visibility: 'private' })));
+          expect(res.status).toBe(202);
+          expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+        });
+
+        it('treats an internal repository like a private one', async () => {
+          table = [row({ webhookScanForks: true })];
+          expect((await POST(signed(forkOf({ visibility: 'internal' })))).status).toBe(202);
+        });
+
+        it('ignores the opt-in on a public repository', async () => {
+          table = [row({ webhookScanForks: true, private: false })];
+          await expectIgnoredFork(forkOf({ private: false, visibility: 'public' }));
+        });
+
+        it('ignores the opt-in right after a private repository became public, whatever the stored flag says', async () => {
+          table = [row({ webhookScanForks: true, private: true })];
+          await expectIgnoredFork(forkOf({ private: false }));
+        });
+
+        it.each([
+          ['no visibility field', {}],
+          ['a non-boolean private', { private: 'true' }],
+          ['an unknown visibility', { visibility: 'secret' }],
+          ['contradicting fields', { private: true, visibility: 'public' }],
+        ])('treats %s as public and ignores the opt-in', async (_n, repository) => {
+          table = [row({ webhookScanForks: true, private: true })];
+          await expectIgnoredFork(forkOf(repository));
+        });
+
+        it('keeps an explicit opt-out on a public repository when the instance default is on', async () => {
+          process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+          table = [row({ webhookScanForks: false })];
+          await expectIgnoredFork(forkOf({ private: false }));
+        });
+
+        it('lets the instance default decide on a public repository, not the ignored opt-in', async () => {
+          table = [row({ webhookScanForks: true })];
+          process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+          expect((await POST(signed(forkOf({ private: false })))).status).toBe(202);
+        });
       });
 
       it('still answers 401, not the fork answer, to an unverified delivery for an opted-in row', async () => {
