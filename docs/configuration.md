@@ -79,6 +79,13 @@ not run a bare `prisma db push` against a database that may still hold
 duplicates. The development container (`docker/entrypoint.dev.sh`) calls
 `npm run db:push` too.
 
+The key stays in place when a deploy is rolled back to an earlier release (the
+relay rolls back after `post_update`, so the SQL has already committed).
+Releases before the key do not collapse repeated Dependabot alerts, so their CVE
+scans of repositories with repeated alerts fail with `P2002` until the next
+forward deploy. For an intentional downgrade, run
+`DROP INDEX "Advisory_scanId_ghsaId_packageName_key";` first.
+
 ## CI Health (GitHub Actions sync)
 
 The **CI Health** tab in the dashboard surfaces GitHub Actions analytics (fail rates, build times, flaky jobs). depsight ingests the data itself: it reads workflow runs and jobs from the GitHub API with the repository owner's stored GitHub token (`lib/ci/ingest.ts`) and stores them in its own database. No separate service is involved and nothing extra needs to be deployed.

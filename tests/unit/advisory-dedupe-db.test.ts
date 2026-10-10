@@ -58,6 +58,19 @@ describe('deploy wiring', () => {
     expect(relay).toMatch(/db execute [^"]*&& npx prisma@\S+ db push/);
   });
 
+  it('no other post_update item pushes the schema around the Advisory SQL', () => {
+    // The replay below parses only the sh -c item, so any further item would
+    // run unseen. Pin the hook to that one item, and pin that the whole file
+    // pushes the schema exactly once, after the SQL step.
+    const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
+    const hook = relay.match(/^post_update:\s*\n((?:\s+-.*\n?)+)/m) as RegExpMatchArray;
+    const items = hook[1].split('\n').filter((line) => /^\s+-\s/.test(line));
+    expect(items).toHaveLength(1);
+    expect(relay.match(/db push/g)).toHaveLength(1);
+    expect(relay.indexOf(`db execute --file ${SQL_FILE}`)).toBeGreaterThan(-1);
+    expect(relay.indexOf(`db execute --file ${SQL_FILE}`)).toBeLessThan(relay.indexOf('db push'));
+  });
+
   it('npm run db:push runs the Advisory SQL before prisma db push', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
       scripts: Record<string, string>;
