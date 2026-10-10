@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { scanPRAndComment } from '@/lib/pr/pr-scanner';
+import { scanForksDefault } from '@/lib/pr/scan-forks-default';
 import {
   MAX_BODY_BYTES,
   hasWellFormedSignature,
@@ -63,7 +64,7 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
  */
 function scansForks(row: { webhookScanForks: boolean | null }): boolean {
   if (row.webhookScanForks !== null) return row.webhookScanForks;
-  return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
+  return scanForksDefault();
 }
 
 /** The operator switched the endpoint off (GITHUB_WEBHOOK_DISABLED=true). */
