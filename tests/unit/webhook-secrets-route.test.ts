@@ -31,6 +31,7 @@ interface Row {
   webhookSecretEnc: string | null;
   webhookSecretRotatedAt: Date | null;
   webhookScanForks?: boolean | null;
+  private?: boolean;
 }
 
 let table: Row[] = [];
@@ -96,6 +97,14 @@ describe('webhook secret routes', () => {
       expect(text).not.toContain('row-a2');
       expect(text).not.toContain('sealed-a-value');
       expect(JSON.parse(text).repos[0]).toMatchObject({ id: 'row-a', configured: true });
+    });
+
+    it('reports the stored visibility of each row, so the page can show that the opt-in is ignored', async () => {
+      table[0].private = true;
+      table[0].webhookSecretEnc = 'sealed-a';
+      const body = (await (await GET()).json()) as { repos: { id: string; private: boolean }[] };
+      expect(findManyMock.mock.calls[0][0].select.private).toBe(true);
+      expect(body.repos.find((r) => r.id === 'row-a')?.private).toBe(true);
     });
 
     it("lists each row's own fork setting and the instance default", async () => {
