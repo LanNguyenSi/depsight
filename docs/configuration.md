@@ -7,7 +7,7 @@
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | yes | `postgresql://depsight:password@localhost:5432/depsight` | PostgreSQL connection string |
-| `NEXTAUTH_SECRET` | yes | (none) | NextAuth session signing secret. Generate with `openssl rand -base64 32`. While neither this nor `NEXTAUTH_SECRET` is set, the settings page disables Generate and Rotate with the reason (the API would answer `503`); Remove stays available |
+| `NEXTAUTH_SECRET` | yes | (none) | NextAuth session signing secret. Generate with `openssl rand -base64 32`. While neither this nor `WEBHOOK_SECRET_KEY` is set, the settings page disables Generate and Rotate with the reason (the API would answer `503`); Remove stays available |
 | `NEXTAUTH_URL` | yes | `http://localhost:3000` | Public base URL of the app |
 | `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
