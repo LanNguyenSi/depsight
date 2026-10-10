@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract and a null-only stored unknown age
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner uses a -1 unknown-age sentinel in memory and lib/deps/scanner.ts converts it to null before the only Dependency write, so a stored unknown age is always null, which the schema comment and the DEPENDENCY_MAX_AGE check both state.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-09-29T10:38:03Z
+timestamp: 2026-10-10T05:05:00Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
@@ -25,7 +25,7 @@ sources:
 
 Every scanner, the five dedicated files and the inline npm branch alike, uses `ageInDays: -1` to mean "publish date unknown or unresolved": `lib/deps/go.ts:83`, `lib/deps/java.ts:58` and `lib/deps/java.ts:86`, `lib/deps/php.ts:63`, `lib/deps/python.ts:50`, `lib/deps/rust.ts:52`, and the inline npm branch's own default (`lib/deps/age-checker.ts:186`) and computed case (`lib/deps/age-checker.ts:153-155`, `installedPublishedAt ? Math.floor(...) : -1`). But `lib/deps/scanner.ts:50` rewrites that sentinel before the `Dependency.createMany` write: `ageInDays: d.ageInDays >= 0 ? d.ageInDays : null`. Every persisted `Dependency` row therefore has `ageInDays` as either a real day count or `null`, never `-1`.
 
-`prisma/schema.prisma:142`'s field comment reads `ageInDays Int? // null = unknown (the scanner maps its -1 sentinel to null before writing)`, so it states what the column holds while naming the in-memory `-1` convention that exists only above the write path. A query for `ageInDays = -1` finds nothing because the "unknown" case is always stored as `null`. `lib/deps/scanner.ts:43` (`Dependency.createMany`) is the only write path for `Dependency` rows in the codebase (an `rg` for `dependency.create`, `upsert` and `update` finds no other), and the readers (`app/api/deps/route.ts:122`, `lib/export/repo-bundle.ts:259`, `lib/sbom/cyclonedx.ts:173`, the dashboard components) all treat `null` as unknown.
+`prisma/schema.prisma:179`'s field comment reads `ageInDays Int? // null = unknown (the scanner maps its -1 sentinel to null before writing)`, so it states what the column holds while naming the in-memory `-1` convention that exists only above the write path. A query for `ageInDays = -1` finds nothing because the "unknown" case is always stored as `null`. `lib/deps/scanner.ts:43` (`Dependency.createMany`) is the only write path for `Dependency` rows in the codebase (an `rg` for `dependency.create`, `upsert` and `update` finds no other), and the readers (`app/api/deps/route.ts:122`, `lib/export/repo-bundle.ts:259`, `lib/sbom/cyclonedx.ts:173`, the dashboard components) all treat `null` as unknown.
 
 ## The age check tests for null only
 
