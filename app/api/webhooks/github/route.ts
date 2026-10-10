@@ -13,6 +13,7 @@ import { getWebhookSecretKey, openWebhookSecret } from '@/lib/pr/webhook-secret'
 import {
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
+  prScanWebhookUserRateLimiter,
   rateLimitedResponse,
 } from '@/lib/rate-limit';
 
@@ -29,6 +30,24 @@ interface PullRequestPayload {
   action?: unknown;
   number?: unknown;
   repository?: { name?: unknown; owner?: { login?: unknown } };
+  pull_request?: { head?: { repo?: { full_name?: unknown } | null } | null } | null;
+}
+
+/**
+ * True when the pull request comes from a fork. A missing or deleted head
+ * repository (`head.repo` is null once a fork is deleted) counts as a fork, and
+ * so does any head the payload does not describe, so the opt-out fails closed.
+ * Repository names are case-insensitive on GitHub, hence the lowercase compare.
+ */
+function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: string): boolean {
+  const headFullName = payload.pull_request?.head?.repo?.full_name;
+  if (typeof headFullName !== 'string') return true;
+  return headFullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase();
+}
+
+/** Fork pull requests are scanned only when the operator opts in. */
+function scansForks(): boolean {
+  return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
 }
 
 /**
@@ -94,6 +113,10 @@ function claimedRepository(
  * discarded unless a secret verifies. Nothing else from the payload is used
  * before verification, and after it only the PR number and action (no URL from
  * the payload is ever fetched).
+ *
+ * Pull requests from forks are ignored (200) unless GITHUB_WEBHOOK_SCAN_FORKS
+ * is `true`, because on a public repository any outsider can open one and the
+ * comment publishes alert data.
  *
  * The scan runs in the background and the route answers 202 at once: GitHub
  * gives a delivery 10 seconds, a scan can take longer. depsight is a
@@ -175,6 +198,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid pull request number' }, { status: 400 });
   }
 
+  // Fork pull requests are ignored (200) unless the operator opted in. This
+  // sits after the signature check, so only a verified caller can ever see this
+  // answer and it tells an unverified one nothing, and before the replay guard
+  // and the rate limiters, so a fork delivery spends no scan budget.
+  if (!scansForks() && isForkPullRequest(payload, tracked.owner, tracked.name)) {
+    return ignored('fork pull request');
+  }
+
   // Replay guard. The delivery id header is not covered by the signature, so a
   // replayed body could carry a fresh id; the body digest is therefore a second
   // key. Both keys are scoped to the verified row: otherwise a user holding a
@@ -192,6 +223,10 @@ export async function POST(req: NextRequest) {
   // spend another user's budget for the same repository.
   const repoLimit = prScanWebhookRepoRateLimiter.check(tracked.id);
   if (!repoLimit.allowed) return rateLimitedResponse(repoLimit);
+  // One user's rows together cannot spend more than a few repositories' share
+  // of the endpoint-wide budget, so a single tenant cannot exhaust it.
+  const userLimit = prScanWebhookUserRateLimiter.check(tracked.userId);
+  if (!userLimit.allowed) return rateLimitedResponse(userLimit);
   const totalLimit = prScanWebhookTotalRateLimiter.check('all');
   if (!totalLimit.allowed) return rateLimitedResponse(totalLimit);
 

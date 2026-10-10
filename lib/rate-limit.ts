@@ -119,10 +119,19 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 // whole endpoint.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
 export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 600;
+// All of one user's tracked repositories together. Twice a single repository's
+// budget, so ordinary use is untouched, but one user can take at most a fifth
+// of the endpoint-wide budget however many repositories they track.
+export const PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR = 120;
 
 /** POST /api/webhooks/github, keyed by the verified Repo row id (one budget per tracking user). */
 export const prScanWebhookRepoRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/webhooks/github, keyed by the tracking user id (all of that user's rows). */
+export const prScanWebhookUserRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
 });
 /** POST /api/webhooks/github, one shared key for every repository. */

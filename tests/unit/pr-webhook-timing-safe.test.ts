@@ -27,6 +27,7 @@ const BODY = JSON.stringify({
   action: 'opened',
   number: 7,
   repository: { name: 'api', owner: { login: 'acme' } },
+  pull_request: { head: { repo: { full_name: 'acme/api' } } },
 });
 
 function sign(secret: string): string {

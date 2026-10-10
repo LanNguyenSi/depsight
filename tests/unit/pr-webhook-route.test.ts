@@ -19,7 +19,10 @@ import { MAX_BODY_BYTES, prWebhookDeliveries } from '@/lib/pr/webhook-security';
 import {
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
+  prScanWebhookUserRateLimiter,
   PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR,
+  PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR,
+  PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR,
 } from '@/lib/rate-limit';
 import { sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import { NextRequest } from 'next/server';
@@ -97,7 +100,10 @@ function payload(over: Record<string, unknown> = {}): Record<string, unknown> {
     number: 42,
     repository: { name: 'api', owner: { login: 'acme' } },
     // Present in real payloads and must never be fetched or trusted.
-    pull_request: { url: 'http://169.254.169.254/latest/meta-data' },
+    pull_request: {
+      url: 'http://169.254.169.254/latest/meta-data',
+      head: { repo: { full_name: 'acme/api' } },
+    },
     ...over,
   };
 }
@@ -142,12 +148,14 @@ describe('POST /api/webhooks/github', () => {
     prWebhookDeliveries.reset();
     prScanWebhookRepoRateLimiter.reset();
     prScanWebhookTotalRateLimiter.reset();
+    prScanWebhookUserRateLimiter.reset();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     delete process.env.NEXTAUTH_SECRET;
     delete process.env.WEBHOOK_SECRET_KEY;
+    delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
     vi.restoreAllMocks();
   });
 
@@ -540,6 +548,162 @@ describe('POST /api/webhooks/github', () => {
       await POST(signed(payload(), { secret: SECRET_B }));
       const args = repoFindManyMock.mock.calls[0][0];
       expect(args.take).toBeLessThanOrEqual(50);
+    });
+
+    it("caps one user's rows together, so one tenant cannot spend the endpoint-wide budget", async () => {
+      // One user tracks two repositories, each with its own 60 per hour; together they get 120.
+      table = [
+        row({ id: 'row-1', userId: 'user-a', name: 'one', secret: SECRET, user: { githubToken: 'tok-A' } }),
+        row({ id: 'row-2', userId: 'user-a', name: 'two', secret: SECRET, user: { githubToken: 'tok-A' } }),
+        row({ id: 'row-x', userId: 'user-b', name: 'other', secret: SECRET_B, user: { githubToken: 'tok-B' } }),
+      ];
+      const repoOf = (name: string, number: number) =>
+        payload({
+          number,
+          repository: { name, owner: { login: 'acme' } },
+          pull_request: { head: { repo: { full_name: `acme/${name}` } } },
+        });
+      for (let i = 0; i < PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR; i++) {
+        const name = i % 2 === 0 ? 'one' : 'two';
+        expect((await POST(signed(repoOf(name, i + 1), { secret: SECRET }))).status).toBe(202);
+      }
+      // Neither repository budget is spent (60 each) yet the user budget is.
+      const limited = await POST(signed(repoOf('one', 9999), { secret: SECRET }));
+      expect(limited.status).toBe(429);
+      expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThanOrEqual(1);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR);
+
+      // Another user still scans, and the capped user's 429 did not use up the whole-endpoint budget.
+      expect((await POST(signed(repoOf('other', 1), { secret: SECRET_B }))).status).toBe(202);
+      expect(prScanWebhookTotalRateLimiter.check('all').remaining).toBe(
+        PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR - (PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR + 1) - 1,
+      );
+    });
+  });
+
+  describe('fork pull requests', () => {
+    const withHead = (head: unknown) =>
+      payload({ pull_request: { url: 'http://x.invalid', head } });
+
+    /** A verified fork delivery is ignored and spends no replay-guard entry and no scan budget. */
+    async function expectIgnoredFork(body: Record<string, unknown>) {
+      const res = await POST(signed(body));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, ignored: 'fork pull request' });
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+      expect(prWebhookDeliveries.size()).toBe(0);
+      // Each check below spends one unit itself, so a full remainder minus one
+      // means the ignored delivery spent none.
+      expect(prScanWebhookRepoRateLimiter.check('repo-row-1').remaining).toBe(
+        PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR - 1,
+      );
+      expect(prScanWebhookUserRateLimiter.check('user-1').remaining).toBe(
+        PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR - 1,
+      );
+      expect(prScanWebhookTotalRateLimiter.check('all').remaining).toBe(
+        PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR - 1,
+      );
+    }
+
+    it('ignores a pull request from a fork by default', async () => {
+      await expectIgnoredFork(withHead({ repo: { full_name: 'mallory/api' } }));
+    });
+
+    it('ignores a pull request whose fork was deleted (head.repo is null)', async () => {
+      await expectIgnoredFork(withHead({ repo: null }));
+    });
+
+    it('ignores a payload that does not describe its head repository', async () => {
+      await expectIgnoredFork(payload({ pull_request: {} }));
+    });
+
+    it('scans a same-repository pull request that differs only in letter case', async () => {
+      const res = await POST(signed(withHead({ repo: { full_name: 'ACME/Api' } })));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('scans a same-repository pull request whose base owner and name are mixed case', async () => {
+      // GitHub reports the canonical case in both places; the tracked row stores it too.
+      table = [row({ owner: 'Acme', name: 'Api' })];
+      for (const headFullName of ['acme/api', 'Acme/Api']) {
+        scanPRAndCommentMock.mockClear();
+        const res = await POST(
+          signed(
+            payload({
+              repository: { name: 'Api', owner: { login: 'Acme' } },
+              pull_request: {
+                url: 'http://x.invalid',
+                head: { repo: { full_name: headFullName } },
+              },
+            }),
+          ),
+        );
+        expect(res.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+        expect(scanPRAndCommentMock).toHaveBeenLastCalledWith('tok-123', 'Acme', 'Api', 42, 'user-1');
+      }
+    });
+
+    it('scans fork pull requests when GITHUB_WEBHOOK_SCAN_FORKS is true', async () => {
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = ' TRUE ';
+      const res = await POST(signed(withHead({ repo: null })));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps ignoring forks for any value other than true', async () => {
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = '1';
+      await expectIgnoredFork(withHead({ repo: { full_name: 'mallory/api' } }));
+    });
+
+    it('still answers 401 for an unsigned fork delivery', async () => {
+      const res = await POST(
+        signed(withHead({ repo: { full_name: 'mallory/api' } }), { signature: null }),
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it('answers a fork delivery signed with the wrong secret 401, not the fork answer (no oracle)', async () => {
+      const res = await POST(
+        signed(withHead({ repo: { full_name: 'mallory/api' } }), { secret: 'wrong' }),
+      );
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'Invalid signature' });
+    });
+
+    it.each([
+      ['untracked', () => [row({ tracked: false })]],
+      ['without a secret', () => [row({ secret: null })]],
+      ['unknown', () => []],
+    ])('answers a fork delivery for a repository that is %s 401, like any other', async (_n, rows) => {
+      table = rows();
+      const res = await POST(signed(withHead({ repo: { full_name: 'mallory/api' } })));
+      expect(res.status).toBe(401);
+    });
+
+    it('does not remember an ignored fork delivery, so the same id can still scan afterwards', async () => {
+      const delivery = 'ffffffff-1111-2222-3333-000000000001';
+      const fork = await POST(
+        signed(withHead({ repo: { full_name: 'mallory/api' } }), { delivery }),
+      );
+      expect(fork.status).toBe(200);
+      const same = await POST(signed(payload(), { delivery }));
+      expect(same.status).toBe(202);
+    });
+
+    it("keeps one user's fork check on that user's row: B's secret over a fork body scans nothing for A", async () => {
+      table = [
+        row({ id: 'row-a', userId: 'user-a', secret: SECRET, user: { githubToken: 'tok-A' }, createdAt: 1 }),
+        row({ id: 'row-b', userId: 'user-b', secret: SECRET_B, user: { githubToken: 'tok-B' }, createdAt: 2 }),
+      ];
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+      const res = await POST(
+        signed(withHead({ repo: { full_name: 'mallory/api' } }), { secret: SECRET_B }),
+      );
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
     });
   });
 });
