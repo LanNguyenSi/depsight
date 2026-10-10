@@ -1,42 +1,99 @@
 // Deploy-path test for the Advisory unique key: a production database that
 // already holds duplicate advisory rows must survive the deploy's schema push.
 //
-// The database half needs a real Postgres (the migration is SQL plus
-// `prisma db push`, nothing a mock can stand in for), so it runs only when
+// Production deploys go through the relay: `.relay.yml` post_update runs
+// `prisma@5.22.0 db execute --file prisma/pre-push/advisory-unique-key.sql`
+// and then a bare `prisma@5.22.0 db push` (no --accept-data-loss). Prisma
+// refuses a bare push that adds a unique key, so the SQL creates the index
+// itself, under the name Prisma expects. The database half replays exactly the
+// commands the hook contains, starting from a copy of the schema as it was
+// before the key (tests/fixtures/schema-before-advisory-key.prisma).
+//
+// That half needs a real Postgres (the migration is SQL plus `prisma db push`,
+// nothing a mock can stand in for), so it runs only when
 // DEPSIGHT_TEST_DATABASE_URL points at a scratch server, for example
 // postgresql://depsight:depsight@127.0.0.1:5432/depsight. Each case works in
 // its own schema of that database and drops it afterwards. CI provides the
-// server in the `Advisory dedupe (Postgres)` job. The wiring half (the
-// db:push script runs the dedupe first) always runs.
+// server in the `Advisory dedupe (Postgres)` job. The wiring half (the hook
+// and the db:push script run the SQL first, the SQL matches what Prisma
+// generates) always runs.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 
 const ROOT = resolve(__dirname, '../..');
 const BASE_URL = process.env.DEPSIGHT_TEST_DATABASE_URL;
 const UNIQUE_LINE = '@@unique([scanId, ghsaId, packageName])';
+const INDEX_NAME = 'Advisory_scanId_ghsaId_packageName_key';
+const SQL_FILE = 'prisma/pre-push/advisory-unique-key.sql';
+const BASE_SCHEMA = 'tests/fixtures/schema-before-advisory-key.prisma';
 
-describe('db:push wiring', () => {
-  it('runs the advisory dedupe before prisma db push', () => {
+/** The prisma invocations of the relay's post_update command, in order. */
+function relayPrismaCommands(): string[][] {
+  const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
+  const hook = relay.match(/^post_update:\s*\n((?:\s+-.*\n?)+)/m);
+  expect(hook, '.relay.yml has a post_update list').not.toBeNull();
+  const inner = (hook as RegExpMatchArray)[1].match(/sh -c "([^"]*)"/);
+  expect(inner, 'post_update runs its steps through sh -c').not.toBeNull();
+  return (inner as RegExpMatchArray)[1]
+    .split('&&')
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith('npx prisma@'))
+    .map((part) => part.split(/\s+/).slice(1));
+}
+
+describe('deploy wiring', () => {
+  it('the relay post_update runs the Advisory SQL before a bare db push', () => {
+    const commands = relayPrismaCommands();
+    expect(commands.map((c) => c.slice(1, 3).join(' '))).toEqual(['db execute', 'db push']);
+    const [execute, push] = commands;
+    expect(execute).toContain(`--file`);
+    expect(execute[execute.indexOf('--file') + 1]).toBe(SQL_FILE);
+    expect(push).toContain('--skip-generate');
+    for (const c of commands) expect(c).not.toContain('--accept-data-loss');
+    // Both steps are chained with && so a failing SQL step stops the deploy.
+    const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
+    expect(relay).toMatch(/db execute [^"]*&& npx prisma@\S+ db push/);
+  });
+
+  it('npm run db:push runs the Advisory SQL before prisma db push', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
       scripts: Record<string, string>;
     };
-    expect(pkg.scripts['db:push']).toMatch(/^npm run db:dedupe && prisma db push/);
-    expect(pkg.scripts['db:dedupe']).toContain('prisma/pre-push/dedupe-advisories.sql');
+    expect(pkg.scripts['db:push']).toMatch(/^npm run db:pre-push && prisma db push/);
+    expect(pkg.scripts['db:pre-push']).toContain(SQL_FILE);
+    expect(pkg.scripts['db:push']).not.toContain('--accept-data-loss');
   });
 
-  it('the schema carries the unique key the dedupe exists for', () => {
+  it('the schema carries the unique key the SQL exists for', () => {
     const schema = readFileSync(join(ROOT, 'prisma/schema.prisma'), 'utf8');
     expect(schema).toContain(UNIQUE_LINE);
   });
+
+  it('the SQL creates the index exactly as Prisma generates it for the schema', () => {
+    const generated = execFileSync(
+      'npx',
+      ['prisma', 'migrate', 'diff', '--from-empty', '--to-schema-datamodel', 'prisma/schema.prisma', '--script'],
+      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const normalize = (text: string) => text.replace(/\s+/g, ' ').replace(/, /g, ',');
+    const expected = generated
+      .split('\n')
+      .find((line) => line.includes(`"${INDEX_NAME}"`));
+    expect(expected, 'Prisma emits the unique index for the Advisory key').toBeDefined();
+    const sql = normalize(readFileSync(join(ROOT, SQL_FILE), 'utf8'));
+    const statement = normalize(
+      (expected as string).replace('CREATE UNIQUE INDEX', 'CREATE UNIQUE INDEX IF NOT EXISTS').replace(/;$/, ''),
+    );
+    expect(sql).toContain(statement);
+  });
 });
 
-function run(args: string[], url: string): { ok: boolean; output: string } {
+function run(args: string[], url: string, bin = 'npx'): { ok: boolean; output: string } {
   try {
-    const output = execFileSync('npx', args, {
+    const output = execFileSync(bin, args, {
       cwd: ROOT,
       env: { ...process.env, DATABASE_URL: url },
       encoding: 'utf8',
@@ -49,10 +106,8 @@ function run(args: string[], url: string): { ok: boolean; output: string } {
   }
 }
 
-describe.skipIf(!BASE_URL)('advisory dedupe on a database with duplicates', () => {
+describe.skipIf(!BASE_URL)('Advisory key deploy against Postgres', () => {
   const schemas: string[] = [];
-  let workDir = '';
-  let legacySchemaPath = '';
 
   const urlFor = (schema: string) => {
     const u = new URL(BASE_URL as string);
@@ -60,26 +115,38 @@ describe.skipIf(!BASE_URL)('advisory dedupe on a database with duplicates', () =
     return u.toString();
   };
 
-  beforeAll(() => {
-    // The schema as it was before the unique key: today's schema minus that line.
-    const current = readFileSync(join(ROOT, 'prisma/schema.prisma'), 'utf8');
-    expect(current).toContain(UNIQUE_LINE);
-    workDir = mkdtempSync(join(tmpdir(), 'depsight-dedupe-'));
-    legacySchemaPath = join(workDir, 'legacy.prisma');
-    writeFileSync(legacySchemaPath, current.replace(UNIQUE_LINE, ''));
-  });
-
   afterAll(async () => {
     const admin = new PrismaClient({ datasourceUrl: BASE_URL });
     for (const s of schemas) await admin.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${s}" CASCADE`);
     await admin.$disconnect();
-    if (workDir) rmSync(workDir, { recursive: true, force: true });
+  });
+
+  beforeAll(() => {
+    expect(readFileSync(join(ROOT, BASE_SCHEMA), 'utf8')).not.toContain(UNIQUE_LINE);
   });
 
   function newSchema(name: string): string {
     const schema = `dedupe_${name}_${process.pid}_${Date.now()}`;
     schemas.push(schema);
     return schema;
+  }
+
+  /** Apply the schema the production database had before this release. */
+  function pushBaseSchema(url: string) {
+    // The older engine, as the relay's image uses; the fixture is the real base schema.
+    const out = run(['prisma@5.22.0', 'db', 'push', '--schema', BASE_SCHEMA, '--skip-generate'], url);
+    expect(out.ok, out.output).toBe(true);
+  }
+
+  /** The deploy hook: every prisma command of the relay's post_update, in order. */
+  function runHook(url: string): { ok: boolean; output: string } {
+    let output = '';
+    for (const args of relayPrismaCommands()) {
+      const result = run(args, url);
+      output += result.output;
+      if (!result.ok) return { ok: false, output };
+    }
+    return { ok: true, output };
   }
 
   async function seedLegacy(client: PrismaClient) {
@@ -115,30 +182,43 @@ describe.skipIf(!BASE_URL)('advisory dedupe on a database with duplicates', () =
     );
   }
 
-  it(
-    'push fails on duplicates, then dedupe + push succeeds and keeps the most complete row',
-    async () => {
-      const schema = newSchema('dups');
-      const url = urlFor(schema);
+  async function indexNames(client: PrismaClient): Promise<string[]> {
+    const rows = await client.$queryRawUnsafe<Array<{ indexname: string }>>(
+      `SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'Advisory' ORDER BY indexname`,
+    );
+    return rows.map((r) => r.indexname);
+  }
 
-      const legacy = run(['prisma', 'db', 'push', '--schema', legacySchemaPath, '--skip-generate'], url);
-      expect(legacy.ok, legacy.output).toBe(true);
+  async function tableExists(client: PrismaClient, table: string): Promise<boolean> {
+    const rows = await client.$queryRawUnsafe<Array<{ found: string | null }>>(
+      `SELECT to_regclass('"${table}"')::text AS found`,
+    );
+    return rows[0].found !== null;
+  }
+
+  it(
+    'the hook succeeds on a database with duplicates, keeps the most complete row and is repeatable',
+    async () => {
+      const url = urlFor(newSchema('dups'));
+      pushBaseSchema(url);
 
       const client = new PrismaClient({ datasourceUrl: url });
       try {
         await seedLegacy(client);
 
-        // Negative control: without the dedupe the schema push cannot add the key,
-        // even when the data-loss warning is accepted.
-        const blocked = run(['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], url);
-        expect(blocked.ok, 'push must fail while duplicates exist').toBe(false);
-        expect(blocked.output).toMatch(/Unique constraint failed|P2002/);
+        // Negative control: the bare push the relay used to run cannot take the
+        // new key, and applies nothing (the new table does not appear).
+        const bare = run(['prisma@5.22.0', 'db', 'push', '--skip-generate', '--schema=prisma/schema.prisma'], url);
+        expect(bare.ok, 'a bare push must fail without the SQL step').toBe(false);
+        expect(await tableExists(client, 'AdvisoryState')).toBe(false);
 
-        const dedupe = run(['prisma', 'db', 'execute', '--file', 'prisma/pre-push/dedupe-advisories.sql', '--schema', 'prisma/schema.prisma'], url);
-        expect(dedupe.ok, dedupe.output).toBe(true);
-
-        const push = run(['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], url);
-        expect(push.ok, push.output).toBe(true);
+        const hook = runHook(url);
+        expect(hook.ok, hook.output).toBe(true);
+        expect(await tableExists(client, 'AdvisoryState')).toBe(true);
+        expect(await indexNames(client)).toContain(INDEX_NAME);
+        // The unique key leads with scanId, so the old scanId index is gone and
+        // dropping it did not need a data-loss flag.
+        expect(await indexNames(client)).not.toContain('Advisory_scanId_idx');
 
         const rows = await client.$queryRawUnsafe<Array<{ id: string }>>(
           `SELECT id FROM "Advisory" ORDER BY id`,
@@ -165,26 +245,73 @@ describe.skipIf(!BASE_URL)('advisory dedupe on a database with duplicates', () =
           ),
         ).rejects.toThrow();
 
-        // Re-running the deploy step is a no-op.
-        expect(run(['prisma', 'db', 'execute', '--file', 'prisma/pre-push/dedupe-advisories.sql', '--schema', 'prisma/schema.prisma'], url).ok).toBe(true);
+        // A second deploy (index already exists, schema in sync) is a no-op.
+        const indexesBefore = await indexNames(client);
+        const second = runHook(url);
+        expect(second.ok, second.output).toBe(true);
+        expect(await indexNames(client)).toEqual(indexesBefore);
         const again = await client.$queryRawUnsafe<Array<{ n: number }>>(`SELECT count(*)::int AS n FROM "Advisory"`);
         expect(again[0].n).toBe(7);
       } finally {
         await client.$disconnect();
       }
     },
-    180_000,
+    240_000,
   );
 
   it(
-    'dedupe is a no-op on a fresh database without tables',
-    () => {
-      const url = urlFor(newSchema('fresh'));
-      const dedupe = run(['prisma', 'db', 'execute', '--file', 'prisma/pre-push/dedupe-advisories.sql', '--schema', 'prisma/schema.prisma'], url);
-      expect(dedupe.ok, dedupe.output).toBe(true);
-      const push = run(['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], url);
-      expect(push.ok, push.output).toBe(true);
+    'the hook succeeds on a database with an empty Advisory table and is repeatable',
+    async () => {
+      const url = urlFor(newSchema('empty'));
+      pushBaseSchema(url);
+      const client = new PrismaClient({ datasourceUrl: url });
+      try {
+        const first = runHook(url);
+        expect(first.ok, first.output).toBe(true);
+        expect(await tableExists(client, 'AdvisoryState')).toBe(true);
+        expect(await indexNames(client)).toContain(INDEX_NAME);
+        const second = runHook(url);
+        expect(second.ok, second.output).toBe(true);
+      } finally {
+        await client.$disconnect();
+      }
     },
-    120_000,
+    240_000,
+  );
+
+  it(
+    'the hook succeeds on a fresh database without tables',
+    async () => {
+      const url = urlFor(newSchema('fresh'));
+      const client = new PrismaClient({ datasourceUrl: url });
+      try {
+        const hook = runHook(url);
+        expect(hook.ok, hook.output).toBe(true);
+        expect(await tableExists(client, 'AdvisoryState')).toBe(true);
+        expect(await indexNames(client)).toContain(INDEX_NAME);
+      } finally {
+        await client.$disconnect();
+      }
+    },
+    240_000,
+  );
+
+  it(
+    'npm run db:push (repo prisma) succeeds on a database with duplicates without extra flags',
+    async () => {
+      const url = urlFor(newSchema('npm'));
+      pushBaseSchema(url);
+      const client = new PrismaClient({ datasourceUrl: url });
+      try {
+        await seedLegacy(client);
+        const push = run(['run', 'db:push', '--', '--skip-generate'], url, 'npm');
+        expect(push.ok, push.output).toBe(true);
+        const count = await client.$queryRawUnsafe<Array<{ n: number }>>(`SELECT count(*)::int AS n FROM "Advisory"`);
+        expect(count[0].n).toBe(7);
+      } finally {
+        await client.$disconnect();
+      }
+    },
+    240_000,
   );
 });

@@ -20,7 +20,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npm test
    ```
 
-4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, which a new unique key over existing rows needs).
+4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it).
 5. Open the PR with a clear summary, motivation, and test plan.
 
 ## Dev Setup

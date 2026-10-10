@@ -136,6 +136,13 @@ describe('mergeCveAdvisories()', () => {
     expect(mergeCveAdvisories([dep1, dep2], [osv])).toEqual([dep1]);
   });
 
+  it('collapses the same advisory and package across two ecosystems to the first (the Advisory key has no ecosystem)', () => {
+    const npm = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'shared', ecosystem: 'npm' });
+    const pip = makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc', packageName: 'shared', ecosystem: 'pip' });
+    expect(mergeCveAdvisories([npm, pip], [])).toEqual([npm]);
+    expect(mergeCveAdvisories([pip, npm], [])).toEqual([pip]);
+  });
+
   it('never yields two rows with the same (ghsaId, packageName), the key the Advisory table enforces', () => {
     const rows = [
       makeAdvisory({ ghsaId: 'GHSA-1', packageName: 'a' }),

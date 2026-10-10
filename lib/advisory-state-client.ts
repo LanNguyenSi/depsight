@@ -44,3 +44,21 @@ export async function saveAdvisoryState(
   const data = (await res.json()) as { state: AdvisoryStateInfo };
   return data.state;
 }
+
+/**
+ * The state to show for one finding: a change the server accepted in this
+ * session (an override, where null means "reopened") wins over the state the
+ * scan response carried.
+ */
+export function resolveAdvisoryState(
+  advisory: AdvisoryIdentity & { state?: AdvisoryStateInfo | null },
+  overrides: Record<string, AdvisoryStateInfo | null>,
+): AdvisoryStateInfo | null {
+  const key = advisoryStateKey(advisory);
+  return key in overrides ? overrides[key] : (advisory.state ?? null);
+}
+
+/** Whether the "hide ignored" toggle removes this finding from the list. */
+export function isHiddenAsIgnored(state: AdvisoryStateInfo | null, hideIgnored: boolean): boolean {
+  return hideIgnored && state?.status === 'IGNORED';
+}

@@ -4,6 +4,8 @@ import { useState, useMemo } from 'react';
 import { useLocale, interpolate } from '@/lib/i18n';
 import {
   advisoryStateKey,
+  isHiddenAsIgnored,
+  resolveAdvisoryState,
   saveAdvisoryState,
   type AdvisoryStateInfo,
   type AdvisoryStatusValue,
@@ -61,10 +63,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [stateError, setStateError] = useState(false);
 
-  const stateOf = (a: Advisory): AdvisoryStateInfo | null => {
-    const key = advisoryStateKey(a);
-    return key in stateOverrides ? stateOverrides[key] : (a.state ?? null);
-  };
+  const stateOf = (a: Advisory): AdvisoryStateInfo | null => resolveAdvisoryState(a, stateOverrides);
 
   const changeState = async (a: Advisory, status: AdvisoryStatusValue | null) => {
     if (!repoId) return;
@@ -84,9 +83,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return advisories.filter((a) => {
-      const key = advisoryStateKey(a);
-      const state = key in stateOverrides ? stateOverrides[key] : (a.state ?? null);
-      if (hideIgnored && state?.status === 'IGNORED') return false;
+      if (isHiddenAsIgnored(resolveAdvisoryState(a, stateOverrides), hideIgnored)) return false;
       // UNKNOWN severities always pass the severity filter (no chip for them)
       const matchesSeverity = a.severity === 'UNKNOWN' || activeSeverities.has(a.severity);
       const matchesSearch =

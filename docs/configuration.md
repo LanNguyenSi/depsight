@@ -43,8 +43,8 @@ These run inside the Docker container automatically on `make dev`. For manual us
 
 ```bash
 npm run db:generate    # Generate Prisma client
-npm run db:dedupe      # Remove duplicate Advisory rows (idempotent, see below)
-npm run db:push        # db:dedupe, then prisma db push
+npm run db:pre-push    # Dedupe Advisory rows and create their unique index (idempotent, see below)
+npm run db:push        # db:pre-push, then prisma db push
 npm run db:studio      # Database GUI
 ```
 
@@ -53,30 +53,31 @@ npm run db:studio      # Database GUI
 `Advisory` carries a unique key over `(scanId, ghsaId, packageName)`. A database
 that already holds duplicate rows (a monorepo scan stored the same advisory and
 package once per manifest) cannot take that key: `prisma db push` fails with
-`P2002`. The schema is applied with `db push` and there is no migrations
-directory, and the production image does not run a push at start, so the step
-is part of the deploy and is wired through the `db:push` script, not through
-the container:
+`P2002`, and Prisma also refuses any push that adds a unique key without
+`--accept-data-loss`, duplicates or not. The schema is applied with `db push`
+and there is no migrations directory, so the step that makes the push possible
+is part of the deploy itself and needs no operator action and no flag:
 
-```bash
-# from a checkout of the deployed commit, with DATABASE_URL of the target database
-npm run db:push -- --accept-data-loss   # once, for this release
-```
+- The production deploy (`.relay.yml` `post_update`) runs
+  `prisma db execute --file prisma/pre-push/advisory-unique-key.sql` and then the
+  unchanged `prisma db push --skip-generate`. If the SQL fails the deploy stops
+  before the push.
+- `npm run db:push` (development, or a manual push) runs the same SQL first via
+  `npm run db:pre-push`.
 
-`npm run db:push` runs `prisma/pre-push/dedupe-advisories.sql` first, then
-`prisma db push`. Do not run a bare `prisma db push` against a database that
-may still hold duplicates. The SQL keeps the most complete row of each
-`(scanId, ghsaId, packageName)` group (a fixed version first, then an affected
-range, then a published date, ties by smallest id), recomputes the CVE counts
-and risk score of every scan that lost rows, does nothing on a fresh database
-and is safe to repeat. `--accept-data-loss` is needed once because Prisma warns
-for every new unique key, whether or not the table has duplicates; after the
-dedupe this release's push carries no other data-loss warning and drops
-nothing (without the dedupe the push still fails). Once
-the key exists, the warning does not return and a plain `npm run db:push`
-suffices. The development container (`docker/entrypoint.dev.sh`) calls
-`npm run db:push` too; an existing development volume stops at the warning with
-the command to run, or can be reset with `make dev-clean`.
+The SQL removes the duplicates and then creates the unique index itself, under
+the name and columns Prisma generates for the schema line
+(`Advisory_scanId_ghsaId_packageName_key`), so the push that follows finds that
+index present and has nothing to warn about. It keeps the most complete row of
+each `(scanId, ghsaId, packageName)` group (a fixed version first, then an
+affected range, then a published date, ties by smallest id), recomputes the CVE
+counts and risk score of every scan that lost rows, does nothing on a fresh
+database (the push creates the table and the key) and is safe to repeat. The
+push of this release also drops the old single-column `scanId` index, which the
+unique key makes redundant; dropping an index carries no data-loss warning. Do
+not run a bare `prisma db push` against a database that may still hold
+duplicates. The development container (`docker/entrypoint.dev.sh`) calls
+`npm run db:push` too.
 
 ## CI Health (GitHub Actions sync)
 

@@ -1,12 +1,18 @@
 -- Run BEFORE `prisma db push` whenever the schema carries
--- @@unique([scanId, ghsaId, packageName]) on "Advisory": db push cannot add a
--- unique index over rows that already violate it. `npm run db:push` runs this
--- file first (via `prisma db execute`), so use that script, not a bare
--- `prisma db push`.
+-- @@unique([scanId, ghsaId, packageName]) on "Advisory". `db push` refuses to
+-- add a unique key without --accept-data-loss (Prisma warns for every new
+-- unique key, duplicates or not) and cannot add one over rows that already
+-- violate it. This file removes the duplicates and creates the index itself,
+-- under the exact name and columns Prisma generates for the schema line, so
+-- the push that follows finds the schema already in sync and has nothing to
+-- warn about. The deploy hook (.relay.yml post_update) and `npm run db:push`
+-- both run it first, via `prisma db execute`.
 --
 -- Safe to run any number of times and on any database state:
---   * no "Advisory" table yet (fresh database): nothing happens;
---   * no duplicates: nothing is deleted and no Scan row is touched.
+--   * no "Advisory" table yet (fresh database): nothing happens, the push
+--     creates the table and the key;
+--   * no duplicates: nothing is deleted and no Scan row is touched;
+--   * the index already exists: nothing happens.
 --
 -- For each (scanId, ghsaId, packageName) group one row survives: the most
 -- complete one (a fixedVersion, then a vulnerableRange, then a publishedAt),
@@ -61,5 +67,8 @@ BEGIN
     GROUP BY d."scanId"
   ) c
   WHERE s.id = c."scanId";
+
+  CREATE UNIQUE INDEX IF NOT EXISTS "Advisory_scanId_ghsaId_packageName_key"
+    ON "Advisory"("scanId", "ghsaId", "packageName");
 END
 $$;

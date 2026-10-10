@@ -22,7 +22,7 @@ docker compose -f docker-compose.traefik.yml build --no-cache app
 docker compose -f docker-compose.traefik.yml up -d
 ```
 
-The container does not apply schema changes. When a release changes `prisma/schema.prisma`, run `npm run db:push` against the production database from a checkout of the deployed commit (not a bare `prisma db push`: the script first removes duplicate Advisory rows that would block the new unique key). The release that introduced that key needs `npm run db:push -- --accept-data-loss` once, see [Configuration](configuration.md#deploying-the-advisory-unique-key).
+The container does not apply schema changes; the deploy hook in `.relay.yml` (`post_update`) does, by running `prisma/pre-push/advisory-unique-key.sql` and then `prisma db push`. For a manual push use `npm run db:push`, not a bare `prisma db push`: the script runs the same SQL first, which removes duplicate Advisory rows and creates the unique key the push would otherwise refuse. No flag or operator step is needed, see [Configuration](configuration.md#deploying-the-advisory-unique-key).
 
 ## Code Review Checklist
 
