@@ -15,7 +15,10 @@ import {
   unreadableSecretWarning,
   IGNORED_INSTANCE_SECRET_WARNING,
 } from '@/lib/pr/webhook-secret';
+import { clientIpFromForwardedFor, trustedProxyHops } from '@/lib/client-ip';
 import {
+  prScanWebhookPreAuthIpRateLimiter,
+  prScanWebhookPreAuthTotalRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
@@ -53,6 +56,33 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
 /** Fork pull requests are scanned only when the operator opts in. */
 function scansForks(): boolean {
   return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
+}
+
+/** The operator switched the endpoint off (GITHUB_WEBHOOK_DISABLED=true). */
+function webhookDisabled(): boolean {
+  return process.env.GITHUB_WEBHOOK_DISABLED?.trim().toLowerCase() === 'true';
+}
+
+/** Limiter key for a caller whose address cannot be established from a trusted hop. */
+const UNKNOWN_CLIENT = 'unknown';
+
+/**
+ * Limits applied before anything of the request is read: per trusted client
+ * address, then one endpoint-wide ceiling. Returns the 429 to send, or null.
+ * The address comes only from the hop the trusted proxy appended to
+ * X-Forwarded-For (see lib/client-ip.ts); a caller that is not behind the
+ * proxy can write that value itself, and what still bounds it is the shared
+ * ceiling and the capped size of the per-address table.
+ */
+function preAuthRateLimited(req: NextRequest): Response | null {
+  const ip =
+    clientIpFromForwardedFor(req.headers.get('x-forwarded-for'), trustedProxyHops()) ??
+    UNKNOWN_CLIENT;
+  const ipLimit = prScanWebhookPreAuthIpRateLimiter.check(ip);
+  if (!ipLimit.allowed) return rateLimitedResponse(ipLimit);
+  const totalLimit = prScanWebhookPreAuthTotalRateLimiter.check('all');
+  if (!totalLimit.allowed) return rateLimitedResponse(totalLimit);
+  return null;
 }
 
 /**
@@ -137,6 +167,11 @@ function claimedRepository(
  * secret of user B never triggers a scan, or a comment under the token, of
  * user A, even for a repository both track. There is no instance-wide secret.
  *
+ * Before the body is read, a per-address limit (the client address is the hop
+ * the trusted proxy appended to X-Forwarded-For) and an endpoint-wide ceiling
+ * bound what an unauthenticated caller can make the server parse and hash.
+ * GITHUB_WEBHOOK_DISABLED=true switches the endpoint off (404, body unread).
+ *
  * The payload is parsed before the signature is checked, but only to read the
  * owner and repository name for the candidate lookup; the lookup result is
  * discarded unless a secret verifies. Nothing else from the payload is used
@@ -154,11 +189,21 @@ function claimedRepository(
  * verified the delivery.
  */
 export async function POST(req: NextRequest) {
+  // The operator opt-out answers before anything else, body unread.
+  if (webhookDisabled()) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
   warnIgnoredInstanceSecretOnce();
   if (!getWebhookSecretKey()) {
     // Fail closed: without a sealing key no stored secret can be opened.
     return NextResponse.json({ error: 'Webhook disabled' }, { status: 503 });
   }
+
+  // Cheap rejection first: over the per-address or endpoint-wide pre-verification
+  // limit the request is answered 429 without its body being read, parsed or
+  // hashed. Every later step (body read, JSON parse, lookup, HMACs) costs more.
+  const tooMany = preAuthRateLimited(req);
+  if (tooMany) return tooMany;
 
   const rawBody = await readBodyCapped(req, MAX_BODY_BYTES);
   if (!rawBody) {

@@ -13,6 +13,8 @@
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
 | `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron). A whole number from 1 to 35791 (the largest delay a Node timer holds); unset or blank uses 60. Any other value (0, negative, non-numeric, fractional, larger than 35791) stops the server at startup with an error instead of being clamped |
 | `WEBHOOK_SECRET_KEY` | optional | (none) | Key material that seals the per-repository PR-scan webhook secrets at rest (AES-256-GCM). Unset or blank falls back to `NEXTAUTH_SECRET`. Set it before the first secret is created and keep it: changing it (or `NEXTAUTH_SECRET`, when this is unset) makes every stored webhook secret unreadable until it is rotated. Generate with `openssl rand -base64 32` |
+| `GITHUB_WEBHOOK_DISABLED` | optional | `false` | Set to `true` to switch the PR scan webhook off: `POST /api/webhooks/github` answers 404 without reading the request, whatever key material and secrets exist |
+| `WEBHOOK_TRUSTED_PROXY_HOPS` | optional | `1` | Number of trusted reverse proxies in front of the app, used to read the client address from `X-Forwarded-For` for the webhook's pre-verification rate limit (60 requests a minute per address, 600 for the endpoint). `1` suits the traefik deployment; `0` ignores the header (every caller shares one bucket); a value that is not a whole number from 0 to 8 falls back to `1` with a warning |
 | `GITHUB_WEBHOOK_SCAN_FORKS` | optional | `false` | Set to `true` to let the PR scan webhook scan pull requests from forks. By default such deliveries are answered 200 and ignored |
 
 ## GitHub OAuth (optional)
@@ -29,7 +31,7 @@ make dev
 
 depsight can scan a pull request automatically and post (or update) its CVE comment, instead of only on the dashboard's PR scan button. It uses the same scan as `POST /api/pr-scan`.
 
-Every tracked repository has its own webhook secret, minted by the user who tracks it. There is no instance-wide secret and no environment variable that enables the endpoint: a repository without a secret simply cannot be scanned through it.
+Every tracked repository has its own webhook secret, minted by the user who tracks it. There is no instance-wide secret and no environment variable that enables the endpoint: a repository without a secret simply cannot be scanned through it. To switch the endpoint off altogether, set `GITHUB_WEBHOOK_DISABLED=true`. Requests are rate limited before the body is read (per client address and for the endpoint as a whole); the address is read from `X-Forwarded-For` according to `WEBHOOK_TRUSTED_PROXY_HOPS`, see [API reference](api.md#github-pull-request-webhook).
 
 1. In depsight open **Settings**, section **PR scan webhook**, and press **Generate secret** next to the repository (it must be tracked). The secret is shown once; copy it now. depsight keeps only a sealed copy and cannot show it again.
 2. In the GitHub **repository** go to Settings, Webhooks, Add webhook:

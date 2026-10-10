@@ -79,3 +79,39 @@ describe('rateLimitedResponse', () => {
     expect(await res.json()).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: 42 });
   });
 });
+
+describe('createRateLimiter maxKeys', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('counts keys beyond the cap in one shared overflow bucket and keeps existing keys apart', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2 });
+
+    expect(limiter.check('a').allowed).toBe(true);
+    expect(limiter.check('b').allowed).toBe(true);
+    // Table full: c and d are not given entries of their own.
+    expect(limiter.check('c').allowed).toBe(true);
+    expect(limiter.check('d').allowed).toBe(false);
+    // The keys that got in still count on their own.
+    expect(limiter.check('a').allowed).toBe(false);
+  });
+
+  it('frees lapsed windows when full so a new key gets its own bucket again', () => {
+    const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2 });
+    limiter.check('a');
+    limiter.check('b');
+    limiter.check('c');
+
+    vi.advanceTimersByTime(61_000);
+
+    expect(limiter.check('c').allowed).toBe(true);
+    expect(limiter.check('c').allowed).toBe(false);
+    expect(limiter.check('d').allowed).toBe(true);
+  });
+});

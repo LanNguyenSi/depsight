@@ -17,6 +17,8 @@ vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock } 
 import { POST } from '@/app/api/webhooks/github/route';
 import { MAX_BODY_BYTES, prWebhookDeliveries } from '@/lib/pr/webhook-security';
 import {
+  prScanWebhookPreAuthIpRateLimiter,
+  prScanWebhookPreAuthTotalRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
@@ -86,8 +88,11 @@ function fakeFindMany(args: {
 }
 
 let deliveryCounter = 0;
+let ipCounter = 0;
 
 interface Opts {
+  /** X-Forwarded-For value; default is a fresh address per request, null sends no header. */
+  forwardedFor?: string | null;
   event?: string | null;
   delivery?: string | null;
   signature?: string | null;
@@ -110,6 +115,15 @@ function payload(over: Record<string, unknown> = {}): Record<string, unknown> {
 
 function makeRequest(rawBody: string, opts: Opts = {}): NextRequest {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
+  // Each request comes from its own address, so the pre-verification per-address
+  // limit (covered in pr-webhook-preauth.test.ts) does not interfere with the
+  // tests that send one request after another.
+  ipCounter += 1;
+  const forwardedFor =
+    opts.forwardedFor === undefined
+      ? `10.${(ipCounter >> 16) & 255}.${(ipCounter >> 8) & 255}.${ipCounter & 255}`
+      : opts.forwardedFor;
+  if (forwardedFor !== null) headers['x-forwarded-for'] = forwardedFor;
   const event = opts.event === undefined ? 'pull_request' : opts.event;
   if (event !== null) headers['x-github-event'] = event;
   const delivery =
@@ -149,6 +163,8 @@ describe('POST /api/webhooks/github', () => {
     prScanWebhookRepoRateLimiter.reset();
     prScanWebhookTotalRateLimiter.reset();
     prScanWebhookUserRateLimiter.reset();
+    prScanWebhookPreAuthIpRateLimiter.reset();
+    prScanWebhookPreAuthTotalRateLimiter.reset();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
