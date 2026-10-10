@@ -112,19 +112,116 @@ export function pickLockedVersion(requirement: string, locked: string[]): string
   return semver.maxSatisfying(locked, range);
 }
 
+export interface CargoWorkspace {
+  members: string[];
+  exclude: string[];
+}
+
 /**
- * The Cargo.lock that governs a manifest: Cargo resolves a crate against the
- * lock of its workspace, which is the nearest lockfile found walking up from
- * the manifest's directory to the repo root. Returns null when no ancestor has
- * one. `lockPaths` holds the lock paths that exist in the repo.
+ * Read the `members` and `exclude` arrays of a Cargo.toml `[workspace]` table.
+ * Returns null when the file has no `[workspace]` table. Arrays may span lines
+ * and carry `#` comments; only quoted string entries are read.
+ *
+ * Only the exact header `[workspace]` is recognised (not `[ workspace ]`).
  *
  * Pure function, exported for testing.
  */
-export function nearestCargoLock(manifestPath: string, lockPaths: Set<string>): string | null {
+export function parseCargoWorkspace(content: string): CargoWorkspace | null {
+  let inWorkspace = false;
+  let found = false;
+  let key: 'members' | 'exclude' | null = null;
+  const ws: CargoWorkspace = { members: [], exclude: [] };
+
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.replace(/#.*$/, '').trim();
+    if (!key && line.startsWith('[')) {
+      inWorkspace = line === '[workspace]';
+      if (inWorkspace) found = true;
+      continue;
+    }
+    if (!inWorkspace) continue;
+    let rest = line;
+    if (!key) {
+      const start = /^(members|exclude)\s*=\s*\[(.*)$/.exec(line);
+      if (!start) continue;
+      key = start[1] as 'members' | 'exclude';
+      rest = start[2];
+    }
+    const closed = rest.includes(']');
+    const body = closed ? rest.slice(0, rest.indexOf(']')) : rest;
+    for (const m of body.matchAll(/"([^"]*)"|'([^']*)'/g)) ws[key].push(m[1] ?? m[2]);
+    if (closed) key = null;
+  }
+  return found ? ws : null;
+}
+
+function normalizeGlob(pattern: string): string {
+  return pattern.replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const escaped = normalizeGlob(pattern)
+    .split('/')
+    .map((seg) =>
+      seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]'),
+    )
+    .join('/');
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Whether `memberDir` (relative to the workspace root) is a workspace member,
+ * following Cargo: it matches an entry of `members`, and is not excluded. An
+ * `exclude` entry is a path prefix, not a glob (`crates` excludes everything
+ * under `crates/`), and a non-glob `members` entry that names the directory
+ * exactly wins over `exclude`. Supported glob subset in `members`: `*` and `?`
+ * inside one path segment (for example `crates/*`), plus exact paths; a
+ * leading `./` and a trailing `/` are ignored.
+ *
+ * Not modelled: a `[ workspace ]` header with inner spaces, `package.workspace`
+ * pointers, Cargo's implicit membership of path dependencies, `**` as a whole
+ * segment (it behaves like `*`), character classes, and a non-glob `members`
+ * entry naming a parent directory overriding `exclude` (Cargo allows that).
+ */
+export function isWorkspaceMember(ws: CargoWorkspace, memberDir: string): boolean {
+  if (!ws.members.some((p) => globToRegExp(p).test(memberDir))) return false;
+  if (ws.members.some((p) => !/[*?[]/.test(p) && normalizeGlob(p) === memberDir)) return true;
+  return !ws.exclude.some((e) => {
+    const ex = normalizeGlob(e);
+    return memberDir === ex || memberDir.startsWith(`${ex}/`);
+  });
+}
+
+/**
+ * The Cargo.lock that governs a manifest. Cargo resolves every member of a
+ * workspace against the lock next to the workspace root and ignores a
+ * Cargo.lock inside a member directory. So when an ancestor directory holds a
+ * `[workspace]` (from `workspaces`, keyed by root directory, '' for the repo
+ * root) that lists or globs the manifest's directory and does not exclude it,
+ * that root's lock is returned, or null when the root has none. Otherwise the
+ * nearest lockfile walking up from the manifest's directory to the repo root
+ * is used (a nested crate outside any workspace keeps its own lock). Returns
+ * null when no lock applies. `lockPaths` holds the lock paths that exist.
+ *
+ * Pure function, exported for testing.
+ */
+export function nearestCargoLock(
+  manifestPath: string,
+  lockPaths: Set<string>,
+  workspaces: Map<string, CargoWorkspace> = new Map(),
+): string | null {
   const parts = manifestPath.split('/').slice(0, -1);
+  const lockAt = (i: number) => (i === 0 ? 'Cargo.lock' : `${parts.slice(0, i).join('/')}/Cargo.lock`);
+
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const ws = workspaces.get(parts.slice(0, i).join('/'));
+    if (ws && isWorkspaceMember(ws, parts.slice(i).join('/'))) {
+      const lock = lockAt(i);
+      return lockPaths.has(lock) ? lock : null;
+    }
+  }
   for (let i = parts.length; i >= 0; i--) {
-    const candidate = i === 0 ? 'Cargo.lock' : `${parts.slice(0, i).join('/')}/Cargo.lock`;
-    if (lockPaths.has(candidate)) return candidate;
+    if (lockPaths.has(lockAt(i))) return lockAt(i);
   }
   return null;
 }
@@ -245,9 +342,11 @@ export function parseCargoWorkspaceDeps(content: string): CargoDep[] {
  * not chase a workspace root outside the repo.
  *
  * Cargo.lock only sharpens the version of a declared crate: each manifest is
- * resolved against its nearest Cargo.lock (its own directory first, then each
- * ancestor up to the repo root), never against an unrelated lock elsewhere in
- * the tree, and a declared crate's requirement is replaced by the locked
+ * resolved against the lock of its workspace root when an ancestor `[workspace]`
+ * lists it as a member (a stale Cargo.lock inside the member is ignored, as
+ * Cargo does), otherwise against its nearest Cargo.lock (its own directory
+ * first, then each ancestor up to the repo root), never against an unrelated
+ * lock elsewhere in the tree, and a declared crate's requirement is replaced by the locked
  * version in that lock that satisfies it (highest on several matches). Crates
  * present only in the lock (transitive dependencies), and workspace-local, git
  * and alternate-registry packages, are never added.
@@ -288,12 +387,17 @@ export async function collectRustDeps(
     lockedByLock.set(path, locked);
   }
   const lockPaths = new Set(lockedByLock.keys());
+  const workspaces = new Map<string, CargoWorkspace>();
+  for (const { path, content } of contents) {
+    const ws = parseCargoWorkspace(content);
+    if (ws) workspaces.set(path.split('/').slice(0, -1).join('/'), ws);
+  }
 
   // Pass 2: union member deps, resolving workspace-inherited versions, then
   // replacing each requirement by the version the lockfile resolved it to.
   const byName = new Map<string, CargoDep>();
   for (const { path, content } of contents) {
-    const lockPath = nearestCargoLock(path, lockPaths);
+    const lockPath = nearestCargoLock(path, lockPaths, workspaces);
     const locked = (lockPath && lockedByLock.get(lockPath)) || new Map<string, string[]>();
     for (const dep of parseCargoToml(content)) {
       if (byName.has(dep.name)) continue;
