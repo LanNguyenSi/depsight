@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   collectRustDeps,
   discoverCargoLockPaths,
+  nearestCargoLock,
   parseCargoLock,
   pickLockedVersion,
 } from '@/lib/manifests/rust';
@@ -143,6 +144,44 @@ describe('pickLockedVersion', () => {
   it('falls back to the highest locked version for an unparseable requirement', () => {
     expect(pickLockedVersion('not a range', ['1.0.0', '1.2.0'])).toBe('1.2.0');
   });
+
+  it('ignores a non-semver locked version when falling back', () => {
+    expect(pickLockedVersion('not a range', ['1.0.0', 'garbage'])).toBe('1.0.0');
+    expect(pickLockedVersion('not a range', ['garbage'])).toBeNull();
+  });
+
+  it('reads a partial version as caret, not as an exact or tilde match', () => {
+    expect(pickLockedVersion('1.2', ['1.9.0'])).toBe('1.9.0');
+    expect(pickLockedVersion('0.8', ['0.8.5', '0.9.0'])).toBe('0.8.5');
+    expect(pickLockedVersion('1.2.3', ['1.9.0'])).toBe('1.9.0');
+  });
+
+  it('passes wildcard requirements through without a caret', () => {
+    expect(pickLockedVersion('1.2.*', ['1.2.5', '1.5.0'])).toBe('1.2.5');
+    expect(pickLockedVersion('1.2.x', ['1.2.5', '1.5.0'])).toBe('1.2.5');
+  });
+
+  it('returns the highest locked version for an empty or star requirement', () => {
+    expect(pickLockedVersion('', ['1.0.0', '2.3.0', '2.1.0'])).toBe('2.3.0');
+    expect(pickLockedVersion('*', ['1.0.0', '2.3.0', '2.1.0'])).toBe('2.3.0');
+  });
+});
+
+describe('nearestCargoLock', () => {
+  const locks = new Set(['Cargo.lock', 'fuzz/Cargo.lock']);
+
+  it('prefers the lock in the manifest directory over an ancestor', () => {
+    expect(nearestCargoLock('fuzz/Cargo.toml', locks)).toBe('fuzz/Cargo.lock');
+  });
+
+  it('walks up to the root lock when the directory has none', () => {
+    expect(nearestCargoLock('crates/a/Cargo.toml', locks)).toBe('Cargo.lock');
+    expect(nearestCargoLock('Cargo.toml', locks)).toBe('Cargo.lock');
+  });
+
+  it('does not use a sibling directory lock', () => {
+    expect(nearestCargoLock('crates/a/Cargo.toml', new Set(['fuzz/Cargo.lock']))).toBeNull();
+  });
 });
 
 describe('collectRustDeps with Cargo.lock', () => {
@@ -186,6 +225,37 @@ describe('collectRustDeps with Cargo.lock', () => {
     expect(deps).toEqual([
       { name: 'tokio', version: '1.36.0' },
       { name: 'serde', version: '1.0.197' },
+    ]);
+  });
+
+  it('resolves each manifest against its nearest lock, not a pooled one', async () => {
+    const oct = octokitWith({
+      'Cargo.toml': `[dependencies]\nserde = "1.0"\n`,
+      'Cargo.lock': pkg('serde', '1.0.150'),
+      'fuzz/Cargo.toml': `[dependencies]\nserde = "1.0"\nlibfuzzer-sys = "0.4"\n`,
+      'fuzz/Cargo.lock': pkg('serde', '1.0.197') + '\n' + pkg('libfuzzer-sys', '0.4.7'),
+    });
+    // Root-first dedupe: serde comes from the root manifest and the root lock.
+    expect(await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'fuzz/Cargo.toml'])).toEqual([
+      { name: 'serde', version: '1.0.150' },
+      { name: 'libfuzzer-sys', version: '0.4.7' },
+    ]);
+    // The nested manifest alone resolves against its own lock.
+    expect(await collectRustDeps(oct, 'o', 'r', ['fuzz/Cargo.toml'])).toEqual([
+      { name: 'serde', version: '1.0.197' },
+      { name: 'libfuzzer-sys', version: '0.4.7' },
+    ]);
+  });
+
+  it('does not resolve a root crate against an unrelated nested lock', async () => {
+    const oct = octokitWith({
+      'Cargo.toml': `[dependencies]\nserde = "1.0"\n`,
+      'fuzz/Cargo.toml': `[dependencies]\nrand = "0.8"\n`,
+      'fuzz/Cargo.lock': pkg('serde', '1.0.197') + '\n' + pkg('rand', '0.8.5'),
+    });
+    expect(await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'fuzz/Cargo.toml'])).toEqual([
+      { name: 'serde', version: '1.0' },
+      { name: 'rand', version: '0.8.5' },
     ]);
   });
 
