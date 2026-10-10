@@ -13,6 +13,7 @@
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
 | `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron) |
 | `GITHUB_WEBHOOK_SECRET` | optional | (none) | Shared secret of the GitHub pull-request webhook. Unset or blank disables `POST /api/webhooks/github` (it answers 503 and scans nothing). Generate with `openssl rand -hex 32` |
+| `GITHUB_WEBHOOK_SCAN_FORKS` | optional | `false` | Set to `true` to let the PR scan webhook scan pull requests from forks. By default such deliveries are answered 200 and ignored |
 
 ## GitHub OAuth (optional)
 
@@ -36,7 +37,9 @@ depsight can scan a pull request automatically and post (or update) its CVE comm
    - **Events:** "Let me select individual events", then only **Pull requests**. GitHub also sends a `ping` event when the webhook is created; depsight answers it 200.
 3. The repository must be tracked in depsight. A delivery for any other repository is answered 200 and ignored.
 
-**Trust model.** `GITHUB_WEBHOOK_SECRET` is instance-wide. Whoever holds it can sign deliveries for any repository tracked by any depsight user, and depsight then scans the pull request and posts the comment with that tracking user's GitHub token. On a multi-user instance keep the secret operator-only and add the webhook only to repositories the operator controls; otherwise leave the variable unset (the endpoint stays disabled) or use it on a single-user instance only. On a public repository the comment is public, and fork pull request authors can trigger a scan.
+**Trust model.** `GITHUB_WEBHOOK_SECRET` is instance-wide. Whoever holds it can sign deliveries for any repository tracked by any depsight user, and depsight then scans the pull request and posts the comment with that tracking user's GitHub token. On a multi-user instance keep the secret operator-only and add the webhook only to repositories the operator controls; otherwise leave the variable unset (the endpoint stays disabled) or use it on a single-user instance only. On a public repository the comment is public; fork pull requests are skipped unless opted in (below).
+
+**Fork pull requests are skipped by default.** A delivery whose `pull_request.head.repo.full_name` differs from `repository.full_name` (compared case-insensitively; a deleted fork, where `head.repo` is null, counts as a fork) is answered 200 `ignored` after the signature check and before any database lookup or rate-limit budget. The default is to skip because on a public repository anyone can open a fork pull request, and the scan comment publishes Dependabot alert data (open alert count, risk score, new alerts) and spends the repository's scan budget. Set `GITHUB_WEBHOOK_SCAN_FORKS=true` only for repositories where fork contributors are trusted (for example a private repository).
 
 Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reopened` does not); every other event or action is answered 200 and ignored. The scan runs in the background after a `202` answer and authenticates with the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token, as the auto-scan cron does). See [API reference](api.md#github-pull-request-webhook) for the status codes, the replay protection and the limits.
 
