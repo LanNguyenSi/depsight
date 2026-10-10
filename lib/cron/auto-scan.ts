@@ -6,7 +6,31 @@ import { scanLicenses } from '@/lib/license/scanner';
 import { scanDependencies } from '@/lib/deps/scanner';
 import { syncAllUserRepos } from '@/lib/ci/sync';
 
-const INTERVAL_MS = (parseInt(process.env.SCAN_INTERVAL_MINUTES ?? '60', 10) || 60) * 60_000;
+const DEFAULT_INTERVAL_MINUTES = 60;
+// setInterval stores its delay in a signed 32-bit integer; a larger delay
+// silently falls back to 1 ms and would scan in a tight loop.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+export const MAX_SCAN_INTERVAL_MINUTES = Math.floor(MAX_TIMER_DELAY_MS / 60_000);
+
+/**
+ * Parse SCAN_INTERVAL_MINUTES. Unset or blank means the default. Anything else
+ * must be a positive whole number of minutes no larger than
+ * MAX_SCAN_INTERVAL_MINUTES; otherwise this throws so the misconfiguration
+ * fails at startup instead of producing a runaway timer.
+ */
+export function parseScanIntervalMinutes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_INTERVAL_MINUTES;
+  const text = raw.trim();
+  const minutes = /^\d+$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(minutes) || minutes < 1 || minutes > MAX_SCAN_INTERVAL_MINUTES) {
+    throw new Error(
+      `Invalid SCAN_INTERVAL_MINUTES=${JSON.stringify(raw)}: expected a whole number of minutes between 1 and ${MAX_SCAN_INTERVAL_MINUTES}`,
+    );
+  }
+  return minutes;
+}
+
+const INTERVAL_MS = parseScanIntervalMinutes(process.env.SCAN_INTERVAL_MINUTES) * 60_000;
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;

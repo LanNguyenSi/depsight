@@ -262,3 +262,53 @@ describe('auto-scan — failure handling: one repo must not abort the others', (
     expect(scanRepositoryMock).not.toHaveBeenCalled();
   });
 });
+
+describe('auto-scan — SCAN_INTERVAL_MINUTES parsing', () => {
+  const MAX = 35791; // floor((2^31 - 1) / 60000)
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('exposes the largest interval a 32-bit timer delay can hold', async () => {
+    const { MAX_SCAN_INTERVAL_MINUTES } = await loadFreshModule();
+    expect(MAX_SCAN_INTERVAL_MINUTES).toBe(MAX);
+    expect(MAX * 60_000).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect((MAX + 1) * 60_000).toBeGreaterThan(2 ** 31 - 1);
+  });
+
+  it('accepts unset and blank as the 60 minute default', async () => {
+    const { parseScanIntervalMinutes } = await loadFreshModule();
+    expect(parseScanIntervalMinutes(undefined)).toBe(60);
+    expect(parseScanIntervalMinutes('')).toBe(60);
+    expect(parseScanIntervalMinutes('   ')).toBe(60);
+  });
+
+  it('accepts 1 and the maximum, and trims whitespace', async () => {
+    const { parseScanIntervalMinutes } = await loadFreshModule();
+    expect(parseScanIntervalMinutes('1')).toBe(1);
+    expect(parseScanIntervalMinutes(' 15 ')).toBe(15);
+    expect(parseScanIntervalMinutes(String(MAX))).toBe(MAX);
+  });
+
+  it.each([String(MAX + 1), '99999999999', '0', '-5', 'abc', '1.5', '10min', '1e3', '0x10'])(
+    'rejects %s with an error naming the maximum',
+    async (raw) => {
+      const { parseScanIntervalMinutes } = await loadFreshModule();
+      expect(() => parseScanIntervalMinutes(raw)).toThrow(/SCAN_INTERVAL_MINUTES.*between 1 and 35791/);
+    },
+  );
+
+  it('fails startup when the environment value is out of range', async () => {
+    vi.stubEnv('SCAN_INTERVAL_MINUTES', String(MAX + 1));
+    await expect(loadFreshModule()).rejects.toThrow(/between 1 and 35791/);
+  });
+
+  it('schedules the interval at the maximum without overflowing', async () => {
+    vi.stubEnv('SCAN_INTERVAL_MINUTES', String(MAX));
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    const { startAutoScan } = await loadFreshModule();
+    startAutoScan();
+    expect(spy).toHaveBeenCalledWith(expect.any(Function), MAX * 60_000);
+  });
+});
