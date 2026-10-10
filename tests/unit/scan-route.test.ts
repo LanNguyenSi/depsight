@@ -7,10 +7,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { resolveRequestUserMock, scanRepositoryMock, scanFindFirst } = vi.hoisted(() => ({
+const { resolveRequestUserMock, scanRepositoryMock, scanFindFirst, stateFindMany } = vi.hoisted(() => ({
   resolveRequestUserMock: vi.fn(),
   scanRepositoryMock: vi.fn(),
   scanFindFirst: vi.fn(),
+  stateFindMany: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,9 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     scan: {
       findFirst: scanFindFirst,
+    },
+    advisoryState: {
+      findMany: stateFindMany,
     },
   },
 }));
@@ -79,6 +83,8 @@ describe('POST /api/scan — route status codes', () => {
     scanRateLimiter.reset();
     resolveRequestUserMock.mockReset();
     scanRepositoryMock.mockReset();
+    stateFindMany.mockReset();
+    stateFindMany.mockResolvedValue([]);
     resolveRequestUserMock.mockResolvedValue({
       id: 'me',
       githubLogin: 'octocat',
@@ -232,6 +238,8 @@ describe('GET /api/scan — route status codes', () => {
     resolveRequestUserMock.mockReset();
     scanRepositoryMock.mockReset();
     scanFindFirst.mockReset();
+    stateFindMany.mockReset();
+    stateFindMany.mockResolvedValue([]);
     resolveRequestUserMock.mockResolvedValue({
       id: 'me',
       githubLogin: 'octocat',
@@ -364,6 +372,74 @@ describe('GET /api/scan — route status codes', () => {
     // surface where each CVE came from.
     expect(body.scan.advisories[0].source).toBe('dependabot');
     expect(body.scan.advisories[1].source).toBe('osv');
+  });
+
+  it('attaches the stored triage state to the matching advisory and leaves the counts alone', async () => {
+    const setAt = new Date('2026-02-01T00:00:00Z');
+    const advisory = (id: string, ghsaId: string, packageName: string) => ({
+      id,
+      ghsaId,
+      cveId: null,
+      source: 'dependabot',
+      severity: 'CRITICAL',
+      summary: 's',
+      packageName,
+      ecosystem: 'npm',
+      vulnerableRange: null,
+      fixedVersion: null,
+      publishedAt: null,
+      url: null,
+    });
+    scanFindFirst.mockResolvedValue({
+      id: 'scan-1',
+      scannedAt: new Date('2026-01-01T00:00:00Z'),
+      status: 'COMPLETED',
+      degradedReason: null,
+      riskScore: 20,
+      cveCount: 2,
+      criticalCount: 2,
+      highCount: 0,
+      mediumCount: 0,
+      lowCount: 0,
+      advisories: [
+        advisory('a1', 'GHSA-1', 'lodash'),
+        advisory('a2', 'GHSA-1', 'minimist'),
+      ],
+    });
+    stateFindMany.mockResolvedValue([
+      {
+        ghsaId: 'GHSA-1',
+        packageName: 'lodash',
+        status: 'IGNORED',
+        note: 'dev only',
+        updatedAt: setAt,
+        setBy: { githubLogin: 'octocat' },
+      },
+    ]);
+
+    const res = await GET(new NextRequest('http://localhost/api/scan?repoId=repo-1'));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      scan: {
+        riskScore: number;
+        counts: { total: number; critical: number };
+        advisories: Array<{ id: string; state: null | { status: string; note: string; setBy: string; setAt: string } }>;
+      };
+    };
+    // Only the package the state was set for carries it: same advisory id, other package stays open.
+    expect(body.scan.advisories[0].state).toEqual({
+      status: 'IGNORED',
+      note: 'dev only',
+      setBy: 'octocat',
+      setAt: setAt.toISOString(),
+    });
+    expect(body.scan.advisories[1].state).toBeNull();
+    // An ignored finding still counts.
+    expect(body.scan.counts.total).toBe(2);
+    expect(body.scan.counts.critical).toBe(2);
+    expect(body.scan.riskScore).toBe(20);
+    expect(stateFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: { repoId: 'repo-1' } }));
   });
 });
 

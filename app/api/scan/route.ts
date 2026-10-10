@@ -88,6 +88,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ scan: null });
   }
 
+  // Triage state per finding (acknowledged / ignored), keyed by advisory id +
+  // package. Informational only: the counts and risk score below still include
+  // every advisory, ignored ones too.
+  const states = await prisma.advisoryState.findMany({
+    where: { repoId },
+    include: { setBy: { select: { githubLogin: true } } },
+  });
+  const stateByKey = new Map(
+    states.map((st) => [
+      `${st.ghsaId} ${st.packageName}`,
+      {
+        status: st.status,
+        note: st.note,
+        setBy: st.setBy.githubLogin,
+        setAt: st.updatedAt,
+      },
+    ]),
+  );
+
   return NextResponse.json({
     scan: {
       id: scan.id,
@@ -115,6 +134,7 @@ export async function GET(req: NextRequest) {
         fixedVersion: a.fixedVersion,
         publishedAt: a.publishedAt,
         url: a.url,
+        state: stateByKey.get(`${a.ghsaId} ${a.packageName}`) ?? null,
       })),
     },
   });

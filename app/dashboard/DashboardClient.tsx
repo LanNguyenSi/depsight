@@ -8,6 +8,7 @@ import { ConfirmModal } from '@/components/ConfirmModal';
 import { PRScanButton } from '@/components/PRScanButton';
 import { SeverityBreakdown } from '@/components/SeverityBreakdown';
 import { AdvisoryList } from '@/components/AdvisoryList';
+import type { AdvisoryStateInfo } from '@/lib/advisory-state-client';
 import { LicenseList } from '@/components/LicenseList';
 import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
@@ -61,6 +62,7 @@ interface ScanDetail {
     fixedVersion: string | null;
     publishedAt: string | null;
     url: string | null;
+    state: AdvisoryStateInfo | null;
   }[];
 }
 
@@ -1105,7 +1107,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       <>
                         <SeverityBreakdown counts={scanDetail.counts} riskScore={scanDetail.riskScore} />
                         <div className="mt-4">
-                          <AdvisoryList advisories={scanDetail.advisories} />
+                          <AdvisoryList
+                            key={selectedRepo?.id}
+                            repoId={selectedRepo?.id}
+                            advisories={scanDetail.advisories}
+                          />
                         </div>
                       </>
                     )}

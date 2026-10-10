@@ -43,9 +43,48 @@ These run inside the Docker container automatically on `make dev`. For manual us
 
 ```bash
 npm run db:generate    # Generate Prisma client
-npm run db:push        # Push schema changes (dev)
+npm run db:pre-push    # Dedupe Advisory rows and create their unique index (idempotent, see below)
+npm run db:push        # db:pre-push, then prisma db push
 npm run db:studio      # Database GUI
 ```
+
+### Deploying the Advisory unique key
+
+`Advisory` carries a unique key over `(scanId, ghsaId, packageName)`. A database
+that already holds duplicate rows (a monorepo scan stored the same advisory and
+package once per manifest) cannot take that key: `prisma db push` fails with
+`P2002`, and Prisma also refuses any push that adds a unique key without
+`--accept-data-loss`, duplicates or not. The schema is applied with `db push`
+and there is no migrations directory, so the step that makes the push possible
+is part of the deploy itself and needs no operator action and no flag:
+
+- The production deploy (`.relay.yml` `post_update`) runs
+  `prisma db execute --file prisma/pre-push/advisory-unique-key.sql` and then the
+  unchanged `prisma db push --skip-generate`. If the SQL fails the deploy stops
+  before the push.
+- `npm run db:push` (development, or a manual push) runs the same SQL first via
+  `npm run db:pre-push`.
+
+The SQL removes the duplicates and then creates the unique index itself, under
+the name and columns Prisma generates for the schema line
+(`Advisory_scanId_ghsaId_packageName_key`), so the push that follows finds that
+index present and has nothing to warn about. It keeps the most complete row of
+each `(scanId, ghsaId, packageName)` group (a fixed version first, then an
+affected range, then a published date, ties by smallest id), recomputes the CVE
+counts and risk score of every scan that lost rows, does nothing on a fresh
+database (the push creates the table and the key) and is safe to repeat. The
+push of this release also drops the old single-column `scanId` index, which the
+unique key makes redundant; dropping an index carries no data-loss warning. Do
+not run a bare `prisma db push` against a database that may still hold
+duplicates. The development container (`docker/entrypoint.dev.sh`) calls
+`npm run db:push` too.
+
+The key stays in place when a deploy is rolled back to an earlier release (the
+relay rolls back after `post_update`, so the SQL has already committed).
+Releases before the key do not collapse repeated Dependabot alerts, so their CVE
+scans of repositories with repeated alerts fail with `P2002` until the next
+forward deploy. For an intentional downgrade, run
+`DROP INDEX "Advisory_scanId_ghsaId_packageName_key";` first.
 
 ## CI Health (GitHub Actions sync)
 

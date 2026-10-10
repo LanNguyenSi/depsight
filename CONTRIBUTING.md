@@ -20,7 +20,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npm test
    ```
 
-4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `prisma db push` (no migrations directory).
+4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it).
 5. Open the PR with a clear summary, motivation, and test plan.
 
 ## Dev Setup
@@ -32,9 +32,9 @@ docker compose -f docker-compose.dev.yml up   # or: make dev (adds --build)
 ```
 
 The `app` container's entrypoint (`docker/entrypoint.dev.sh`) already runs
-`npm install`, `npx prisma generate`, and `npx prisma db push` against the
+`npm install`, `npx prisma generate`, and `npm run db:push` against the
 `db` service before starting `npm run dev`, so no host-side install or push
-step is needed for this flow. A host-side `npx prisma db push` is only
+step is needed for this flow. A host-side `npm run db:push` (not a bare `npx prisma db push`) is only
 needed if you run Prisma commands directly against Postgres from the host
 (outside the `app` container); in that case set `DATABASE_URL` in `.env` to
 match the `db` service's credentials (`postgresql://dev:dev@localhost:5432/depsight_dev`).

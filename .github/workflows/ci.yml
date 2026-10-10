@@ -63,6 +63,35 @@ jobs:
           git status --porcelain
           test -z "$(git status --porcelain)"
 
+  advisory-dedupe:
+    name: Advisory dedupe (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: depsight
+          POSTGRES_PASSWORD: depsight
+          POSTGRES_DB: depsight
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U depsight"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DEPSIGHT_TEST_DATABASE_URL: postgresql://depsight:depsight@localhost:5432/depsight
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
+      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx prisma generate
+      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx vitest run tests/unit/advisory-dedupe-db.test.ts
+
   mcp-test:
     name: MCP Test
     runs-on: ubuntu-latest
