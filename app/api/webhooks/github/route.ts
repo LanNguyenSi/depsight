@@ -60,13 +60,11 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
 }
 
 /**
- * True only when the payload says the repository is private. Visibility is
- * judged from this delivery, not from the stored `Repo.private`, so a
- * private-to-public flip applies to the very next delivery without waiting for
- * a sync. A missing, mistyped or contradictory field counts as public, so the
- * check fails safe.
+ * The visibility a delivery states, or undefined when it does not state one
+ * clearly: a missing, mistyped or contradictory field is undefined. `internal`
+ * counts as private.
  */
-function isPrivateRepository(payload: PullRequestPayload): boolean {
+function payloadVisibility(payload: PullRequestPayload): boolean | undefined {
   const repository = payload.repository;
   const flag = typeof repository?.private === 'boolean' ? repository.private : undefined;
   const visibility = repository?.visibility;
@@ -76,9 +74,39 @@ function isPrivateRepository(payload: PullRequestPayload): boolean {
       : visibility === 'public'
         ? false
         : undefined;
-  if (flag === undefined && fromVisibility === undefined) return false;
-  if (flag !== undefined && fromVisibility !== undefined && flag !== fromVisibility) return false;
-  return flag ?? fromVisibility ?? false;
+  if (flag !== undefined && fromVisibility !== undefined && flag !== fromVisibility) return undefined;
+  return flag ?? fromVisibility;
+}
+
+/**
+ * True only when the payload says the repository is private. Visibility is
+ * judged from this delivery, not from the stored `Repo.private`, so a
+ * private-to-public flip applies to the very next delivery without waiting for
+ * a sync. A missing, mistyped or contradictory field counts as public, so the
+ * check fails safe.
+ */
+function isPrivateRepository(payload: PullRequestPayload): boolean {
+  return payloadVisibility(payload) ?? false;
+}
+
+/**
+ * Brings the stored `Repo.private` of the verified row in line with a delivery
+ * that states a different visibility, so the settings page converges on the
+ * first delivery after a flip. A delivery that states no clear visibility never
+ * writes. A failed write is logged and never changes the delivery's answer.
+ */
+async function refreshStoredVisibility(
+  tracked: { id: string; private: boolean },
+  payload: PullRequestPayload,
+): Promise<void> {
+  const stated = payloadVisibility(payload);
+  if (stated === undefined || stated === tracked.private) return;
+  try {
+    await prisma.repo.update({ where: { id: tracked.id }, data: { private: stated } });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    console.error(`Could not refresh stored visibility of repository row ${tracked.id}: ${message}`);
+  }
 }
 
 /**
@@ -332,6 +360,7 @@ export async function POST(req: NextRequest) {
       name: true,
       webhookSecretEnc: true,
       webhookScanForks: true,
+      private: true,
       user: { select: { githubToken: true } },
     },
   });
@@ -351,6 +380,9 @@ export async function POST(req: NextRequest) {
   // user knows another's secret; either way the oldest verified row acts alone.
   const tracked = verified[0];
   if (!tracked) return invalidSignature();
+
+  // Only a delivery whose signature verified against a stored row may touch it.
+  await refreshStoredVisibility(tracked, payload);
 
   const event = req.headers.get('x-github-event');
   if (event === 'ping') return ignored('ping');

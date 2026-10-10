@@ -6,13 +6,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 
-const { scanPRAndCommentMock, repoFindManyMock } = vi.hoisted(() => ({
+const { scanPRAndCommentMock, repoFindManyMock, repoUpdateMock } = vi.hoisted(() => ({
   scanPRAndCommentMock: vi.fn(),
   repoFindManyMock: vi.fn(),
+  repoUpdateMock: vi.fn(),
 }));
 
 vi.mock('@/lib/pr/pr-scanner', () => ({ scanPRAndComment: scanPRAndCommentMock }));
-vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock } } }));
+vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock, update: repoUpdateMock } } }));
 
 import { POST } from '@/app/api/webhooks/github/route';
 import { githubHookRanges } from '@/lib/github-hook-ranges';
@@ -165,6 +166,12 @@ describe('POST /api/webhooks/github', () => {
     table = [row()];
     repoFindManyMock.mockReset();
     repoFindManyMock.mockImplementation(async (args) => fakeFindMany(args));
+    repoUpdateMock.mockReset();
+    repoUpdateMock.mockImplementation(async (args: { where: { id: string }; data: { private: boolean } }) => {
+      const found = table.find((r) => r.id === args.where.id);
+      if (found) found.private = args.data.private;
+      return found;
+    });
     prWebhookDeliveries.reset();
     prScanWebhookRepoRateLimiter.reset();
     prScanWebhookTotalRateLimiter.reset();
@@ -888,6 +895,95 @@ describe('POST /api/webhooks/github', () => {
         const res = await POST(signed(fork(), { secret: 'wrong' }));
         expect(res.status).toBe(401);
       });
+    });
+  });
+
+  describe('stored visibility refresh', () => {
+    const withVisibility = (repository: Record<string, unknown>) =>
+      payload({ repository: { name: 'api', owner: { login: 'acme' }, ...repository } });
+
+    it('stores a private-to-public flip from a signed delivery', async () => {
+      table = [row({ private: true })];
+      await POST(signed(withVisibility({ private: false })));
+      expect(repoUpdateMock).toHaveBeenCalledWith({ where: { id: 'repo-row-1' }, data: { private: false } });
+      expect(table[0].private).toBe(false);
+    });
+
+    it('stores a public-to-private flip from a signed delivery', async () => {
+      table = [row({ private: false })];
+      await POST(signed(withVisibility({ visibility: 'private' })));
+      expect(table[0].private).toBe(true);
+    });
+
+    it('stores internal as private', async () => {
+      table = [row({ private: false })];
+      await POST(signed(withVisibility({ visibility: 'internal' })));
+      expect(table[0].private).toBe(true);
+    });
+
+    it('does not write when the stored value already matches', async () => {
+      table = [row({ private: true })];
+      await POST(signed(withVisibility({ private: true })));
+      expect(repoUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no visibility field', {}],
+      ['a non-boolean private', { private: 'false' }],
+      ['an unknown visibility', { visibility: 'secret' }],
+      ['contradicting fields', { private: false, visibility: 'private' }],
+    ])('leaves the stored value alone for %s', async (_n, repository) => {
+      table = [row({ private: true })];
+      await POST(signed(withVisibility(repository)));
+      expect(repoUpdateMock).not.toHaveBeenCalled();
+      expect(table[0].private).toBe(true);
+    });
+
+    it('does not write for an invalid signature', async () => {
+      table = [row({ private: true })];
+      const res = await POST(signed(withVisibility({ private: false }), { secret: 'wrong' }));
+      expect(res.status).toBe(401);
+      expect(repoUpdateMock).not.toHaveBeenCalled();
+      expect(table[0].private).toBe(true);
+    });
+
+    it('does not write for a missing signature', async () => {
+      table = [row({ private: true })];
+      const res = await POST(signed(withVisibility({ private: false }), { signature: null }));
+      expect(res.status).toBe(401);
+      expect(repoUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it('does not write for a repository that is not tracked', async () => {
+      table = [row({ private: true, tracked: false })];
+      const res = await POST(signed(withVisibility({ private: false })));
+      expect(res.status).toBe(401);
+      expect(repoUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it('does not change the response of the delivery', async () => {
+      table = [row({ private: true })];
+      const res = await POST(signed(withVisibility({ private: false })));
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ ok: true, accepted: true });
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('still answers and scans when the write fails', async () => {
+      table = [row({ private: true })];
+      repoUpdateMock.mockRejectedValue(new Error('db down'));
+      const res = await POST(signed(withVisibility({ private: false })));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('only touches the row whose secret verified', async () => {
+      table = [
+        row({ id: 'row-a', userId: 'user-a', private: true, createdAt: 1 }),
+        row({ id: 'row-b', userId: 'user-b', private: true, secret: SECRET_B, createdAt: 2 }),
+      ];
+      await POST(signed(withVisibility({ private: false }), { secret: SECRET_B }));
+      expect(table.map((r) => r.private)).toEqual([true, false]);
     });
   });
 
