@@ -201,7 +201,7 @@ export function PrWebhookSecrets() {
                   <span>{t['settings.prwh.forks']}</span>
                   <select
                     value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
-                    disabled={busyId === repo.id || forkControlState(repo) !== 'editable'}
+                    disabled={busyId === repo.id || forkControlState(repo).selectDisabled}
                     onChange={(e) =>
                       void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
                     }
@@ -210,14 +210,14 @@ export function PrWebhookSecrets() {
                     <option value="default">
                       {forksDefault ? t['settings.prwh.forksDefaultOn'] : t['settings.prwh.forksDefaultOff']}
                     </option>
-                    <option value="true">{t['settings.prwh.forksOn']}</option>
+                    <option value="true" disabled={forkControlState(repo).scanDisabled}>{t['settings.prwh.forksOn']}</option>
                     <option value="false">{t['settings.prwh.forksOff']}</option>
                   </select>
                 </label>
-                {forkControlState(repo) === 'publicIgnored' && (
+                {forkControlState(repo).note === 'publicScanIgnored' && (
                   <div className="text-xs text-amber-400">{t['settings.prwh.forksPublic']}</div>
                 )}
-                {forkControlState(repo) === 'noSecret' && (
+                {forkControlState(repo).note === 'noSecret' && (
                   <div className="text-xs text-gray-600">{t['settings.prwh.forksNoSecret']}</div>
                 )}
                 {showRotateHint(available, repo) && (

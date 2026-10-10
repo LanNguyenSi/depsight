@@ -16,16 +16,26 @@ describe('showRotateHint', () => {
 });
 
 describe('forkControlState', () => {
-  it('is editable only for a private repository with a configured secret', () => {
-    expect(forkControlState({ configured: true, private: true })).toBe('editable');
+  it('is fully editable for a private repository with a configured secret', () => {
+    expect(forkControlState({ configured: true, private: true })).toEqual({
+      selectDisabled: false,
+      scanDisabled: false,
+      note: 'none',
+    });
   });
 
-  it('says the opt-in is ignored for a public repository with a secret', () => {
-    expect(forkControlState({ configured: true, private: false })).toBe('publicIgnored');
+  it('keeps Ignore selectable but disables Scan for a public repository with a secret', () => {
+    const state = forkControlState({ configured: true, private: false });
+    expect(state.selectDisabled).toBe(false);
+    expect(state.scanDisabled).toBe(true);
+    expect(state.note).toBe('publicScanIgnored');
   });
 
-  it('says the setting has no effect without a secret, public or private', () => {
-    expect(forkControlState({ configured: false, private: true })).toBe('noSecret');
-    expect(forkControlState({ configured: false, private: false })).toBe('noSecret');
+  it('disables the whole control without a secret, public or private', () => {
+    for (const isPrivate of [true, false]) {
+      const state = forkControlState({ configured: false, private: isPrivate });
+      expect(state.selectDisabled).toBe(true);
+      expect(state.note).toBe('noSecret');
+    }
   });
 });

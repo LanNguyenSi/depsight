@@ -233,10 +233,11 @@ function claimedRepository(
  * before verification, and after it only the PR number and action (no URL from
  * the payload is ever fetched).
  *
- * Pull requests from forks are ignored (200) unless the verified row's owner
- * opted in (Repo.webhookScanForks) or, for a row without a setting,
- * GITHUB_WEBHOOK_SCAN_FORKS is `true`, because on a public repository any outsider can open one and the
- * comment publishes alert data.
+ * Pull requests from forks are ignored (200) unless the repository is private
+ * and the verified row's owner opted in (Repo.webhookScanForks), or
+ * GITHUB_WEBHOOK_SCAN_FORKS is `true` and the row has no setting (or opted in
+ * on a public repository, where the opt-in is ignored), because on a public
+ * repository any outsider can open one and the comment publishes alert data.
  *
  * The scan runs in the background and the route answers 202 at once: GitHub
  * gives a delivery 10 seconds, a scan can take longer. depsight is a
@@ -331,7 +332,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid pull request number' }, { status: 400 });
   }
 
-  // Fork pull requests are ignored (200) unless the operator opted in. This
+  // Fork pull requests are ignored (200) unless the operator opted in (a
+  // per-row opt-in counts only for a private repository, judged from this
+  // delivery's payload; see scansForks). This
   // sits after the signature check, so only a verified caller can ever see this
   // answer and it tells an unverified one nothing, and before the replay guard
   // and the rate limiters, so a fork delivery spends no scan budget.

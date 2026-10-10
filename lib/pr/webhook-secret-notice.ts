@@ -10,14 +10,18 @@ export function showRotateHint(available: boolean, row: { configured: boolean; u
 
 /**
  * State of the fork-scanning control of one row on the settings page. Without
- * a stored secret the webhook cannot verify a delivery, so the setting has no
- * effect; on a public repository the opt-in is ignored by the webhook.
+ * a stored secret the webhook cannot verify a delivery, so the whole control
+ * has no effect and is disabled. On a public repository the webhook ignores
+ * "Scan" but still honours "Ignore" (the only setting that keeps protecting a
+ * public repository when the instance default scans forks), so the select
+ * stays usable there and only the "Scan" option is disabled.
  */
-export function forkControlState(row: {
-  configured: boolean;
-  private: boolean;
-}): 'editable' | 'noSecret' | 'publicIgnored' {
-  if (!row.configured) return 'noSecret';
-  if (!row.private) return 'publicIgnored';
-  return 'editable';
+export function forkControlState(row: { configured: boolean; private: boolean }): {
+  selectDisabled: boolean;
+  scanDisabled: boolean;
+  note: 'none' | 'noSecret' | 'publicScanIgnored';
+} {
+  if (!row.configured) return { selectDisabled: true, scanDisabled: false, note: 'noSecret' };
+  if (!row.private) return { selectDisabled: false, scanDisabled: true, note: 'publicScanIgnored' };
+  return { selectDisabled: false, scanDisabled: false, note: 'none' };
 }

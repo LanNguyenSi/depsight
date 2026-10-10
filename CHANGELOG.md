@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **The per-repository fork opt-in of the PR scan webhook is ignored for public repositories:** the webhook now judges visibility from each delivery's `repository.private` and `repository.visibility` (a missing, mistyped or contradictory value counts as public), so a repository that turned public stops scanning outsiders' forks with its next delivery, without waiting for a sync. An explicit opt-out still holds and `GITHUB_WEBHOOK_SCAN_FORKS` keeps its meaning. `GET /api/webhook-secrets` reports the stored `private` flag; the settings page disables the fork select and says why for a public row and for a row without a secret. Tracker task 9a2eadf8.
+- **The per-repository fork opt-in of the PR scan webhook is ignored for public repositories:** the webhook now judges visibility from each delivery's `repository.private` and `repository.visibility` (a missing, mistyped or contradictory value counts as public; an `internal` repository counts as private), so a repository that turned public stops scanning outsiders' forks with its next delivery, without waiting for a sync. An explicit opt-out still holds and `GITHUB_WEBHOOK_SCAN_FORKS` keeps its meaning. `GET /api/webhook-secrets` reports the stored `private` flag; the settings page keeps Ignore selectable and disables Scan on a public row, says why, and disables the select for a row without a secret. Tracker task 9a2eadf8.
 
 ### Added
 
