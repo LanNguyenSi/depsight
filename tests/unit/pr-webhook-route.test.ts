@@ -39,7 +39,10 @@ function payload(over: Record<string, unknown> = {}): Record<string, unknown> {
     number: 42,
     repository: { name: 'api', owner: { login: 'acme' } },
     // Present in real payloads and must never be fetched or trusted.
-    pull_request: { url: 'http://169.254.169.254/latest/meta-data' },
+    pull_request: {
+      url: 'http://169.254.169.254/latest/meta-data',
+      head: { repo: { full_name: 'acme/api' } },
+    },
     ...over,
   };
 }
@@ -87,6 +90,7 @@ describe('POST /api/webhooks/github', () => {
 
   afterEach(() => {
     delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
     vi.restoreAllMocks();
   });
 
@@ -337,5 +341,77 @@ describe('POST /api/webhooks/github', () => {
     const res = await POST(signed());
     expect(res.status).toBe(429);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+  });
+
+  describe('fork pull requests', () => {
+    const withHead = (head: unknown) =>
+      payload({ pull_request: { url: 'http://x.invalid', head } });
+
+    async function expectIgnoredFork(body: Record<string, unknown>) {
+      const res = await POST(signed(body));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, ignored: 'fork pull request' });
+      expect(repoFindFirstMock).not.toHaveBeenCalled();
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+      expect(prScanWebhookRepoRateLimiter.check('acme/api').remaining).toBe(
+        PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR - 1,
+      );
+    }
+
+    it('ignores a pull request from a fork by default', async () => {
+      await expectIgnoredFork(withHead({ repo: { full_name: 'mallory/api' } }));
+    });
+
+    it('ignores a pull request whose fork was deleted (head.repo is null)', async () => {
+      await expectIgnoredFork(withHead({ repo: null }));
+    });
+
+    it('ignores a payload that does not describe its head repository', async () => {
+      await expectIgnoredFork(payload({ pull_request: {} }));
+    });
+
+    it('scans a same-repository pull request that differs only in letter case', async () => {
+      const res = await POST(signed(withHead({ repo: { full_name: 'ACME/Api' } })));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('scans a same-repository pull request whose base owner and name are mixed case', async () => {
+      for (const headFullName of ['acme/api', 'Acme/Api']) {
+        scanPRAndCommentMock.mockClear();
+        const res = await POST(
+          signed(
+            payload({
+              repository: { name: 'Api', owner: { login: 'Acme' } },
+              pull_request: {
+                url: 'http://x.invalid',
+                head: { repo: { full_name: headFullName } },
+              },
+            }),
+          ),
+        );
+        expect(res.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('scans fork pull requests when GITHUB_WEBHOOK_SCAN_FORKS is true', async () => {
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = ' TRUE ';
+      const res = await POST(signed(withHead({ repo: null })));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps ignoring forks for any value other than true', async () => {
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = '1';
+      await expectIgnoredFork(withHead({ repo: { full_name: 'mallory/api' } }));
+    });
+
+    it('still answers 401 for an unsigned fork delivery', async () => {
+      const res = await POST(
+        signed(withHead({ repo: { full_name: 'mallory/api' } }), { signature: null }),
+      );
+      expect(res.status).toBe(401);
+    });
   });
 });

@@ -27,6 +27,24 @@ interface PullRequestPayload {
   action?: unknown;
   number?: unknown;
   repository?: { name?: unknown; owner?: { login?: unknown } };
+  pull_request?: { head?: { repo?: { full_name?: unknown } | null } | null } | null;
+}
+
+/**
+ * True when the pull request comes from a fork. A missing or deleted head
+ * repository (`head.repo` is null once a fork is deleted) counts as a fork, and
+ * so does any head the payload does not describe, so the opt-out fails closed.
+ * Repository names are case-insensitive on GitHub, hence the lowercase compare.
+ */
+function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: string): boolean {
+  const headFullName = payload.pull_request?.head?.repo?.full_name;
+  if (typeof headFullName !== 'string') return true;
+  return headFullName.toLowerCase() !== `${owner}/${repo}`.toLowerCase();
+}
+
+/** Fork pull requests are scanned only when the operator opts in. */
+function scansForks(): boolean {
+  return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
 }
 
 function ignored(reason: string): NextResponse {
@@ -41,6 +59,10 @@ function ignored(reason: string): NextResponse {
  * authentication, so nothing but the capped body read happens before it is
  * verified, and nothing from the payload except the owner, repository name
  * and PR number is used (no URL from the payload is ever fetched).
+ *
+ * Pull requests from forks are ignored (200) unless GITHUB_WEBHOOK_SCAN_FORKS
+ * is `true`, because on a public repository any outsider can open one and the
+ * comment publishes alert data.
  *
  * The scan runs in the background and the route answers 202 at once: GitHub
  * gives a delivery 10 seconds, a scan can take longer. depsight is a
@@ -103,6 +125,12 @@ export async function POST(req: NextRequest) {
       { error: 'Invalid repository or pull request number' },
       { status: 400 },
     );
+  }
+
+  // Skipped before the tracking lookup, the replay guard and the rate limiters,
+  // so a fork delivery costs no database work and no scan budget.
+  if (!scansForks() && isForkPullRequest(payload, owner, repo)) {
+    return ignored('fork pull request');
   }
 
   // Only repositories a depsight user tracks are scanned. When several users

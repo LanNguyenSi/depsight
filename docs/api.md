@@ -53,12 +53,12 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 `POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body under `GITHUB_WEBHOOK_SECRET`, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time.
 
-**Trust model.** `GITHUB_WEBHOOK_SECRET` is one secret for the whole instance, not one per repository or per user. Whoever holds it can sign a delivery for any repository that any depsight user tracks, and depsight then scans that pull request and posts the comment with the GitHub token of the user who tracks the repository. Treat the secret as operator-only on a multi-user instance, and configure the webhook only on repositories the operator controls (or set the secret only on a single-user instance). On a public repository the comment is public, and an author of a fork pull request can trigger the scan, because GitHub sends the `opened` and `synchronize` deliveries for those pull requests too.
+**Trust model.** `GITHUB_WEBHOOK_SECRET` is one secret for the whole instance, not one per repository or per user. Whoever holds it can sign a delivery for any repository that any depsight user tracks, and depsight then scans that pull request and posts the comment with the GitHub token of the user who tracks the repository. Treat the secret as operator-only on a multi-user instance, and configure the webhook only on repositories the operator controls (or set the secret only on a single-user instance). On a public repository the comment is public, and GitHub sends the `opened` and `synchronize` deliveries for fork pull requests too, so depsight ignores them (200) unless `GITHUB_WEBHOOK_SCAN_FORKS=true` is set.
 
 | Status | When |
 |--------|------|
-| `202` | Signed `opened` or `synchronize` delivery for a tracked repository; the scan runs in the background (GitHub allows a delivery 10 seconds) |
-| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, or a replayed delivery |
+| `202` | Signed `opened` or `synchronize` delivery for a tracked repository, from a pull request in the same repository (or from a fork when `GITHUB_WEBHOOK_SCAN_FORKS=true`); the scan runs in the background (GitHub allows a delivery 10 seconds) |
+| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, a pull request from a fork (unless `GITHUB_WEBHOOK_SCAN_FORKS=true`), or a replayed delivery |
 | `400` | Signed delivery with an invalid JSON body, an invalid owner, repository name or PR number, or a missing or malformed `X-GitHub-Delivery` header |
 | `401` | Missing, malformed or wrong signature (a signature of the wrong length included) |
 | `413` | Body over 1 MiB, rejected without buffering the rest |
