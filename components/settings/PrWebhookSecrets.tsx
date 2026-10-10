@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { SecretRowActions } from '@/components/settings/SecretRowActions';
-import { forkControlState, showRotateHint } from '@/lib/pr/webhook-secret-notice';
+import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
+import { ForkScanSelect } from '@/components/settings/ForkScanSelect';
 
 interface RepoRow {
   id: string;
@@ -197,29 +198,21 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
-                <label className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
-                  <span>{t['settings.prwh.forks']}</span>
-                  <select
-                    value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
-                    disabled={busyId === repo.id || forkControlState(repo).selectDisabled}
-                    onChange={(e) =>
-                      void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
-                    }
-                    className="rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
-                  >
-                    <option value="default">
-                      {forksDefault ? t['settings.prwh.forksDefaultOn'] : t['settings.prwh.forksDefaultOff']}
-                    </option>
-                    <option value="true" disabled={forkControlState(repo).scanDisabled}>{t['settings.prwh.forksOn']}</option>
-                    <option value="false">{t['settings.prwh.forksOff']}</option>
-                  </select>
-                </label>
-                {forkControlState(repo).note === 'publicScanIgnored' && (
-                  <div className="text-xs text-amber-400">{t['settings.prwh.forksPublic']}</div>
-                )}
-                {forkControlState(repo).note === 'noSecret' && (
-                  <div className="text-xs text-gray-600">{t['settings.prwh.forksNoSecret']}</div>
-                )}
+                <ForkScanSelect
+                  row={repo}
+                  forksDefault={forksDefault}
+                  busy={busyId === repo.id}
+                  labels={{
+                    title: t['settings.prwh.forks'],
+                    defaultOn: t['settings.prwh.forksDefaultOn'],
+                    defaultOff: t['settings.prwh.forksDefaultOff'],
+                    scan: t['settings.prwh.forksOn'],
+                    ignore: t['settings.prwh.forksOff'],
+                    publicNote: t['settings.prwh.forksPublic'],
+                    noSecretNote: t['settings.prwh.forksNoSecret'],
+                  }}
+                  onChange={(value) => void setScanForks(repo, value)}
+                />
                 {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}
