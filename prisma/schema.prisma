@@ -47,6 +47,9 @@ model Repo {
   // lib/pr/webhook-secret.ts); null = no webhook configured for this user.
   webhookSecretEnc       String?
   webhookSecretRotatedAt DateTime?
+  // Fork pull requests for this row's webhook: null = follow the instance default
+  // (GITHUB_WEBHOOK_SCAN_FORKS), true/false = this row's owner decided.
+  webhookScanForks       Boolean?
 
   // Freshness semantics. lastScannedAt is the last time ANY of the three
   // scanners completed successfully (each scanner writes it on success; the

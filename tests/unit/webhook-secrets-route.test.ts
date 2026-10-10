@@ -18,7 +18,7 @@ vi.mock('@/lib/prisma', () => ({
 }));
 
 import { GET } from '@/app/api/webhook-secrets/route';
-import { POST, DELETE } from '@/app/api/webhook-secrets/[repoId]/route';
+import { POST, DELETE, PATCH } from '@/app/api/webhook-secrets/[repoId]/route';
 import { openWebhookSecret, sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import { webhookSecretRateLimiter, WEBHOOK_SECRET_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 import { NextRequest } from 'next/server';
@@ -30,6 +30,7 @@ interface Row {
   tracked: boolean;
   webhookSecretEnc: string | null;
   webhookSecretRotatedAt: Date | null;
+  webhookScanForks?: boolean | null;
 }
 
 let table: Row[] = [];
@@ -39,8 +40,13 @@ function matches(row: Row, where: Partial<Row>): boolean {
 }
 
 const params = (repoId: string) => ({ params: Promise.resolve({ repoId }) });
-const req = (method: string, id = 'x') =>
-  new NextRequest(`http://localhost/api/webhook-secrets/${id}`, { method });
+const req = (method: string, id = 'x', body?: unknown) =>
+  new NextRequest(`http://localhost/api/webhook-secrets/${id}`, {
+    method,
+    ...(body === undefined
+      ? {}
+      : { body: typeof body === 'string' ? body : JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+  });
 
 function login(userId: string | null) {
   authMock.mockResolvedValue(userId ? { user: { id: userId } } : null);
@@ -89,6 +95,22 @@ describe('webhook secret routes', () => {
       expect(text).not.toContain('row-a2');
       expect(text).not.toContain('sealed-a-value');
       expect(JSON.parse(text).repos[0]).toMatchObject({ id: 'row-a', configured: true });
+    });
+
+    it("lists each row's own fork setting and the instance default", async () => {
+      table[0].webhookScanForks = true;
+      table.push({ id: 'row-a5', userId: 'user-a', fullName: 'acme/zz', tracked: true, webhookSecretEnc: null, webhookSecretRotatedAt: null, webhookScanForks: null });
+      let body = (await (await GET()).json()) as {
+        scanForksDefault: boolean;
+        repos: { id: string; scanForks: boolean | null }[];
+      };
+      expect(body.scanForksDefault).toBe(false);
+      expect(body.repos.find((r) => r.id === 'row-a')?.scanForks).toBe(true);
+      expect(body.repos.find((r) => r.id === 'row-a5')?.scanForks).toBeNull();
+      process.env.GITHUB_WEBHOOK_SCAN_FORKS = ' True ';
+      body = await (await GET()).json();
+      expect(body.scanForksDefault).toBe(true);
+      delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
     });
 
     it('reports available from the presence of key material, the condition the mint route 503s on', async () => {
@@ -220,6 +242,55 @@ describe('webhook secret routes', () => {
       const limited = await POST(req('POST', 'row-a'), params('row-a'));
       expect(limited.status).toBe(429);
       expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('PATCH /api/webhook-secrets/[repoId]', () => {
+    const patch = (id: string, body: unknown) => PATCH(req('PATCH', id, body), params(id));
+
+    it('answers 401 without a session and writes nothing', async () => {
+      login(null);
+      expect((await patch('row-a', { scanForks: true })).status).toBe(401);
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    it('stores true, false and null on an owned tracked row', async () => {
+      for (const value of [true, false, null]) {
+        const res = await patch('row-a', { scanForks: value });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ success: true, scanForks: value });
+        expect(table[0].webhookScanForks).toBe(value);
+      }
+    });
+
+    it("answers 404 for another user's row and leaves it unchanged", async () => {
+      table[2].webhookScanForks = null;
+      const res = await patch('row-b', { scanForks: true });
+      expect(res.status).toBe(404);
+      expect(table[2].webhookScanForks).toBeNull();
+    });
+
+    it('keeps the owner and tracked in the write filter', async () => {
+      await patch('row-a', { scanForks: true });
+      expect(updateManyMock.mock.calls[0][0].where).toEqual({ id: 'row-a', userId: 'user-a', tracked: true });
+    });
+
+    it('answers 404 for an untracked row', async () => {
+      expect((await patch('row-a2', { scanForks: true })).status).toBe(404);
+    });
+
+    it.each([
+      ['a string', { scanForks: 'true' }],
+      ['a number', { scanForks: 1 }],
+      ['a missing key', {}],
+      ['a wrong key', { fork: true }],
+      ['an array body', [true]],
+      ['a null body', null],
+      ['malformed JSON', '{nope'],
+    ])('answers 400 for %s and writes nothing', async (_n, body) => {
+      const res = await patch('row-a', body);
+      expect(res.status).toBe(400);
+      expect(updateManyMock).not.toHaveBeenCalled();
     });
   });
 

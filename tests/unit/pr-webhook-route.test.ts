@@ -37,6 +37,7 @@ interface Row {
   name: string;
   tracked: boolean;
   webhookSecretEnc: string | null;
+  webhookScanForks: boolean | null;
   user: { githubToken: string };
   createdAt: number;
 }
@@ -52,6 +53,7 @@ function row(over: Partial<Row> & { secret?: string | null } = {}): Row {
     name: 'api',
     tracked: true,
     webhookSecretEnc: plain === null ? null : sealWebhookSecret(plain, id),
+    webhookScanForks: null,
     user: { githubToken: 'tok-123' },
     createdAt: 1,
     ...rest,
@@ -734,6 +736,72 @@ describe('POST /api/webhooks/github', () => {
       expect(res.status).toBe(202);
       expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
       expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
+    });
+    describe('per-row fork setting', () => {
+      const fork = () => withHead({ repo: { full_name: 'mallory/api' } });
+
+      it('scans a fork pull request for a row that opted in, with the env default off', async () => {
+        table = [row({ webhookScanForks: true })];
+        const res = await POST(signed(fork()));
+        expect(res.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      });
+
+      it('ignores a fork pull request for a row that opted out, even with the env default on', async () => {
+        process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+        table = [row({ webhookScanForks: false })];
+        await expectIgnoredFork(fork());
+      });
+
+      it('follows the env default for a row without a setting', async () => {
+        table = [row({ webhookScanForks: null })];
+        const off = await POST(signed(fork()));
+        expect(off.status).toBe(200);
+        process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+        const on = await POST(signed(fork()));
+        expect(on.status).toBe(202);
+      });
+
+      it('requests the setting of each candidate row from the lookup', async () => {
+        await POST(signed());
+        expect(repoFindManyMock.mock.calls[0][0].select.webhookScanForks).toBe(true);
+      });
+
+      it("decides per row: A's opt-in does not scan forks for B, and B's delivery is ignored", async () => {
+        table = [
+          row({ id: 'row-a', userId: 'user-a', secret: SECRET, webhookScanForks: true, user: { githubToken: 'tok-A' }, createdAt: 1 }),
+          row({ id: 'row-b', userId: 'user-b', secret: SECRET_B, webhookScanForks: null, user: { githubToken: 'tok-B' }, createdAt: 2 }),
+        ];
+        const forB = await POST(signed(fork(), { secret: SECRET_B }));
+        expect(forB.status).toBe(200);
+        expect(await forB.json()).toEqual({ ok: true, ignored: 'fork pull request' });
+        expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+
+        const forA = await POST(signed(fork(), { secret: SECRET }));
+        expect(forA.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+        expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-A', 'acme', 'api', 42, 'user-a');
+      });
+
+      it("decides per row: B's explicit opt-out does not stop A, whose env default is on", async () => {
+        process.env.GITHUB_WEBHOOK_SCAN_FORKS = 'true';
+        table = [
+          row({ id: 'row-a', userId: 'user-a', secret: SECRET, webhookScanForks: null, user: { githubToken: 'tok-A' }, createdAt: 1 }),
+          row({ id: 'row-b', userId: 'user-b', secret: SECRET_B, webhookScanForks: false, user: { githubToken: 'tok-B' }, createdAt: 2 }),
+        ];
+        const forB = await POST(signed(fork(), { secret: SECRET_B }));
+        expect(forB.status).toBe(200);
+        const forA = await POST(signed(fork(), { secret: SECRET }));
+        expect(forA.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+        expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-A', 'acme', 'api', 42, 'user-a');
+      });
+
+      it('still answers 401, not the fork answer, to an unverified delivery for an opted-in row', async () => {
+        table = [row({ webhookScanForks: true })];
+        const res = await POST(signed(fork(), { secret: 'wrong' }));
+        expect(res.status).toBe(401);
+      });
     });
   });
 

@@ -379,6 +379,11 @@ const de = {
   'settings.prwh.revealWarning': 'Kopiere es jetzt in das GitHub-Webhook. Es wird nur dieses eine Mal angezeigt.',
   'settings.prwh.rotateConfirm': 'Das alte Secret gilt sofort nicht mehr. Aktualisiere danach das Webhook in GitHub.',
   'settings.prwh.removeConfirm': 'Lieferungen für dieses Repository lösen danach keinen Scan mehr aus.',
+  'settings.prwh.forks': 'Fork-Pull-Requests',
+  'settings.prwh.forksDefaultOn': 'Instanz-Standard (scannen)',
+  'settings.prwh.forksDefaultOff': 'Instanz-Standard (ignorieren)',
+  'settings.prwh.forksOn': 'Scannen (nur bei vertrauenswürdigen Beitragenden)',
+  'settings.prwh.forksOff': 'Ignorieren',
 
   // Pagination
   'pagination.prev': 'Zurück',
@@ -771,6 +776,11 @@ const en = {
   'settings.prwh.revealWarning': 'Copy it into the GitHub webhook now. It is shown only this once.',
   'settings.prwh.rotateConfirm': 'The old secret stops working at once. Update the webhook in GitHub afterwards.',
   'settings.prwh.removeConfirm': 'Deliveries for this repository will no longer start a scan.',
+  'settings.prwh.forks': 'Fork pull requests',
+  'settings.prwh.forksDefaultOn': 'Instance default (scan)',
+  'settings.prwh.forksDefaultOff': 'Instance default (ignore)',
+  'settings.prwh.forksOn': 'Scan (only for trusted contributors)',
+  'settings.prwh.forksOff': 'Ignore',
 
   // Pagination
   'pagination.prev': 'Previous',

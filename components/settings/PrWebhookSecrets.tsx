@@ -12,6 +12,7 @@ interface RepoRow {
   configured: boolean;
   usable: boolean;
   rotatedAt: string | null;
+  scanForks: boolean | null;
 }
 
 interface Pending {
@@ -28,6 +29,7 @@ export function PrWebhookSecrets() {
   const { t, locale } = useLocale();
   const [repos, setRepos] = useState<RepoRow[]>([]);
   const [available, setAvailable] = useState(true);
+  const [forksDefault, setForksDefault] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -39,9 +41,14 @@ export function PrWebhookSecrets() {
     try {
       const res = await fetch('/api/webhook-secrets');
       if (!res.ok) throw new Error('load failed');
-      const data = (await res.json()) as { available?: boolean; repos: RepoRow[] };
+      const data = (await res.json()) as {
+        available?: boolean;
+        scanForksDefault?: boolean;
+        repos: RepoRow[];
+      };
       setRepos(data.repos);
       setAvailable(data.available !== false);
+      setForksDefault(data.scanForksDefault === true);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -82,6 +89,24 @@ export function PrWebhookSecrets() {
       });
       if (!res.ok) throw new Error('remove failed');
       if (revealed?.repository === repo.fullName) setRevealed(null);
+      await load();
+    } catch {
+      setActionError(true);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setScanForks(repo: RepoRow, value: boolean | null) {
+    setBusyId(repo.id);
+    setActionError(false);
+    try {
+      const res = await fetch(`/api/webhook-secrets/${encodeURIComponent(repo.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanForks: value }),
+      });
+      if (!res.ok) throw new Error('update failed');
       await load();
     } catch {
       setActionError(true);
@@ -171,6 +196,23 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
+                <label className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                  <span>{t['settings.prwh.forks']}</span>
+                  <select
+                    value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
+                    disabled={busyId === repo.id}
+                    onChange={(e) =>
+                      void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
+                    }
+                    className="rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
+                  >
+                    <option value="default">
+                      {forksDefault ? t['settings.prwh.forksDefaultOn'] : t['settings.prwh.forksDefaultOff']}
+                    </option>
+                    <option value="true">{t['settings.prwh.forksOn']}</option>
+                    <option value="false">{t['settings.prwh.forksOff']}</option>
+                  </select>
+                </label>
                 {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}
