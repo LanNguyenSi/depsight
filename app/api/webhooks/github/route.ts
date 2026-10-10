@@ -296,8 +296,10 @@ function claimedRepository(
  * The payload is parsed before the signature is checked, but only to read the
  * owner and repository name for the candidate lookup; the lookup result is
  * discarded unless a secret verifies. Nothing else from the payload is used
- * before verification, and after it only the PR number and action (no URL from
- * the payload is ever fetched).
+ * before verification, and after it only the PR number, the action, the head
+ * repository and the repository visibility (the fork decision and the
+ * stored-flag refresh of the verified row); no URL from the payload is ever
+ * fetched.
  *
  * Pull requests from forks are ignored (200) unless the repository is private
  * and the verified row's owner opted in (Repo.webhookScanForks), or

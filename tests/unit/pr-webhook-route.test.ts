@@ -977,6 +977,46 @@ describe('POST /api/webhooks/github', () => {
       expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
     });
 
+    // The refresh sits before every early return that follows verification,
+    // so these pin its position, not only its existence.
+    it('stores the flip from a signed ping delivery', async () => {
+      table = [row({ private: true })];
+      const res = await POST(signed({ zen: 'x', repository: { name: 'api', owner: { login: 'acme' }, private: false } }, { event: 'ping' }));
+      expect(res.status).toBe(200);
+      expect(table[0].private).toBe(false);
+    });
+
+    it('stores the flip from an unsupported event delivery', async () => {
+      table = [row({ private: true })];
+      const res = await POST(signed(withVisibility({ private: false }), { event: 'issues' }));
+      expect(res.status).toBe(200);
+      expect(table[0].private).toBe(false);
+    });
+
+    it('stores the flip from a fork pull request delivery that is ignored', async () => {
+      table = [row({ private: true })];
+      const body = payload({
+        pull_request: { url: 'http://x.invalid', head: { repo: { full_name: 'mallory/api' } } },
+        repository: { name: 'api', owner: { login: 'acme' }, private: false },
+      });
+      const res = await POST(signed(body));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true, ignored: 'fork pull request' });
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+      expect(table[0].private).toBe(false);
+    });
+
+    it('stores the flip from a duplicate delivery', async () => {
+      const delivery = 'dddddddd-1111-2222-3333-eeeeeeeeeeee';
+      table = [row({ private: true })];
+      const first = await POST(signed(withVisibility({ private: false }), { delivery }));
+      expect(first.status).toBe(202);
+      table[0].private = true;
+      const second = await POST(signed(withVisibility({ private: false }), { delivery }));
+      expect(await second.json()).toEqual({ ok: true, ignored: 'duplicate delivery' });
+      expect(table[0].private).toBe(false);
+    });
+
     it('only touches the row whose secret verified', async () => {
       table = [
         row({ id: 'row-a', userId: 'user-a', private: true, createdAt: 1 }),
