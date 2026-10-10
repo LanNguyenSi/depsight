@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-10T11:45:00Z, `rescan-and-staleness.md` re-verified after the `NEXTAUTH_SECRET` row of `docs/configuration.md` was corrected to name `WEBHOOK_SECRET_KEY` as its fallback pair; the cited `SCAN_INTERVAL_MINUTES` row is unchanged. Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-10-10T11:39:00Z, `rescan-and-staleness.md` re-verified after `instrumentation.ts` began exiting the process with status 1 on a fatal startup error and the `SCAN_INTERVAL_MINUTES` row of `docs/configuration.md` said so; `lib/cron/auto-scan.ts` is unchanged, so its cited lines hold (the parser still throws for any value outside 1 to 35791). Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-10-10T11:13:35Z, `mcp-vs-web-api.md` re-verified after the rate-limit paragraph of `docs/api.md` corrected its measured parse cost for a crafted webhook body. The MCP server section this doc cites did not change. Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-10-10T11:04:46Z, `mcp-vs-web-api.md` re-verified after `docs/api.md` gained the `available` field of the webhook secret listing and reworded the rate-limit ceiling (it bounds accepted deliveries, not verification CPU). The MCP server section this doc cites did not change. Checked with `okf-kit check docs/okf`. Re-stamped.
