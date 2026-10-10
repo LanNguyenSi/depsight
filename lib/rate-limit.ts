@@ -180,11 +180,11 @@ export const prScanWebhookTotalRateLimiter = createRateLimiter({
 // answer 429 without touching the body. Per source IP (see lib/client-ip.ts for
 // which header is trusted) plus one endpoint-wide ceiling. Fixed one-minute
 // windows. Legitimate traffic is a few deliveries a minute from GitHub's hook
-// addresses, far below both figures. The ceiling is what still bounds the CPU
-// when the client address cannot be trusted (an app reached without the proxy,
-// where a caller can invent a new address per request, including addresses in
-// GitHub's hook ranges): the work such a caller can make the server do is
-// bounded by the ceiling and the hook budget together, 900 requests a minute.
+// addresses, far below both figures. The ceiling and the hook budget below are
+// what still bound the CPU when the client address cannot be trusted (an app
+// reached without the proxy, where a caller can invent a new address per
+// request, including addresses in GitHub's hook ranges): the work such a caller
+// can make the server do is bounded by the two together, 900 requests a minute.
 // At up to about 40 ms for a crafted body (30 ms of JSON parsing plus about
 // 9 ms for 25 HMACs, the figures in docs/api.md) that is roughly 36 s of CPU
 // a minute at most (the ceiling alone: 600 x 40 ms, roughly 25 s). The per-IP

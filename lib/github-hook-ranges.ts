@@ -32,9 +32,9 @@ export const HOOK_RANGES_FETCH_TIMEOUT_MS = 5000;
 /** GitHub publishes a few dozen hook ranges; a response with more is not trusted. */
 const MAX_RANGES = 500;
 /**
- * The meta document is a few tens of KiB; a response larger than this (declared
- * or read) is not parsed, so a hostile or broken answer cannot make the server
- * buffer and parse an unbounded body.
+ * The meta document is about 150 KiB, mostly its actions list; a response
+ * larger than this (declared or read) is not parsed, so a hostile or broken
+ * answer cannot make the server buffer and parse an unbounded body.
  */
 export const HOOK_RANGES_MAX_BODY_BYTES = 2 * 1024 * 1024;
 /**

@@ -269,6 +269,18 @@ describe('createHookRanges', () => {
       expect(ranges.contains(IN_V4)).toBe(true);
     });
 
+    it('uses a body of exactly the cap, with and without a matching Content-Length', async () => {
+      const exact = JSON.stringify({ hooks: HOOKS, pad: '' });
+      const body = exact.slice(0, -2) + 'x'.repeat(HOOK_RANGES_MAX_BODY_BYTES - exact.length) + '"}';
+      expect(body.length).toBe(HOOK_RANGES_MAX_BODY_BYTES);
+      for (const headers of [{}, { 'content-length': String(HOOK_RANGES_MAX_BODY_BYTES) }]) {
+        fetchMock.mockImplementation(async () => new Response(body, { headers }));
+        const ranges = make();
+        await ranges.refresh();
+        expect(ranges.contains(IN_V4)).toBe(true);
+      }
+    });
+
     it('does not use a body that exceeds the cap, however it is valid otherwise', async () => {
       expect(padded.length).toBeGreaterThan(HOOK_RANGES_MAX_BODY_BYTES);
       fetchMock.mockImplementation(async () => new Response(padded));
