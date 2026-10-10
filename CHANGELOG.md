@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Fork-scan default read in one place:** the webhook route and `GET /api/webhook-secrets` read `GITHUB_WEBHOOK_SCAN_FORKS` through one helper (`lib/pr/scan-forks-default.ts`), so the default the settings page shows cannot drift from the one the webhook applies; the settings-route tests reset the variable after each test. Tracker task 7c744d19.
 - **Fatal startup configuration errors exit the process.** An invalid `SCAN_INTERVAL_MINUTES` made the instrumentation hook throw, but the Next.js server stayed up and answered every request with 500, so a restart policy never fired. The hook now logs the error and exits with status 1 (verified with the standalone `node server.js` the image runs). Tracker task 894d4d5f.
 - **Settings page disables Generate and Rotate when webhook secrets are unavailable.** With no key material (`WEBHOOK_SECRET_KEY` and `NEXTAUTH_SECRET` unset) both buttons answered 503; they are now disabled with the reason as their title, and Remove stays available. Tracker task 894d4d5f.
 

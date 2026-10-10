@@ -75,6 +75,7 @@ describe('webhook secret routes', () => {
 
   afterEach(() => {
     delete process.env.NEXTAUTH_SECRET;
+    delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
   });
 
   describe('GET /api/webhook-secrets', () => {
@@ -119,7 +120,6 @@ describe('webhook secret routes', () => {
       process.env.GITHUB_WEBHOOK_SCAN_FORKS = ' True ';
       body = await (await GET()).json();
       expect(body.scanForksDefault).toBe(true);
-      delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
     });
 
     it('reports available from the presence of key material, the condition the mint route 503s on', async () => {

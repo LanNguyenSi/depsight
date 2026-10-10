@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { getWebhookSecretKey, openWebhookSecret } from '@/lib/pr/webhook-secret';
+import { scanForksDefault } from '@/lib/pr/scan-forks-default';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +44,7 @@ export async function GET() {
 
   return NextResponse.json({
     available: getWebhookSecretKey() !== null,
-    scanForksDefault: process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true',
+    scanForksDefault: scanForksDefault(),
     repos: rows.map((row) => ({
       id: row.id,
       fullName: row.fullName,

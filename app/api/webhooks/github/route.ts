@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { scanPRAndComment } from '@/lib/pr/pr-scanner';
+import { scanForksDefault } from '@/lib/pr/scan-forks-default';
 import {
   MAX_BODY_BYTES,
   hasWellFormedSignature,
@@ -86,7 +87,7 @@ function isPrivateRepository(payload: PullRequestPayload): boolean {
  * a repository that became public stops scanning outsiders' forks on its own.
  */
 function scansForks(row: { webhookScanForks: boolean | null }, isPrivate: boolean): boolean {
-  const instanceDefault = process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
+  const instanceDefault = scanForksDefault();
   if (row.webhookScanForks === null) return instanceDefault;
   if (!isPrivate && row.webhookScanForks) return instanceDefault;
   return row.webhookScanForks;
