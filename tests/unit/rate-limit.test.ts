@@ -1,6 +1,12 @@
 // Unit tests for the in-process fixed-window rate limiter.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import {
+  createRateLimiter,
+  rateLimitedResponse,
+  prScanWebhookPreAuthIpRateLimiter,
+  PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
+  PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
+} from '@/lib/rate-limit';
 
 describe('createRateLimiter', () => {
   beforeEach(() => {
@@ -113,5 +119,32 @@ describe('createRateLimiter maxKeys', () => {
     expect(limiter.check('c').allowed).toBe(true);
     expect(limiter.check('c').allowed).toBe(false);
     expect(limiter.check('d').allowed).toBe(true);
+  });
+});
+
+describe('prScanWebhookPreAuthIpRateLimiter table cap', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    prScanWebhookPreAuthIpRateLimiter.reset();
+  });
+
+  afterEach(() => {
+    prScanWebhookPreAuthIpRateLimiter.reset();
+    vi.useRealTimers();
+  });
+
+  it('stops giving new addresses their own window once the table is full', () => {
+    for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS; i++) {
+      expect(prScanWebhookPreAuthIpRateLimiter.check(`addr-${i}`).allowed).toBe(true);
+    }
+    // New addresses past the cap share one overflow bucket: the per-address
+    // budget runs out across them, where uncapped each would start afresh.
+    for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE; i++) {
+      expect(prScanWebhookPreAuthIpRateLimiter.check(`overflow-${i}`).allowed).toBe(true);
+    }
+    expect(prScanWebhookPreAuthIpRateLimiter.check('overflow-next').allowed).toBe(false);
+    // An address that already had a window keeps counting on its own.
+    expect(prScanWebhookPreAuthIpRateLimiter.check('addr-0').allowed).toBe(true);
   });
 });

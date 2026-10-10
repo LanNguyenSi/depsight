@@ -141,6 +141,44 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
       expect(repoFindManyMock).not.toHaveBeenCalled();
     });
 
+    it('warns once per window when the endpoint-wide ceiling refuses requests, and again in the next window', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const warnings = () =>
+          vi.mocked(console.warn).mock.calls.filter((c) => String(c[0]).includes('endpoint-wide'));
+        const exhaustTotal = () => {
+          for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE; i++) {
+            prScanWebhookPreAuthTotalRateLimiter.check('all');
+          }
+        };
+        // Far enough ahead that a warning from an earlier test cannot mask this one.
+        vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+        exhaustTotal();
+
+        for (let i = 0; i < 3; i++) {
+          expect((await POST(request({ forwardedFor: `198.51.100.${i + 1}` }))).status).toBe(429);
+        }
+        expect(warnings()).toHaveLength(1);
+
+        vi.setSystemTime(Date.now() + 61 * 1000);
+        prScanWebhookPreAuthIpRateLimiter.reset();
+        exhaustTotal();
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        expect(warnings()).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not warn about the ceiling for a request refused for its own address', async () => {
+      exhaustIp(GOOD_IP);
+      await POST(request({ forwardedFor: GOOD_IP }));
+      expect(
+        vi.mocked(console.warn).mock.calls.filter((c) => String(c[0]).includes('endpoint-wide')),
+      ).toHaveLength(0);
+    });
+
     it('counts unsigned and badly signed requests too, so they cannot be used to dodge the limit', async () => {
       for (let i = 0; i < IP_LIMIT; i++) {
         const res = await POST(request({ forwardedFor: GOOD_IP, signed: false }));

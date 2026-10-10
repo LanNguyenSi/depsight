@@ -40,12 +40,20 @@ export function trustedProxyHops(): number {
   return DEFAULT_TRUSTED_PROXY_HOPS;
 }
 
+/** Longest textual IP address: a full IPv6 with an embedded IPv4 tail ("0000:...:255.255.255.255"). */
+const MAX_ADDRESS_LENGTH = 45;
+
 /**
  * The trusted client address from an X-Forwarded-For value, or null when there
  * is none to trust: no header, `hops` of 0, fewer entries than trusted
  * proxies (the request did not come through the expected chain), or an entry
- * that is not an IP address (so a caller cannot put an arbitrary string, or a
- * huge one, into the limiter key).
+ * that is not a plain IP address. Longer than 45 characters or carrying an
+ * IPv6 zone id (`%eth0`) is not plain: `isIP` accepts a zone id of any length,
+ * so without this a caller could put kilobytes into the limiter key.
+ *
+ * Next.js fills a missing X-Forwarded-For with the socket peer before the
+ * handler runs, so "no header" in practice means the entry list is shorter
+ * than the trusted hop count, not an absent header.
  */
 export function clientIpFromForwardedFor(header: string | null, hops: number): string | null {
   if (!header || hops < 1) return null;
@@ -53,5 +61,6 @@ export function clientIpFromForwardedFor(header: string | null, hops: number): s
   const index = entries.length - hops;
   if (index < 0) return null;
   const candidate = entries[index].trim();
+  if (candidate.length > MAX_ADDRESS_LENGTH || candidate.includes('%')) return null;
   return isIP(candidate) === 0 ? null : candidate.toLowerCase();
 }
