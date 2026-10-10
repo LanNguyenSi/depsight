@@ -115,13 +115,16 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 // POST /api/webhooks/github is unauthenticated apart from its HMAC, so only a
 // delivery verified against a tracked repository row's own secret reaches these
 // limiters. Each accepted delivery starts a PR scan that spends the tracking
-// user's GitHub quota: one budget per tracked repository row, plus one for the
-// whole endpoint.
+// user's own GitHub quota, so the per-row and per-user budgets are what bound
+// the scan load. The endpoint-wide budget is a ceiling that protects the
+// server, not a scan budget: verifying a delivery costs at most ~9 ms at the
+// 1 MiB body cap with 25 candidate rows (about 0.35 ms of HMAC per candidate
+// per MiB plus ~0.36 ms of JSON parse), so 3000 per hour is under 30 s of CPU
+// per hour for verification, while one user's rows can take at most 120 of it.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
-export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 600;
+export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 3000;
 // All of one user's tracked repositories together. Twice a single repository's
-// budget, so ordinary use is untouched, but one user can take at most a fifth
-// of the endpoint-wide budget however many repositories they track.
+// budget, so ordinary use is untouched.
 export const PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR = 120;
 
 /** POST /api/webhooks/github, keyed by the verified Repo row id (one budget per tracking user). */

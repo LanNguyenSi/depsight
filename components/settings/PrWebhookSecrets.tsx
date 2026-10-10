@@ -8,6 +8,7 @@ interface RepoRow {
   id: string;
   fullName: string;
   configured: boolean;
+  usable: boolean;
   rotatedAt: string | null;
 }
 
@@ -161,6 +162,11 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
+                {repo.configured && !repo.usable && (
+                  <div className="text-xs text-amber-400" role="alert">
+                    {t['settings.prwh.unusable']}
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 gap-3 text-xs">
                 {repo.configured ? (

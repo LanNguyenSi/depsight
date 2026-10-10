@@ -61,6 +61,36 @@ const MAX_CANDIDATES = 25;
 /** Stand-in secret so a delivery for an unknown repository costs one HMAC like any other. */
 const DUMMY_SECRET = 'depsight-no-such-webhook-secret';
 
+/**
+ * Row ids whose stored secret failed to open, already warned about in this
+ * process. One warning per row keeps the log readable however often GitHub
+ * delivers; the id is the only thing logged (never key material, the stored
+ * value or the payload).
+ */
+const warnedUnreadableRows = new Set<string>();
+
+function warnUnreadableOnce(rowId: string): void {
+  if (warnedUnreadableRows.has(rowId)) return;
+  warnedUnreadableRows.add(rowId);
+  console.warn(
+    `PR scan webhook: the stored secret of repository row ${rowId} cannot be opened ` +
+      '(the key material changed or the value is damaged); rotate it in Settings',
+  );
+}
+
+let warnedInstanceSecret = false;
+
+/** The instance-wide GITHUB_WEBHOOK_SECRET is gone; say so once instead of failing every delivery in silence. */
+function warnIgnoredInstanceSecretOnce(): void {
+  if (warnedInstanceSecret) return;
+  warnedInstanceSecret = true;
+  if (!process.env.GITHUB_WEBHOOK_SECRET?.trim()) return;
+  console.warn(
+    'GITHUB_WEBHOOK_SECRET is ignored: webhook secrets are per repository now; ' +
+      'mint secrets in Settings and update each GitHub webhook',
+  );
+}
+
 function ignored(reason: string): NextResponse {
   return NextResponse.json({ ok: true, ignored: reason });
 }
@@ -125,6 +155,7 @@ function claimedRepository(
  * verified the delivery.
  */
 export async function POST(req: NextRequest) {
+  warnIgnoredInstanceSecretOnce();
   if (!getWebhookSecretKey()) {
     // Fail closed: without a sealing key no stored secret can be opened.
     return NextResponse.json({ error: 'Webhook disabled' }, { status: 503 });
@@ -173,6 +204,7 @@ export async function POST(req: NextRequest) {
     const secret = candidate.webhookSecretEnc
       ? openWebhookSecret(candidate.webhookSecretEnc, candidate.id)
       : null;
+    if (candidate.webhookSecretEnc && secret === null) warnUnreadableOnce(candidate.id);
     if (secret && verifyGitHubSignature(rawBody, signature, secret)) verified.push(candidate);
   }
   // Secrets are random per row, so two rows verifying one body would mean one
@@ -223,8 +255,8 @@ export async function POST(req: NextRequest) {
   // spend another user's budget for the same repository.
   const repoLimit = prScanWebhookRepoRateLimiter.check(tracked.id);
   if (!repoLimit.allowed) return rateLimitedResponse(repoLimit);
-  // One user's rows together cannot spend more than a few repositories' share
-  // of the endpoint-wide budget, so a single tenant cannot exhaust it.
+  // One user's rows together are capped too, so one tenant cannot spend the
+  // endpoint-wide ceiling however many repositories they track.
   const userLimit = prScanWebhookUserRateLimiter.check(tracked.userId);
   if (!userLimit.allowed) return rateLimitedResponse(userLimit);
   const totalLimit = prScanWebhookTotalRateLimiter.check('all');

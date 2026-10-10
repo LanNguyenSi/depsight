@@ -94,4 +94,24 @@ describe('timing-safe signature comparison', () => {
     expect(res.status).toBe(202);
     expect(timingSafeEqualSpy).toHaveBeenCalledTimes(3);
   });
+
+  it('still performs exactly one comparison when no tracked row holds a secret', async () => {
+    // The dummy-secret HMAC keeps a delivery for an unknown repository as costly as any other.
+    repoFindManyMock.mockResolvedValue([]);
+
+    const res = await POST(
+      new NextRequest('http://localhost/api/webhooks/github', {
+        method: 'POST',
+        headers: {
+          'x-github-event': 'pull_request',
+          'x-github-delivery': 'dddddddd-0000-0000-0000-000000000002',
+          'x-hub-signature-256': sign('anything'),
+        },
+        body: BODY,
+      }),
+    );
+
+    expect(res.status).toBe(401);
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(1);
+  });
 });

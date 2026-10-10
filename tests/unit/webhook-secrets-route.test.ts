@@ -19,7 +19,7 @@ vi.mock('@/lib/prisma', () => ({
 
 import { GET } from '@/app/api/webhook-secrets/route';
 import { POST, DELETE } from '@/app/api/webhook-secrets/[repoId]/route';
-import { openWebhookSecret } from '@/lib/pr/webhook-secret';
+import { openWebhookSecret, sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import { webhookSecretRateLimiter, WEBHOOK_SECRET_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 import { NextRequest } from 'next/server';
 
@@ -89,6 +89,51 @@ describe('webhook secret routes', () => {
       expect(text).not.toContain('row-a2');
       expect(text).not.toContain('sealed-a-value');
       expect(JSON.parse(text).repos[0]).toMatchObject({ id: 'row-a', configured: true });
+    });
+
+    it('reports usable only for a secret that opens under the current key material', async () => {
+      table[0].webhookSecretEnc = sealWebhookSecret('s', 'row-a');
+      table.push({
+        id: 'row-a3',
+        userId: 'user-a',
+        fullName: 'acme/zeta',
+        tracked: true,
+        webhookSecretEnc: 'v1.AAAA.BBBB.CCCC',
+        webhookSecretRotatedAt: new Date('2026-02-02'),
+      });
+      table.push({
+        id: 'row-a4',
+        userId: 'user-a',
+        fullName: 'acme/beta',
+        tracked: true,
+        webhookSecretEnc: null,
+        webhookSecretRotatedAt: null,
+      });
+
+      const { repos } = (await (await GET()).json()) as {
+        repos: { id: string; configured: boolean; usable: boolean }[];
+      };
+      const byId = Object.fromEntries(repos.map((r) => [r.id, r]));
+      expect(byId['row-a']).toMatchObject({ configured: true, usable: true });
+      expect(byId['row-a3']).toMatchObject({ configured: true, usable: false });
+      expect(byId['row-a4']).toMatchObject({ configured: false, usable: false });
+    });
+
+    it('reports a secret sealed under other key material as configured but not usable', async () => {
+      table[0].webhookSecretEnc = sealWebhookSecret('s', 'row-a');
+      process.env.NEXTAUTH_SECRET = 'rotated-key-material';
+      const { repos } = (await (await GET()).json()) as {
+        repos: { id: string; configured: boolean; usable: boolean }[];
+      };
+      expect(repos[0]).toMatchObject({ id: 'row-a', configured: true, usable: false });
+    });
+
+    it('never puts the plaintext or the sealed value in the listing', async () => {
+      const sealed = sealWebhookSecret('plaintext-listing-secret', 'row-a');
+      table[0].webhookSecretEnc = sealed;
+      const text = JSON.stringify(await (await GET()).json());
+      expect(text).not.toContain(sealed);
+      expect(text).not.toContain('plaintext-listing-secret');
     });
   });
 

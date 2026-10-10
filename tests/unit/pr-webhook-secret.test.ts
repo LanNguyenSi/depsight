@@ -93,4 +93,40 @@ describe('webhook secret sealing', () => {
   it('derives a 32-byte key', () => {
     expect(getWebhookSecretKey()?.length).toBe(32);
   });
+
+  // Known-answer fixture: key material, derived key and one sealed value fixed
+  // here. A change to the key derivation (salt, info, hash) or to the stored
+  // format or the bound row id makes every secret already stored unreadable, so
+  // it must fail this test instead of passing a round trip with itself.
+  describe('known answer', () => {
+    const KEY_MATERIAL = 'known-answer-key-material';
+    const DERIVED_KEY_HEX = '52ab939b8d8a8d53c84855610158c7b920468f76466ee694c61fab43f953d50b';
+    const SEALED =
+      'v1.mgW8_xllz1-hxYLl.oJeiaYEPz63JokkV1DRrzA.Ydi019DNQMR2vTVsdpDtvnxGRVlim-vi1jBV7_-V1F9Dhy9ld5pj';
+    const PLAINTEXT = 'known-answer-plaintext-0123456789abcdef';
+
+    beforeEach(() => {
+      delete process.env.NEXTAUTH_SECRET;
+      process.env.WEBHOOK_SECRET_KEY = KEY_MATERIAL;
+    });
+
+    it('derives the fixed key from the fixed key material', () => {
+      expect(getWebhookSecretKey()?.toString('hex')).toBe(DERIVED_KEY_HEX);
+    });
+
+    it('opens the checked-in sealed value to the known plaintext for its row', () => {
+      expect(openWebhookSecret(SEALED, 'row-known')).toBe(PLAINTEXT);
+    });
+
+    it('does not open the checked-in sealed value for another row', () => {
+      expect(openWebhookSecret(SEALED, 'row-other')).toBeNull();
+    });
+
+    it('derives the same key from NEXTAUTH_SECRET when WEBHOOK_SECRET_KEY is unset', () => {
+      delete process.env.WEBHOOK_SECRET_KEY;
+      process.env.NEXTAUTH_SECRET = KEY_MATERIAL;
+      expect(getWebhookSecretKey()?.toString('hex')).toBe(DERIVED_KEY_HEX);
+      expect(openWebhookSecret(SEALED, 'row-known')).toBe(PLAINTEXT);
+    });
+  });
 });

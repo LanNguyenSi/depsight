@@ -150,12 +150,14 @@ describe('POST /api/webhooks/github', () => {
     prScanWebhookTotalRateLimiter.reset();
     prScanWebhookUserRateLimiter.reset();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     delete process.env.NEXTAUTH_SECRET;
     delete process.env.WEBHOOK_SECRET_KEY;
     delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
+    delete process.env.GITHUB_WEBHOOK_SECRET;
     vi.restoreAllMocks();
   });
 
@@ -204,16 +206,29 @@ describe('POST /api/webhooks/github', () => {
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 
-  it('ignores the removed instance-wide GITHUB_WEBHOOK_SECRET variable', async () => {
+  it('ignores the removed instance-wide GITHUB_WEBHOOK_SECRET variable, even when rows have their own secrets', async () => {
     process.env.GITHUB_WEBHOOK_SECRET = 'instance-wide';
-    try {
-      table = [row({ secret: null })];
-      const res = await POST(signed(payload(), { secret: 'instance-wide' }));
-      expect(res.status).toBe(401);
-      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-    } finally {
-      delete process.env.GITHUB_WEBHOOK_SECRET;
-    }
+    // The row holds its own secret, so a candidate exists and a fallback to the
+    // instance value would be reached; the instance value must verify nothing.
+    table = [row({ secret: SECRET })];
+    const res = await POST(signed(payload(), { secret: 'instance-wide' }));
+    expect(res.status).toBe(401);
+    expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+
+    // The row's own secret still works while the variable is set.
+    const own = await POST(signed(payload({ number: 43 })));
+    expect(own.status).toBe(202);
+  });
+
+  it('ignores GITHUB_WEBHOOK_SECRET for several users with their own secrets', async () => {
+    process.env.GITHUB_WEBHOOK_SECRET = 'instance-wide';
+    table = [
+      row({ id: 'row-a', userId: 'user-a', secret: SECRET, user: { githubToken: 'tok-A' }, createdAt: 1 }),
+      row({ id: 'row-b', userId: 'user-b', secret: SECRET_B, user: { githubToken: 'tok-B' }, createdAt: 2 }),
+    ];
+    const res = await POST(signed(payload(), { secret: 'instance-wide' }));
+    expect(res.status).toBe(401);
+    expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 
   it('answers 401 without a scan for a missing signature', async () => {
@@ -429,7 +444,7 @@ describe('POST /api/webhooks/github', () => {
   });
 
   it('answers 429 once the endpoint-wide budget is spent', async () => {
-    for (let i = 0; i < 600; i++) prScanWebhookTotalRateLimiter.check('all');
+    for (let i = 0; i < PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR; i++) prScanWebhookTotalRateLimiter.check('all');
     const res = await POST(signed());
     expect(res.status).toBe(429);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
@@ -541,6 +556,19 @@ describe('POST /api/webhooks/github', () => {
 
       const asA = await POST(signed(payload({ number: 1 }), { secret: SECRET }));
       expect(asA.status).toBe(202);
+    });
+
+    it('scans under the oldest row when two rows verify one body', async () => {
+      // Two rows holding the same secret both verify; the oldest acts, alone.
+      // The newer row is listed first so the choice cannot come from array order.
+      table = [
+        row({ id: 'row-new', userId: 'user-new', secret: SECRET, user: { githubToken: 'tok-new' }, createdAt: 9 }),
+        row({ id: 'row-old', userId: 'user-old', secret: SECRET, user: { githubToken: 'tok-old' }, createdAt: 1 }),
+      ];
+      const res = await POST(signed());
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-old', 'acme', 'api', 42, 'user-old');
     });
 
     it('bounds how many candidate rows one delivery makes the server try', async () => {
@@ -706,6 +734,72 @@ describe('POST /api/webhooks/github', () => {
       expect(res.status).toBe(202);
       expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
       expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
+    });
+  });
+
+  describe('operator warnings', () => {
+    // The warn-once state is module state, so each test loads a fresh copy of the route.
+    async function freshPost() {
+      vi.resetModules();
+      return (await import('@/app/api/webhooks/github/route')).POST;
+    }
+    const warnCalls = () => (console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+
+    it('warns once per row id when a stored secret does not open, naming only the row', async () => {
+      const post = await freshPost();
+      table = [{ ...row({ id: 'row-broken', secret: SECRET }), webhookSecretEnc: 'v1.AAAA.BBBB.CCCC' }];
+      await post(signed(payload(), { secret: 'whatever' }));
+      await post(signed(payload({ number: 43 }), { secret: 'whatever' }));
+
+      const warnings = warnCalls().filter((m) => m.includes('row-broken'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).not.toContain('v1.AAAA.BBBB.CCCC');
+      expect(warnings[0]).not.toContain('whatever');
+      expect(warnings[0]).not.toContain('acme');
+    });
+
+    it('warns separately for a second unreadable row', async () => {
+      const post = await freshPost();
+      table = [
+        { ...row({ id: 'row-x', secret: SECRET, createdAt: 1 }), webhookSecretEnc: 'broken' },
+        { ...row({ id: 'row-y', userId: 'user-2', secret: SECRET, createdAt: 2 }), webhookSecretEnc: 'broken' },
+      ];
+      await post(signed());
+      await post(signed(payload({ number: 43 })));
+      expect(warnCalls().filter((m) => m.includes('row-x'))).toHaveLength(1);
+      expect(warnCalls().filter((m) => m.includes('row-y'))).toHaveLength(1);
+    });
+
+    it('does not warn for a readable secret or for a row without one', async () => {
+      const post = await freshPost();
+      table = [row({ id: 'row-ok', secret: SECRET })];
+      await post(signed());
+      table = [row({ id: 'row-none', secret: null })];
+      await post(signed(payload({ number: 43 })));
+      expect(warnCalls()).toEqual([]);
+    });
+
+    it('warns once, without the value, that a set GITHUB_WEBHOOK_SECRET is ignored', async () => {
+      process.env.GITHUB_WEBHOOK_SECRET = 'instance-wide-value';
+      const post = await freshPost();
+      await post(signed());
+      await post(signed(payload({ number: 43 })));
+
+      const warnings = warnCalls().filter((m) => m.includes('GITHUB_WEBHOOK_SECRET'));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('ignored');
+      expect(warnings[0]).toContain('Settings');
+      expect(warnCalls().join('\n')).not.toContain('instance-wide-value');
+    });
+
+    it('does not warn about GITHUB_WEBHOOK_SECRET when it is unset or blank', async () => {
+      delete process.env.GITHUB_WEBHOOK_SECRET;
+      const unset = await freshPost();
+      await unset(signed());
+      process.env.GITHUB_WEBHOOK_SECRET = '  ';
+      const blank = await freshPost();
+      await blank(signed(payload({ number: 43 })));
+      expect(warnCalls().filter((m) => m.includes('GITHUB_WEBHOOK_SECRET'))).toEqual([]);
     });
   });
 });
