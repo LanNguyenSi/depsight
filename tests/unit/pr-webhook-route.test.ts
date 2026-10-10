@@ -15,10 +15,12 @@ vi.mock('@/lib/pr/pr-scanner', () => ({ scanPRAndComment: scanPRAndCommentMock }
 vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock } } }));
 
 import { POST } from '@/app/api/webhooks/github/route';
+import { githubHookRanges } from '@/lib/github-hook-ranges';
 import { MAX_BODY_BYTES, prWebhookDeliveries } from '@/lib/pr/webhook-security';
 import {
   prScanWebhookPreAuthIpRateLimiter,
   prScanWebhookPreAuthTotalRateLimiter,
+  prScanWebhookPreAuthHookRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
@@ -169,6 +171,13 @@ describe('POST /api/webhooks/github', () => {
     prScanWebhookUserRateLimiter.reset();
     prScanWebhookPreAuthIpRateLimiter.reset();
     prScanWebhookPreAuthTotalRateLimiter.reset();
+    prScanWebhookPreAuthHookRateLimiter.reset();
+    // The route may start a background fetch of GitHub's hook ranges; keep it off the network.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ hooks: ['2001:db8::/32'] }))),
+    );
+    githubHookRanges.reset();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
@@ -179,6 +188,7 @@ describe('POST /api/webhooks/github', () => {
     delete process.env.GITHUB_WEBHOOK_SCAN_FORKS;
     delete process.env.GITHUB_WEBHOOK_SECRET;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('runs the PR scan with the tracking user token for a signed opened event', async () => {
@@ -392,7 +402,9 @@ describe('POST /api/webhooks/github', () => {
   it('never fetches a URL from the payload', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     await POST(signed());
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // The only outbound request the route may start is the lookup of GitHub's hook ranges.
+    const others = fetchSpy.mock.calls.filter((c) => String(c[0]) !== 'https://api.github.com/meta');
+    expect(others).toEqual([]);
   });
 
   it.each([
