@@ -12,7 +12,7 @@
 | `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
 | `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron) |
-| `GITHUB_WEBHOOK_SECRET` | optional | (none) | Shared secret of the GitHub pull-request webhook. Unset or blank disables `POST /api/webhooks/github` (it answers 503 and scans nothing). Generate with `openssl rand -hex 32` |
+| `WEBHOOK_SECRET_KEY` | optional | (none) | Key material that seals the per-repository PR-scan webhook secrets at rest (AES-256-GCM). Unset or blank falls back to `NEXTAUTH_SECRET`. Set it before the first secret is created and keep it: changing it (or `NEXTAUTH_SECRET`, when this is unset) makes every stored webhook secret unreadable until it is rotated. Generate with `openssl rand -base64 32` |
 
 ## GitHub OAuth (optional)
 
@@ -28,17 +28,25 @@ make dev
 
 depsight can scan a pull request automatically and post (or update) its CVE comment, instead of only on the dashboard's PR scan button. It uses the same scan as `POST /api/pr-scan`.
 
-1. Set `GITHUB_WEBHOOK_SECRET` in `.env` (for example the output of `openssl rand -hex 32`) and restart the app. While it is unset the endpoint answers 503.
-2. In the GitHub repository (or organisation) go to Settings, Webhooks, Add webhook:
-   - **Payload URL:** `<NEXTAUTH_URL>/api/webhooks/github`
+Every tracked repository has its own webhook secret, minted by the user who tracks it. There is no instance-wide secret and no environment variable that enables the endpoint: a repository without a secret simply cannot be scanned through it.
+
+1. In depsight open **Settings**, section **PR scan webhook**, and press **Generate secret** next to the repository (it must be tracked). The secret is shown once; copy it now. depsight keeps only a sealed copy and cannot show it again.
+2. In the GitHub **repository** go to Settings, Webhooks, Add webhook:
+   - **Payload URL:** `<NEXTAUTH_URL>/api/webhooks/github` (the settings section shows it)
    - **Content type:** `application/json`
-   - **Secret:** the same value as `GITHUB_WEBHOOK_SECRET`
-   - **Events:** "Let me select individual events", then only **Pull requests**. GitHub also sends a `ping` event when the webhook is created; depsight answers it 200.
-3. The repository must be tracked in depsight. A delivery for any other repository is answered 200 and ignored.
+   - **Secret:** the secret from step 1
+   - **Events:** "Let me select individual events", then only **Pull requests**. GitHub also sends a `ping` event when the webhook is created; depsight answers it 200 once the secret is right.
+3. To rotate, press **Rotate** in settings, then paste the new secret into the GitHub webhook; the old secret stops verifying at once. **Remove** clears the secret, and deliveries for that repository then scan nothing. Both are the repository's tracking user only.
 
-**Trust model.** `GITHUB_WEBHOOK_SECRET` is instance-wide. Whoever holds it can sign deliveries for any repository tracked by any depsight user, and depsight then scans the pull request and posts the comment with that tracking user's GitHub token. On a multi-user instance keep the secret operator-only and add the webhook only to repositories the operator controls; otherwise leave the variable unset (the endpoint stays disabled) or use it on a single-user instance only. On a public repository the comment is public, and fork pull request authors can trigger a scan.
+Use a repository-level webhook. An organisation-level webhook has one secret for all its repositories, which cannot match the per-repository secrets (and its `ping` names no repository), so its deliveries are rejected.
 
-Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reopened` does not); every other event or action is answered 200 and ignored. The scan runs in the background after a `202` answer and authenticates with the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token, as the auto-scan cron does). See [API reference](api.md#github-pull-request-webhook) for the status codes, the replay protection and the limits.
+**Trust model.** A delivery is verified against the secret of the tracked repository it names (`repository.owner.login` and `repository.name` in the payload): depsight looks up the users who track that repository and have a secret, checks the `X-Hub-Signature-256` HMAC against each of those secrets in constant time, and acts only for the user whose secret verifies. The scan and the comment use that user's GitHub token. If several users track one repository each has their own secret, and a delivery signed with one user's secret never starts a scan for another. Whoever holds a secret can therefore make depsight scan pull requests of that one repository under its owner's token, and nothing else. Every rejection (unsigned, wrong signature, repository not tracked, no secret set) is the same `401`, so the endpoint does not reveal which repositories are tracked. On a public repository the comment is public, and fork pull request authors can trigger a scan.
+
+**Secrets at rest.** HMAC verification needs the plaintext, so the secret cannot be hashed. It is stored sealed with AES-256-GCM, with a key derived (HKDF-SHA256) from `WEBHOOK_SECRET_KEY`, or from `NEXTAUTH_SECRET` when that is unset, and bound to its repository row so a sealed value copied onto another row does not open. If neither variable is set the endpoint answers `503`. A secret that no longer opens (the key material changed) never verifies; generate a new one. Setting a dedicated `WEBHOOK_SECRET_KEY` before the first secret is created keeps webhook secrets independent of session-secret rotation.
+
+**Upgrading from the instance-wide secret.** Earlier unreleased builds read `GITHUB_WEBHOOK_SECRET`. That variable is gone and is ignored: remove it from `.env`, generate a secret per repository as above, and update each GitHub webhook. The deploy needs nothing else: the change adds two nullable columns to `Repo`, which the unchanged `prisma db push` applies without a prompt.
+
+Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reopened` does not); every other event or action is answered 200 and ignored. The scan runs in the background after a `202` answer. See [API reference](api.md#github-pull-request-webhook) for the status codes, the replay protection and the limits.
 
 ## Make targets
 

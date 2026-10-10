@@ -1,16 +1,18 @@
 // Route-level tests for POST /api/webhooks/github (inbound GitHub webhook).
-// No session: the HMAC is the only authentication. The scanner and prisma are
-// mocked; signature, rate limiter and replay guard run for real.
+// No session: the HMAC under the tracked repository row's own secret is the
+// only authentication. The scanner and prisma are mocked (prisma as a small
+// in-memory table that applies the route's filters); sealing, signature, rate
+// limiter and replay guard run for real.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 
-const { scanPRAndCommentMock, repoFindFirstMock } = vi.hoisted(() => ({
+const { scanPRAndCommentMock, repoFindManyMock } = vi.hoisted(() => ({
   scanPRAndCommentMock: vi.fn(),
-  repoFindFirstMock: vi.fn(),
+  repoFindManyMock: vi.fn(),
 }));
 
 vi.mock('@/lib/pr/pr-scanner', () => ({ scanPRAndComment: scanPRAndCommentMock }));
-vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findFirst: repoFindFirstMock } } }));
+vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock } } }));
 
 import { POST } from '@/app/api/webhooks/github/route';
 import { MAX_BODY_BYTES, prWebhookDeliveries } from '@/lib/pr/webhook-security';
@@ -19,10 +21,66 @@ import {
   prScanWebhookTotalRateLimiter,
   PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR,
 } from '@/lib/rate-limit';
+import { sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import { NextRequest } from 'next/server';
 
 const SECRET = 'test-webhook-secret';
-const TRACKED = { userId: 'user-1', user: { githubToken: 'tok-123' } };
+const SECRET_B = 'user-b-webhook-secret';
+
+interface Row {
+  id: string;
+  userId: string;
+  owner: string;
+  name: string;
+  tracked: boolean;
+  webhookSecretEnc: string | null;
+  user: { githubToken: string };
+  createdAt: number;
+}
+
+function row(over: Partial<Row> & { secret?: string | null } = {}): Row {
+  const { secret, ...rest } = over;
+  const id = rest.id ?? 'repo-row-1';
+  const plain = secret === undefined ? SECRET : secret;
+  return {
+    id,
+    userId: 'user-1',
+    owner: 'acme',
+    name: 'api',
+    tracked: true,
+    webhookSecretEnc: plain === null ? null : sealWebhookSecret(plain, id),
+    user: { githubToken: 'tok-123' },
+    createdAt: 1,
+    ...rest,
+  };
+}
+
+let table: Row[] = [];
+
+/** Applies the filters the route passes, so a wrong filter shows up as a wrong result. */
+function fakeFindMany(args: {
+  where: {
+    owner: string;
+    name: string;
+    tracked: boolean;
+    webhookSecretEnc: { not: null };
+    user: { githubToken: { not: string } };
+  };
+  take?: number;
+}): Row[] {
+  const w = args.where;
+  return table
+    .filter(
+      (r) =>
+        r.owner === w.owner &&
+        r.name === w.name &&
+        r.tracked === w.tracked &&
+        r.webhookSecretEnc !== null &&
+        r.user.githubToken !== w.user.githubToken.not,
+    )
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, args.take);
+}
 
 let deliveryCounter = 0;
 
@@ -74,11 +132,13 @@ function signed(body: Record<string, unknown> = payload(), opts: Opts = {}): Nex
 
 describe('POST /api/webhooks/github', () => {
   beforeEach(() => {
-    process.env.GITHUB_WEBHOOK_SECRET = SECRET;
+    process.env.NEXTAUTH_SECRET = 'test-nextauth-secret';
+    delete process.env.WEBHOOK_SECRET_KEY;
     scanPRAndCommentMock.mockReset();
     scanPRAndCommentMock.mockResolvedValue({ commented: true, newCVECount: 0, commentUrl: null });
-    repoFindFirstMock.mockReset();
-    repoFindFirstMock.mockResolvedValue(TRACKED);
+    table = [row()];
+    repoFindManyMock.mockReset();
+    repoFindManyMock.mockImplementation(async (args) => fakeFindMany(args));
     prWebhookDeliveries.reset();
     prScanWebhookRepoRateLimiter.reset();
     prScanWebhookTotalRateLimiter.reset();
@@ -86,7 +146,8 @@ describe('POST /api/webhooks/github', () => {
   });
 
   afterEach(() => {
-    delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.NEXTAUTH_SECRET;
+    delete process.env.WEBHOOK_SECRET_KEY;
     vi.restoreAllMocks();
   });
 
@@ -94,27 +155,24 @@ describe('POST /api/webhooks/github', () => {
     const res = await POST(signed());
 
     expect(res.status).toBe(202);
-    expect(repoFindFirstMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ owner: 'acme', name: 'api', tracked: true }),
-      }),
-    );
     expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
     expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-123', 'acme', 'api', 42, 'user-1');
   });
 
-  it('looks the repository up among tracked rows of users with a stored token, oldest first', async () => {
+  it('looks the repository up among tracked rows that hold a secret, of users with a stored token', async () => {
     await POST(signed());
 
-    expect(repoFindFirstMock).toHaveBeenCalledTimes(1);
-    const args = repoFindFirstMock.mock.calls[0][0];
+    expect(repoFindManyMock).toHaveBeenCalledTimes(1);
+    const args = repoFindManyMock.mock.calls[0][0];
     expect(args.where).toEqual({
       owner: 'acme',
       name: 'api',
       tracked: true,
+      webhookSecretEnc: { not: null },
       user: { githubToken: { not: '' } },
     });
     expect(args.orderBy).toEqual({ createdAt: 'asc' });
+    expect(args.take).toBeGreaterThan(0);
   });
 
   it('also scans a synchronize event', async () => {
@@ -123,26 +181,38 @@ describe('POST /api/webhooks/github', () => {
     expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
   });
 
-  it('is disabled with 503 and never scans when the secret is unset', async () => {
-    delete process.env.GITHUB_WEBHOOK_SECRET;
+  it('is disabled with 503 and never scans when no sealing key is configured', async () => {
+    delete process.env.NEXTAUTH_SECRET;
     const res = await POST(signed());
     expect(res.status).toBe(503);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-    expect(repoFindFirstMock).not.toHaveBeenCalled();
+    expect(repoFindManyMock).not.toHaveBeenCalled();
   });
 
-  it('is disabled when the secret is blank, even for a request signed with the blank secret', async () => {
-    process.env.GITHUB_WEBHOOK_SECRET = '   ';
-    const res = await POST(signed(payload(), { secret: '   ' }));
+  it('is disabled when the only key material is blank', async () => {
+    process.env.NEXTAUTH_SECRET = '   ';
+    const res = await POST(signed());
     expect(res.status).toBe(503);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores the removed instance-wide GITHUB_WEBHOOK_SECRET variable', async () => {
+    process.env.GITHUB_WEBHOOK_SECRET = 'instance-wide';
+    try {
+      table = [row({ secret: null })];
+      const res = await POST(signed(payload(), { secret: 'instance-wide' }));
+      expect(res.status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.GITHUB_WEBHOOK_SECRET;
+    }
   });
 
   it('answers 401 without a scan for a missing signature', async () => {
     const res = await POST(signed(payload(), { signature: null }));
     expect(res.status).toBe(401);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-    expect(repoFindFirstMock).not.toHaveBeenCalled();
+    expect(repoFindManyMock).not.toHaveBeenCalled();
   });
 
   it('answers 401 without a scan for a signature made with another secret', async () => {
@@ -219,14 +289,13 @@ describe('POST /api/webhooks/github', () => {
   });
 
   it('answers a signed ping 200 without a scan', async () => {
-    const res = await POST(signed({ zen: 'Keep it logically awesome.' }, { event: 'ping' }));
+    const res = await POST(signed({ zen: 'Keep it logically awesome.', repository: payload().repository }, { event: 'ping' }));
     expect(res.status).toBe(200);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-    expect(repoFindFirstMock).not.toHaveBeenCalled();
   });
 
   it('answers an unsigned ping 401', async () => {
-    const res = await POST(signed({ zen: 'x' }, { event: 'ping', signature: null }));
+    const res = await POST(signed({ zen: 'x', repository: payload().repository }, { event: 'ping', signature: null }));
     expect(res.status).toBe(401);
   });
 
@@ -245,22 +314,34 @@ describe('POST /api/webhooks/github', () => {
       const res = await POST(signed(payload({ action })));
       expect(res.status).toBe(200);
       expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-      expect(repoFindFirstMock).not.toHaveBeenCalled();
     },
   );
 
-  it('ignores a repository depsight does not track, with no scan', async () => {
-    repoFindFirstMock.mockResolvedValue(null);
+  it.each([
+    ['an untracked repository', () => [row({ tracked: false })]],
+    ['a repository with no secret set', () => [row({ secret: null })]],
+    ['an unknown repository', () => [row({ owner: 'other', name: 'thing' })]],
+    ['a user without a stored GitHub token', () => [row({ user: { githubToken: '' } })]],
+    ['an empty table', () => []],
+  ])('answers 401 with no scan and no oracle for %s', async (_name, rows) => {
+    table = rows();
     const res = await POST(signed());
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, ignored: 'repository not tracked' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'Invalid signature' });
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 
-  it('does not consume the replay guard or the rate limit for an untracked repository', async () => {
-    repoFindFirstMock.mockResolvedValueOnce(null);
+  it('answers a wrong signature and an unknown repository with the same body', async () => {
+    const wrong = await POST(signed(payload(), { secret: 'wrong' }));
+    table = [];
+    const unknown = await POST(signed());
+    expect(wrong.status).toBe(unknown.status);
+    expect(await wrong.json()).toEqual(await unknown.json());
+  });
+
+  it('does not consume the replay guard or the rate limit for a rejected delivery', async () => {
     const delivery = 'eeeeeeee-1111-2222-3333-ffffffffffff';
-    await POST(signed(payload(), { delivery }));
+    await POST(signed(payload(), { delivery, secret: 'wrong' }));
     const res = await POST(signed(payload(), { delivery }));
     expect(res.status).toBe(202);
   });
@@ -275,25 +356,32 @@ describe('POST /api/webhooks/github', () => {
     ['owner with a slash', { repository: { name: 'api', owner: { login: 'acme/evil' } } }],
     ['repo with a slash', { repository: { name: '../api', owner: { login: 'acme' } } }],
     ['missing repository', { repository: undefined }],
+  ])('answers 401 without a lookup for %s (nothing to verify against)', async (_name, over) => {
+    const res = await POST(signed(payload(over)));
+    expect(res.status).toBe(401);
+    expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    expect(repoFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ['string number', { number: '42' }],
     ['zero number', { number: 0 }],
     ['fractional number', { number: 1.5 }],
-  ])('answers 400 for %s', async (_name, over) => {
+  ])('answers 400 for a signed %s', async (_name, over) => {
     const res = await POST(signed(payload(over)));
     expect(res.status).toBe(400);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
-    expect(repoFindFirstMock).not.toHaveBeenCalled();
   });
 
-  it('answers 400 for a signed body that is not JSON', async () => {
+  it('answers 401 for a body that is not JSON, even when signed', async () => {
     const res = await POST(makeRequest('not json'));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 
-  it('answers 400 for a signed JSON null body', async () => {
+  it('answers 401 for a JSON null body', async () => {
     const res = await POST(makeRequest('null'));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
   });
 
   it.each([null, '', 'x', 'bad id with spaces and more than enough characters'])(
@@ -337,5 +425,121 @@ describe('POST /api/webhooks/github', () => {
     const res = await POST(signed());
     expect(res.status).toBe(429);
     expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+  });
+
+  describe('several users, one secret each', () => {
+    const rowA = () =>
+      row({ id: 'row-a', userId: 'user-a', secret: SECRET, user: { githubToken: 'tok-A' }, createdAt: 1 });
+    const rowB = () =>
+      row({ id: 'row-b', userId: 'user-b', secret: SECRET_B, user: { githubToken: 'tok-B' }, createdAt: 2 });
+
+    it('scans under the user whose secret signed the delivery, for a repository both track', async () => {
+      table = [rowA(), rowB()];
+
+      const asB = await POST(signed(payload(), { secret: SECRET_B }));
+      expect(asB.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
+
+      scanPRAndCommentMock.mockClear();
+      const asA = await POST(signed(payload({ number: 43 }), { secret: SECRET }));
+      expect(asA.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-A', 'acme', 'api', 43, 'user-a');
+    });
+
+    it("never lets user B's secret trigger a scan for a repository only user A tracks", async () => {
+      table = [
+        rowA(),
+        row({
+          id: 'row-b',
+          userId: 'user-b',
+          owner: 'bobs',
+          name: 'own-repo',
+          secret: SECRET_B,
+          user: { githubToken: 'tok-B' },
+        }),
+      ];
+
+      // B signs a delivery that names A's repository with B's own secret.
+      const res = await POST(signed(payload(), { secret: SECRET_B }));
+
+      expect(res.status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    });
+
+    it("never lets user B's secret act for user A's row when A's row is the only candidate", async () => {
+      table = [rowA()];
+      const res = await POST(signed(payload(), { secret: SECRET_B }));
+      expect(res.status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('scans nothing when the signature matches neither tracking user', async () => {
+      table = [rowA(), rowB()];
+      const res = await POST(signed(payload(), { secret: 'a third secret' }));
+      expect(res.status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    });
+
+    it("does not open a sealed secret copied onto another user's row", async () => {
+      const a = rowA();
+      // B's row carries A's sealed value: sealed for row-a, so it cannot open under row-b.
+      const forged = { ...rowB(), webhookSecretEnc: a.webhookSecretEnc };
+      table = [forged];
+      const res = await POST(signed(payload(), { secret: SECRET }));
+      expect(res.status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    });
+
+    it('treats a corrupt stored secret as not verifying, without throwing', async () => {
+      table = [{ ...rowA(), webhookSecretEnc: 'not-a-sealed-value' }, rowB()];
+      const res = await POST(signed(payload(), { secret: SECRET_B }));
+      expect(res.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-B', 'acme', 'api', 42, 'user-b');
+    });
+
+    it('stops verifying a secret once it is removed or the row is untracked', async () => {
+      table = [{ ...rowA(), webhookSecretEnc: null }];
+      expect((await POST(signed())).status).toBe(401);
+      table = [{ ...rowA(), tracked: false }];
+      expect((await POST(signed())).status).toBe(401);
+      expect(scanPRAndCommentMock).not.toHaveBeenCalled();
+    });
+
+    it("scopes the replay guard per row: B cannot burn A's delivery id or body", async () => {
+      table = [rowA(), rowB()];
+      const delivery = 'bbbbbbbb-1111-2222-3333-aaaaaaaaaaaa';
+
+      // B pre-registers the id that GitHub will later use for A's real delivery.
+      const first = await POST(signed(payload(), { delivery, secret: SECRET_B }));
+      expect(first.status).toBe(202);
+
+      // Same id, same body, signed by A: still A's first delivery.
+      const second = await POST(signed(payload(), { delivery, secret: SECRET }));
+      expect(second.status).toBe(202);
+      expect(scanPRAndCommentMock).toHaveBeenCalledTimes(2);
+      expect(scanPRAndCommentMock).toHaveBeenLastCalledWith('tok-A', 'acme', 'api', 42, 'user-a');
+    });
+
+    it("scopes the rate limit per row: B exhausting its budget leaves A's untouched", async () => {
+      table = [rowA(), rowB()];
+      for (let i = 0; i < PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR; i++) {
+        const res = await POST(signed(payload({ number: i + 1 }), { secret: SECRET_B }));
+        expect(res.status).toBe(202);
+      }
+      const limited = await POST(signed(payload({ number: 9999 }), { secret: SECRET_B }));
+      expect(limited.status).toBe(429);
+
+      const asA = await POST(signed(payload({ number: 1 }), { secret: SECRET }));
+      expect(asA.status).toBe(202);
+    });
+
+    it('bounds how many candidate rows one delivery makes the server try', async () => {
+      table = [rowA(), rowB()];
+      await POST(signed(payload(), { secret: SECRET_B }));
+      const args = repoFindManyMock.mock.calls[0][0];
+      expect(args.take).toBeLessThanOrEqual(50);
+    });
   });
 });

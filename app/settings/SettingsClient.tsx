@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { useLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
+import { PrWebhookSecrets } from '@/components/settings/PrWebhookSecrets';
 
 type TokenScope = 'READ' | 'WRITE';
 
@@ -646,6 +647,9 @@ export function SettingsClient() {
             {slackRemoveError && <div className="text-xs text-red-400">{slackRemoveError}</div>}
           </form>
         </section>
+
+        {/* PR scan webhook secrets */}
+        <PrWebhookSecrets />
       </div>
       <ConfirmModal
         open={revokeConfirmId !== null}

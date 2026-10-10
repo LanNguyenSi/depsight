@@ -100,7 +100,7 @@ A complete list of what depsight does today, beyond the headline value props in 
 ## Workflow integrations
 
 - **GitHub OAuth** login and repository discovery.
-- **PR integration** with automatic CVE comments: the dashboard's PR scan button, or a GitHub `pull_request` webhook (HMAC-verified, `opened` and `synchronize`) that scans tracked repositories automatically. Setup is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional).
+- **PR integration** with automatic CVE comments: the dashboard's PR scan button, or a GitHub `pull_request` webhook (HMAC-verified under a per-repository secret, `opened` and `synchronize`) that scans tracked repositories automatically. Setup is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional).
 - **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories. Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings; the message lists the most severe advisories first and adds a Mittel or Niedrig count field when MEDIUM or LOW rows are listed. The `scan.completed` payload carries `degradedReason` (null unless the scan was degraded, see Known limitations).
 - **Dependabot integration:** status check, enable per-repo, bulk-enable across all repos.
 

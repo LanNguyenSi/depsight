@@ -1,9 +1,9 @@
 # API reference
 
-All endpoints except `GET /api/health`, the NextAuth sign-in handlers under `/api/auth/*` and the GitHub webhook `POST /api/webhooks/github` (authenticated by its HMAC signature, see [GitHub pull-request webhook](#github-pull-request-webhook)) require authentication. Which credentials an endpoint accepts depends on the route:
+All endpoints except `GET /api/health`, the NextAuth sign-in handlers under `/api/auth/*` and the GitHub webhook `POST /api/webhooks/github` (authenticated by its per-repository HMAC signature, see [GitHub pull-request webhook](#github-pull-request-webhook)) require authentication. Which credentials an endpoint accepts depends on the route:
 
 - **Session or Bearer token:** `/api/scan`, `/api/license`, `/api/deps`, `/api/history`, `/api/overview`, `/api/sbom`, `/api/repos`, `/api/repos/tracked-ids`, `/api/policies`, `/api/policies/[id]`, `/api/policies/evaluate`, `/api/advisory-state`, `/api/ci/analytics/*` and `/api/ci/sync` accept either a NextAuth session (the dashboard) or an `Authorization: Bearer dsat_...` API token (headless agents such as the MCP server).
-- **Session only:** `/api/export`, `/api/repos/sync`, `/api/dependabot`, `/api/dependabot/check`, `/api/dependabot/enable-all`, `/api/pr-scan`, `/api/me`, `/api/tokens` and `/api/tokens/[id]`, `/api/webhooks` and `/api/webhooks/[id]`, and `/api/slack` reject a Bearer token with 401. Token management is session-only on purpose: a `dsat_` token can never mint, list, or revoke tokens.
+- **Session only:** `/api/export`, `/api/repos/sync`, `/api/dependabot`, `/api/dependabot/check`, `/api/dependabot/enable-all`, `/api/pr-scan`, `/api/me`, `/api/tokens` and `/api/tokens/[id]`, `/api/webhooks` and `/api/webhooks/[id]`, `/api/webhook-secrets` and `/api/webhook-secrets/[repoId]`, and `/api/slack` reject a Bearer token with 401. Token management is session-only on purpose: a `dsat_` token can never mint, list, or revoke tokens.
 
 A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` accepts an optional `scope` body field, defaulting to `WRITE`); a `READ` token gets 403 on `POST /api/policies`, `PUT`/`DELETE /api/policies/[id]`, `POST /api/ci/sync`, `PUT`/`DELETE /api/advisory-state`, and the three scan-triggering POSTs (`/api/scan`, `/api/license`, `/api/deps`); all other Bearer-capable endpoints work with either scope. A session always has full access.
 
@@ -31,7 +31,7 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `GET` | `/api/dependabot/check` | Check which repos have Dependabot disabled |
 | `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot for the caller's tracked repos among the given `repoIds` (body: `{ repoIds }`) |
 | `POST` | `/api/ci/sync` | Sync GitHub Actions run data into the CI Health analytics (session or `WRITE` Bearer token; optional body `{ repoId }`, omit to sync all tracked repos); rate limited, see [Rate limits](#rate-limits) |
-| `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: scans the PR and posts or updates its CVE comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC, see [GitHub pull-request webhook](#github-pull-request-webhook) |
+| `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: scans the PR and posts or updates its CVE comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC under the secret of the tracked repository it names, see [GitHub pull-request webhook](#github-pull-request-webhook) |
 | `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
 
 ## Rate limits
@@ -51,25 +51,33 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 ## GitHub pull-request webhook
 
-`POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body under `GITHUB_WEBHOOK_SECRET`, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time.
+`POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time, under the webhook secret of a user who tracks the repository the payload names.
 
-**Trust model.** `GITHUB_WEBHOOK_SECRET` is one secret for the whole instance, not one per repository or per user. Whoever holds it can sign a delivery for any repository that any depsight user tracks, and depsight then scans that pull request and posts the comment with the GitHub token of the user who tracks the repository. Treat the secret as operator-only on a multi-user instance, and configure the webhook only on repositories the operator controls (or set the secret only on a single-user instance). On a public repository the comment is public, and an author of a fork pull request can trigger the scan, because GitHub sends the `opened` and `synchronize` deliveries for those pull requests too.
+**Secrets.** Each tracked repository row carries its own secret, minted and rotated by its owner (session only):
+
+| Method and path | Purpose |
+|-----------------|---------|
+| `GET /api/webhook-secrets` | The caller's tracked repositories with `configured` and `rotatedAt`; never the secret |
+| `POST /api/webhook-secrets/[repoId]` | Mint the secret, or rotate it (the old one stops verifying at once). The response `{ secret, rotatedAt, repository }` is the only time the plaintext is shown (`Cache-Control: no-store`). `404` for a repository the caller does not own, `409` for an untracked one, `503` without sealing key material, `429` over 60 calls per hour |
+| `DELETE /api/webhook-secrets/[repoId]` | Remove the secret; `404` for a repository the caller does not own |
+
+**Trust model.** depsight looks up the tracked repositories named by the payload (`repository.owner.login`, `repository.name`) that have a secret, tries the signature against each candidate's secret (at most 25 rows, constant-time compare, no early exit), and acts only for the row whose secret verifies, with that user's GitHub token. A secret therefore only ever authorises scans of its own repository under its own owner: when users A and B both track a repository, a delivery signed with B's secret scans under B and never under A, and B's secret signed over a payload naming a repository only A tracks verifies against nothing. There is no instance-wide secret. Unsigned, wrongly signed, unknown-repository, untracked-repository and no-secret deliveries all get the same `401`, so the answer does not reveal which repositories are tracked. On a public repository the comment is public, and an author of a fork pull request can trigger the scan, because GitHub sends the `opened` and `synchronize` deliveries for those pull requests too.
 
 | Status | When |
 |--------|------|
-| `202` | Signed `opened` or `synchronize` delivery for a tracked repository; the scan runs in the background (GitHub allows a delivery 10 seconds) |
-| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, or a replayed delivery |
-| `400` | Signed delivery with an invalid JSON body, an invalid owner, repository name or PR number, or a missing or malformed `X-GitHub-Delivery` header |
-| `401` | Missing, malformed or wrong signature (a signature of the wrong length included) |
+| `202` | Verified `opened` or `synchronize` delivery; the scan runs in the background (GitHub allows a delivery 10 seconds) |
+| `200` | Verified delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), or a replayed delivery |
+| `400` | Verified delivery with an invalid pull request number or a missing or malformed `X-GitHub-Delivery` header |
+| `401` | Nothing verified: missing, malformed or wrong signature (wrong length included), a body that is not JSON or names no valid repository, a repository that is not tracked or has no secret |
 | `413` | Body over 1 MiB, rejected without buffering the rest |
 | `429` | Rate limit, with a `Retry-After` header |
-| `503` | `GITHUB_WEBHOOK_SECRET` unset or blank: the endpoint is disabled and scans nothing |
+| `503` | No sealing key material (`WEBHOOK_SECRET_KEY` and `NEXTAUTH_SECRET` both unset or blank): the endpoint is disabled and scans nothing |
 
-Only the owner, repository name and PR number of the payload are used; no URL from the payload is ever fetched. The scan uses the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token). A repository tracked by several users is scanned once per delivery, under that one user.
+Only the PR number and action of a verified payload are used (and the owner and repository name for the lookup); no URL from the payload is ever fetched. The scan uses the repository, owner and GitHub token of the verified row.
 
-**Replay protection.** A delivery is remembered for 24 hours under its `X-GitHub-Delivery` id and, because that header is not covered by the signature, also under the SHA-256 of its body; a second delivery with either key is answered `200` and ignored. A delivery whose scan fails is forgotten again so GitHub can redeliver it. The memory is bounded (30 000 keys, which is two keys for each of the 600 deliveries per hour the rate limit admits, over the 25 fixed hourly windows a 24-hour memory can span; oldest dropped first) and lives in the app process: a restart clears it, and several instances would each keep their own, which matches the single-instance deployment. The cost of a miss is one repeated scan that rewrites the same PR comment, bounded by the rate limit.
+**Replay protection.** A delivery is remembered for 24 hours under its `X-GitHub-Delivery` id and, because that header is not covered by the signature, also under the SHA-256 of its body; a second delivery with either key for the same tracking row is answered `200` and ignored. The keys are scoped to the verified row, so one user cannot make another user's delivery look like a duplicate. A delivery whose scan fails is forgotten again so GitHub can redeliver it. The memory is bounded (30 000 keys, which is two keys for each of the 600 deliveries per hour the rate limit admits, over the 25 fixed hourly windows a 24-hour memory can span; oldest dropped first) and lives in the app process: a restart clears it, and several instances would each keep their own, which matches the single-instance deployment. The cost of a miss is one repeated scan that rewrites the same PR comment, bounded by the rate limit.
 
-**Rate limit.** Only a signed delivery for a tracked repository counts: 60 per repository and hour, and 600 per hour for the whole endpoint (fixed window, in the app process like the limits above). Unsigned requests and ignored deliveries do not count; there is no per-IP limit, since an unsigned request costs one capped read and one HMAC.
+**Rate limit.** Only a delivery verified against a tracked row counts: 60 per tracking row (one budget per user and repository) and hour, and 600 per hour for the whole endpoint (fixed window, in the app process like the limits above). Rejected and ignored deliveries do not count. There is no per-IP limit: a request without a well-formed signature costs one capped read, and one with a well-formed signature costs one JSON parse, one indexed lookup and at most 25 HMACs.
 
 ## MCP server
 

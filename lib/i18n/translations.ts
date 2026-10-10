@@ -359,6 +359,25 @@ const de = {
   'ci.health.shaRetry': 'SHA-Retry-Muster ({count})',
   'ci.health.flakyFailPct': '{pct}% Fehlerrate',
 
+  // PR scan webhook secrets (settings)
+  'settings.prwh.title': 'PR-Scan-Webhook',
+  'settings.prwh.desc': 'Jedes Repository hat sein eigenes Webhook-Secret. Trage es in GitHub unter Settings, Webhooks ein (Payload URL und Content type application/json, Ereignis Pull requests).',
+  'settings.prwh.payloadUrl': 'Payload URL',
+  'settings.prwh.empty': 'Keine verfolgten Repositories.',
+  'settings.prwh.loadError': 'Webhook-Secrets konnten nicht geladen werden.',
+  'settings.prwh.actionError': 'Aktion fehlgeschlagen.',
+  'settings.prwh.configured': 'Secret gesetzt',
+  'settings.prwh.notConfigured': 'Kein Secret',
+  'settings.prwh.rotatedOn': 'Erzeugt am',
+  'settings.prwh.generate': 'Secret erzeugen',
+  'settings.prwh.rotate': 'Rotieren',
+  'settings.prwh.remove': 'Entfernen',
+  'settings.prwh.working': 'Bitte warten…',
+  'settings.prwh.revealTitle': 'Webhook-Secret',
+  'settings.prwh.revealWarning': 'Kopiere es jetzt in das GitHub-Webhook. Es wird nur dieses eine Mal angezeigt.',
+  'settings.prwh.rotateConfirm': 'Das alte Secret gilt sofort nicht mehr. Aktualisiere danach das Webhook in GitHub.',
+  'settings.prwh.removeConfirm': 'Lieferungen für dieses Repository lösen danach keinen Scan mehr aus.',
+
   // Pagination
   'pagination.prev': 'Zurück',
   'pagination.next': 'Weiter',
@@ -729,6 +748,25 @@ const en = {
   'ci.health.failPct': '{pct}% fail',
   'ci.health.shaRetry': 'SHA-retry pattern ({count})',
   'ci.health.flakyFailPct': '{pct}% fail rate',
+
+  // PR scan webhook secrets (settings)
+  'settings.prwh.title': 'PR scan webhook',
+  'settings.prwh.desc': 'Each repository has its own webhook secret. Enter it in GitHub under Settings, Webhooks (payload URL, content type application/json, event Pull requests).',
+  'settings.prwh.payloadUrl': 'Payload URL',
+  'settings.prwh.empty': 'No tracked repositories.',
+  'settings.prwh.loadError': 'Could not load webhook secrets.',
+  'settings.prwh.actionError': 'The action failed.',
+  'settings.prwh.configured': 'Secret set',
+  'settings.prwh.notConfigured': 'No secret',
+  'settings.prwh.rotatedOn': 'Created',
+  'settings.prwh.generate': 'Generate secret',
+  'settings.prwh.rotate': 'Rotate',
+  'settings.prwh.remove': 'Remove',
+  'settings.prwh.working': 'Please wait…',
+  'settings.prwh.revealTitle': 'Webhook secret',
+  'settings.prwh.revealWarning': 'Copy it into the GitHub webhook now. It is shown only this once.',
+  'settings.prwh.rotateConfirm': 'The old secret stops working at once. Update the webhook in GitHub afterwards.',
+  'settings.prwh.removeConfirm': 'Deliveries for this repository will no longer start a scan.',
 
   // Pagination
   'pagination.prev': 'Previous',

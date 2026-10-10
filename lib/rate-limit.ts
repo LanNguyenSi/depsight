@@ -113,13 +113,14 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 });
 
 // POST /api/webhooks/github is unauthenticated apart from its HMAC, so only a
-// verified delivery for a tracked repository reaches these limiters. Each
-// accepted delivery starts a PR scan that spends the tracking user's GitHub
-// quota: one budget per repository, plus one for the whole endpoint.
+// delivery verified against a tracked repository row's own secret reaches these
+// limiters. Each accepted delivery starts a PR scan that spends the tracking
+// user's GitHub quota: one budget per tracked repository row, plus one for the
+// whole endpoint.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
 export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 600;
 
-/** POST /api/webhooks/github, keyed by `owner/repo`. */
+/** POST /api/webhooks/github, keyed by the verified Repo row id (one budget per tracking user). */
 export const prScanWebhookRepoRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
@@ -127,6 +128,17 @@ export const prScanWebhookRepoRateLimiter = createRateLimiter({
 /** POST /api/webhooks/github, one shared key for every repository. */
 export const prScanWebhookTotalRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+
+// POST /api/webhook-secrets/[repoId] mints (or rotates) a webhook secret. It is
+// cheap, so the limit only stops a looping caller; one per repository a user
+// sets up fits comfortably.
+export const WEBHOOK_SECRET_LIMIT_PER_HOUR = 60;
+
+/** POST /api/webhook-secrets/[repoId], keyed by user id. */
+export const webhookSecretRateLimiter = createRateLimiter({
+  limit: WEBHOOK_SECRET_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
 });
 

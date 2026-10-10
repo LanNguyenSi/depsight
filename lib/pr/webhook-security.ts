@@ -33,6 +33,11 @@ export function verifyGitHubSignature(
   return timingSafeEqual(provided, expected);
 }
 
+/** True when `signatureHeader` has the `sha256=<64 hex>` shape; says nothing about validity. */
+export function hasWellFormedSignature(signatureHeader: string | null): boolean {
+  return signatureHeader !== null && SIGNATURE_PATTERN.test(signatureHeader);
+}
+
 /**
  * Reads the request body as raw bytes, stopping as soon as more than
  * `maxBytes` have arrived. Returns null when the cap is exceeded, so an
