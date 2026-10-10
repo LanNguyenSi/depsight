@@ -19,6 +19,9 @@ export const dynamic = 'force-dynamic';
  * `available` says key material is present at all (the condition under which
  * minting does not answer 503); without it no secret opens, so the page shows
  * an operator notice instead of telling every user to rotate.
+ *
+ * `scanForks` is the row's own fork setting (null = follows the instance
+ * default, which `scanForksDefault` reports).
  */
 export async function GET() {
   const session = await auth();
@@ -27,17 +30,25 @@ export async function GET() {
   const rows = await prisma.repo.findMany({
     where: { userId: session.user.id, tracked: true },
     orderBy: { fullName: 'asc' },
-    select: { id: true, fullName: true, webhookSecretEnc: true, webhookSecretRotatedAt: true },
+    select: {
+      id: true,
+      fullName: true,
+      webhookSecretEnc: true,
+      webhookSecretRotatedAt: true,
+      webhookScanForks: true,
+    },
   });
 
   return NextResponse.json({
     available: getWebhookSecretKey() !== null,
+    scanForksDefault: process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true',
     repos: rows.map((row) => ({
       id: row.id,
       fullName: row.fullName,
       configured: row.webhookSecretEnc !== null,
       usable: row.webhookSecretEnc !== null && openWebhookSecret(row.webhookSecretEnc, row.id) !== null,
       rotatedAt: row.webhookSecretRotatedAt,
+      scanForks: row.webhookScanForks,
     })),
   });
 }
