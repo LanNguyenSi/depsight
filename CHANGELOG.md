@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Rust scans read `Cargo.lock`: every `[[package]]` resolved from crates.io (including transitive crates) is reported with its exact locked version. Workspace members and `path` dependencies (no `source`), `git+` sources and alternate registries are skipped because they cannot be looked up on crates.io. Within a directory the lockfile is read before `Cargo.toml`, so its exact version wins the existing root-first dedupe over a version requirement; a repo scanned without a manifest list also tries the root `Cargo.lock`. Tracker task 7478e2c2.
 - Java scans read Gradle build files (`build.gradle`, `build.gradle.kts`): dependencies declared in `implementation`, `api`, `compileOnly`, `runtimeOnly` and `testImplementation`, in call and map notation, are reported when their version is written literally. Interpolated coordinates, catalog, platform and dynamic versions, and declarations inside constraints blocks are skipped rather than guessed. Gradle and pom dependencies share the existing root-first dedupe, and a repo scanned without a manifest list also tries the root `build.gradle` and `build.gradle.kts`. Tracker task cbf3912e.
 
 ### Security

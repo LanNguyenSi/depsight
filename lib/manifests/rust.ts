@@ -11,7 +11,75 @@ export interface CargoDep {
   inheritsWorkspace?: boolean;
 }
 
-const DEFAULT_PATHS = ['Cargo.toml'];
+const DEFAULT_PATHS = ['Cargo.toml', 'Cargo.lock'];
+
+const CRATES_IO_SOURCES = new Set([
+  'registry+https://github.com/rust-lang/crates.io-index',
+  'sparse+https://index.crates.io/',
+]);
+
+function isCargoLockPath(path: string): boolean {
+  return (path.split('/').pop() ?? path) === 'Cargo.lock';
+}
+
+/**
+ * Parse a Cargo.lock into the exact crates.io versions it resolves. Each
+ * `[[package]]` table carries `name`, `version` and, for anything not local,
+ * `source`. Entries are skipped, never guessed, when they cannot be looked up
+ * on crates.io:
+ *   - no `source` (the workspace's own member crates and `path` dependencies)
+ *   - `git+...` sources
+ *   - alternate registries (`registry+`/`sparse+` URLs other than crates.io)
+ * Transitive packages are included: the lockfile resolves the full graph. A
+ * crate locked at several versions yields one entry per version.
+ */
+export function parseCargoLock(content: string): CargoDep[] {
+  const deps: CargoDep[] = [];
+  let inPackage = false;
+  let name: string | null = null;
+  let version: string | null = null;
+  let source: string | null = null;
+
+  const flush = () => {
+    if (inPackage && name && version && source && CRATES_IO_SOURCES.has(source)) {
+      deps.push({ name, version });
+    }
+    name = version = source = null;
+  };
+
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (line.startsWith('[')) {
+      flush();
+      inPackage = line === '[[package]]';
+      continue;
+    }
+    if (!inPackage || !line || line.startsWith('#')) continue;
+    const kv = /^(name|version|source)\s*=\s*"([^"]*)"/.exec(line);
+    if (!kv) continue;
+    if (kv[1] === 'name') name = kv[2];
+    else if (kv[1] === 'version') version = kv[2];
+    else source = kv[2];
+  }
+  flush();
+
+  return deps;
+}
+
+/**
+ * Order manifests so that, within one directory, Cargo.lock comes before its
+ * Cargo.toml: the lockfile's exact version wins the first-seen dedupe over the
+ * manifest's version requirement. Directory order (root-first) is preserved.
+ */
+function lockBeforeManifest<T extends { path: string }>(items: T[]): T[] {
+  const dirOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/') + 1));
+  const dirs: string[] = [];
+  for (const it of items) if (!dirs.includes(dirOf(it.path))) dirs.push(dirOf(it.path));
+  return dirs.flatMap((d) => {
+    const inDir = items.filter((it) => dirOf(it.path) === d);
+    return [...inDir.filter((it) => isCargoLockPath(it.path)), ...inDir.filter((it) => !isCargoLockPath(it.path))];
+  });
+}
 
 /**
  * Parse a single dependency line into name + version, or null if it is not a
@@ -115,8 +183,9 @@ export function parseCargoWorkspaceDeps(content: string): CargoDep[] {
 }
 
 /**
- * Read every discovered Cargo.toml (workspace root + member crates) and union
- * their dependencies. Deduped by crate name with first-seen (root-first) wins.
+ * Read every discovered Cargo.toml (workspace root + member crates) and
+ * Cargo.lock and union their dependencies (see `parseCargoLock` for what a
+ * lockfile contributes). Deduped by crate name with first-seen (root-first) wins.
  * A virtual workspace root (only `[workspace]`, no `[dependencies]`) contributes
  * nothing of its own. Pure path-only `{ path = "../x" }` member deps carry no
  * version and are skipped by the parser.
@@ -135,12 +204,13 @@ export async function collectRustDeps(
   manifestPaths: string[] = [],
 ): Promise<CargoDep[]> {
   const paths = manifestPaths.length > 0 ? manifestPaths : DEFAULT_PATHS;
-  const contents = await fetchManifestContents(octokit, owner, repo, paths);
+  const contents = lockBeforeManifest(await fetchManifestContents(octokit, owner, repo, paths));
 
   // Pass 1: collect the workspace dependency versions (the table is usually in
   // the workspace root, but is gathered from every manifest defensively).
   const workspaceVersions = new Map<string, string>();
-  for (const { content } of contents) {
+  for (const { path, content } of contents) {
+    if (isCargoLockPath(path)) continue;
     for (const dep of parseCargoWorkspaceDeps(content)) {
       if (!workspaceVersions.has(dep.name)) workspaceVersions.set(dep.name, dep.version);
     }
@@ -148,8 +218,9 @@ export async function collectRustDeps(
 
   // Pass 2: union member deps, resolving workspace-inherited versions.
   const byName = new Map<string, CargoDep>();
-  for (const { content } of contents) {
-    for (const dep of parseCargoToml(content)) {
+  for (const { path, content } of contents) {
+    const parsed = isCargoLockPath(path) ? parseCargoLock(content) : parseCargoToml(content);
+    for (const dep of parsed) {
       const version = dep.inheritsWorkspace
         ? (workspaceVersions.get(dep.name) ?? '')
         : dep.version;
