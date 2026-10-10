@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { openWebhookSecret } from '@/lib/pr/webhook-secret';
+import { getWebhookSecretKey, openWebhookSecret } from '@/lib/pr/webhook-secret';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +16,9 @@ export const dynamic = 'force-dynamic';
  * current key material. A configured secret that is not usable (the key
  * material changed, or the value is damaged) never verifies a delivery, so the
  * settings page tells the user to rotate it instead of leaving it looking fine.
+ * `available` says key material is present at all (the condition under which
+ * minting does not answer 503); without it no secret opens, so the page shows
+ * an operator notice instead of telling every user to rotate.
  */
 export async function GET() {
   const session = await auth();
@@ -28,6 +31,7 @@ export async function GET() {
   });
 
   return NextResponse.json({
+    available: getWebhookSecretKey() !== null,
     repos: rows.map((row) => ({
       id: row.id,
       fullName: row.fullName,

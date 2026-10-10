@@ -24,7 +24,7 @@ import {
   PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR,
   PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR,
 } from '@/lib/rate-limit';
-import { sealWebhookSecret } from '@/lib/pr/webhook-secret';
+import { sealWebhookSecret, unreadableSecretWarning, IGNORED_INSTANCE_SECRET_WARNING } from '@/lib/pr/webhook-secret';
 import { NextRequest } from 'next/server';
 
 const SECRET = 'test-webhook-secret';
@@ -743,6 +743,7 @@ describe('POST /api/webhooks/github', () => {
       vi.resetModules();
       return (await import('@/app/api/webhooks/github/route')).POST;
     }
+    const allWarnCalls = () => (console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls;
     const warnCalls = () => (console.warn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
 
     it('warns once per row id when a stored secret does not open, naming only the row', async () => {
@@ -751,11 +752,9 @@ describe('POST /api/webhooks/github', () => {
       await post(signed(payload(), { secret: 'whatever' }));
       await post(signed(payload({ number: 43 }), { secret: 'whatever' }));
 
-      const warnings = warnCalls().filter((m) => m.includes('row-broken'));
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).not.toContain('v1.AAAA.BBBB.CCCC');
-      expect(warnings[0]).not.toContain('whatever');
-      expect(warnings[0]).not.toContain('acme');
+      // The complete call list: one call, exactly the template, with the row id only.
+      expect(allWarnCalls()).toEqual([[unreadableSecretWarning('row-broken')]]);
+      expect(unreadableSecretWarning('row-broken')).toContain('row-broken');
     });
 
     it('warns separately for a second unreadable row', async () => {
@@ -766,8 +765,7 @@ describe('POST /api/webhooks/github', () => {
       ];
       await post(signed());
       await post(signed(payload({ number: 43 })));
-      expect(warnCalls().filter((m) => m.includes('row-x'))).toHaveLength(1);
-      expect(warnCalls().filter((m) => m.includes('row-y'))).toHaveLength(1);
+      expect(allWarnCalls()).toEqual([[unreadableSecretWarning('row-x')], [unreadableSecretWarning('row-y')]]);
     });
 
     it('does not warn for a readable secret or for a row without one', async () => {
@@ -785,11 +783,8 @@ describe('POST /api/webhooks/github', () => {
       await post(signed());
       await post(signed(payload({ number: 43 })));
 
-      const warnings = warnCalls().filter((m) => m.includes('GITHUB_WEBHOOK_SECRET'));
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('ignored');
-      expect(warnings[0]).toContain('Settings');
-      expect(warnCalls().join('\n')).not.toContain('instance-wide-value');
+      expect(allWarnCalls()).toEqual([[IGNORED_INSTANCE_SECRET_WARNING]]);
+      expect(IGNORED_INSTANCE_SECRET_WARNING).not.toContain('instance-wide-value');
     });
 
     it('does not warn about GITHUB_WEBHOOK_SECRET when it is unset or blank', async () => {

@@ -81,3 +81,16 @@ export function openWebhookSecret(sealed: string, repoId: string): string | null
     return null;
   }
 }
+
+/** Operator warning for a stored secret that does not open; names only the row id, never key material or the stored value. */
+export function unreadableSecretWarning(rowId: string): string {
+  return (
+    `PR scan webhook: the stored secret of repository row ${rowId} cannot be opened ` +
+    '(the key material changed or the value is damaged); rotate it in Settings'
+  );
+}
+
+/** Operator warning that the removed instance-wide variable is still set; never includes its value. */
+export const IGNORED_INSTANCE_SECRET_WARNING =
+  'GITHUB_WEBHOOK_SECRET is ignored: webhook secrets are per repository now; ' +
+  'mint secrets in Settings and update each GitHub webhook';

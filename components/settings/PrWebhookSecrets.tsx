@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
+import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
 
 interface RepoRow {
   id: string;
@@ -25,6 +26,7 @@ interface Pending {
 export function PrWebhookSecrets() {
   const { t, locale } = useLocale();
   const [repos, setRepos] = useState<RepoRow[]>([]);
+  const [available, setAvailable] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -36,8 +38,9 @@ export function PrWebhookSecrets() {
     try {
       const res = await fetch('/api/webhook-secrets');
       if (!res.ok) throw new Error('load failed');
-      const data = (await res.json()) as { repos: RepoRow[] };
+      const data = (await res.json()) as { available?: boolean; repos: RepoRow[] };
       setRepos(data.repos);
+      setAvailable(data.available !== false);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -138,6 +141,11 @@ export function PrWebhookSecrets() {
         </div>
       )}
 
+      {!available && (
+        <div className="text-xs text-amber-400" role="alert">
+          {t['settings.prwh.unavailable']}
+        </div>
+      )}
       {loadError && <div className="text-xs text-red-400">{t['settings.prwh.loadError']}</div>}
       {actionError && <div className="text-xs text-red-400">{t['settings.prwh.actionError']}</div>}
 
@@ -162,7 +170,7 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
-                {repo.configured && !repo.usable && (
+                {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}
                   </div>

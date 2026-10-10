@@ -91,6 +91,17 @@ describe('webhook secret routes', () => {
       expect(JSON.parse(text).repos[0]).toMatchObject({ id: 'row-a', configured: true });
     });
 
+    it('reports available from the presence of key material, the condition the mint route 503s on', async () => {
+      expect((await (await GET()).json()).available).toBe(true);
+      process.env.NEXTAUTH_SECRET = '  ';
+      expect((await (await GET()).json()).available).toBe(false);
+      delete process.env.NEXTAUTH_SECRET;
+      expect((await (await GET()).json()).available).toBe(false);
+      process.env.WEBHOOK_SECRET_KEY = 'dedicated-key';
+      expect((await (await GET()).json()).available).toBe(true);
+      delete process.env.WEBHOOK_SECRET_KEY;
+    });
+
     it('reports usable only for a secret that opens under the current key material', async () => {
       table[0].webhookSecretEnc = sealWebhookSecret('s', 'row-a');
       table.push({

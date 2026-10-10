@@ -117,10 +117,12 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 // limiters. Each accepted delivery starts a PR scan that spends the tracking
 // user's own GitHub quota, so the per-row and per-user budgets are what bound
 // the scan load. The endpoint-wide budget is a ceiling that protects the
-// server, not a scan budget: verifying a delivery costs at most ~9 ms at the
-// 1 MiB body cap with 25 candidate rows (about 0.35 ms of HMAC per candidate
-// per MiB plus ~0.36 ms of JSON parse), so 3000 per hour is under 30 s of CPU
-// per hour for verification, while one user's rows can take at most 120 of it.
+// server, not a scan budget: it caps accepted deliveries (background scans and
+// replay-guard memory, ~25 MB at the cap), while one user's rows can take at
+// most 120 of it. It does not bound verification CPU: signature verification
+// (one JSON parse of up to 1 MiB, measured at about 8-9 ms for a crafted body,
+// plus up to 25 HMACs at about 0.35 ms per candidate per MiB) runs before any
+// limiter, and there is no per-IP limit.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
 export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 3000;
 // All of one user's tracked repositories together. Twice a single repository's

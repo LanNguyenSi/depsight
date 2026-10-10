@@ -9,7 +9,12 @@ import {
   readBodyCapped,
   verifyGitHubSignature,
 } from '@/lib/pr/webhook-security';
-import { getWebhookSecretKey, openWebhookSecret } from '@/lib/pr/webhook-secret';
+import {
+  getWebhookSecretKey,
+  openWebhookSecret,
+  unreadableSecretWarning,
+  IGNORED_INSTANCE_SECRET_WARNING,
+} from '@/lib/pr/webhook-secret';
 import {
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
@@ -72,10 +77,7 @@ const warnedUnreadableRows = new Set<string>();
 function warnUnreadableOnce(rowId: string): void {
   if (warnedUnreadableRows.has(rowId)) return;
   warnedUnreadableRows.add(rowId);
-  console.warn(
-    `PR scan webhook: the stored secret of repository row ${rowId} cannot be opened ` +
-      '(the key material changed or the value is damaged); rotate it in Settings',
-  );
+  console.warn(unreadableSecretWarning(rowId));
 }
 
 let warnedInstanceSecret = false;
@@ -85,10 +87,7 @@ function warnIgnoredInstanceSecretOnce(): void {
   if (warnedInstanceSecret) return;
   warnedInstanceSecret = true;
   if (!process.env.GITHUB_WEBHOOK_SECRET?.trim()) return;
-  console.warn(
-    'GITHUB_WEBHOOK_SECRET is ignored: webhook secrets are per repository now; ' +
-      'mint secrets in Settings and update each GitHub webhook',
-  );
+  console.warn(IGNORED_INSTANCE_SECRET_WARNING);
 }
 
 function ignored(reason: string): NextResponse {
