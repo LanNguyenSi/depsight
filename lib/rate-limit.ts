@@ -182,23 +182,39 @@ export const prScanWebhookTotalRateLimiter = createRateLimiter({
 // windows. Legitimate traffic is a few deliveries a minute from GitHub's hook
 // addresses, far below both figures. The ceiling is what still bounds the CPU
 // when the client address cannot be trusted (an app reached without the proxy,
-// where a caller can invent a new address per request): at the ceiling a
-// crafted body costs roughly 25 s of CPU a minute at most. The per-IP table holds
-// at most PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS windows; further addresses share one
-// overflow bucket.
+// where a caller can invent a new address per request, including addresses in
+// GitHub's hook ranges): the work such a caller can make the server do is
+// bounded by the ceiling and the hook budget together, 900 requests a minute.
+// At up to about 40 ms for a crafted body (30 ms of JSON parsing plus about
+// 9 ms for 25 HMACs, the figures in docs/api.md) that is roughly 36 s of CPU
+// a minute at most (the ceiling alone: 600 x 40 ms, roughly 25 s). The per-IP
+// table holds at most PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS windows; further
+// addresses share one overflow bucket.
 export const PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE = 60;
 export const PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE = 600;
 export const PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS = 10_000;
 // Requests whose trusted client address lies in GitHub's published hook ranges
 // (lib/github-hook-ranges.ts) are counted against this budget instead of the
-// ceiling above, so traffic from other addresses cannot spend it. They still
-// count against their own address first. Like the ceiling it bounds
+// ceiling above, so traffic from other addresses cannot spend it. Their
+// per-address windows live in a table of their own (below), so a non-GitHub
+// caller cannot fill it either. Like the ceiling the budget bounds
 // pre-verification work, so it adds to the worst case rather than replacing it.
 export const PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE = 300;
 const MINUTE_MS = 60 * 1000;
 
 /** POST /api/webhooks/github before verification, keyed by the trusted client address. */
 export const prScanWebhookPreAuthIpRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
+  windowMs: MINUTE_MS,
+  maxKeys: PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
+});
+/**
+ * POST /api/webhooks/github before verification, keyed by the trusted client
+ * address when it lies in GitHub's hook ranges. A table of its own, so keys of
+ * other addresses cannot fill it (or push these addresses into an overflow
+ * bucket); the cap is the same.
+ */
+export const prScanWebhookPreAuthHookIpRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
   windowMs: MINUTE_MS,
   maxKeys: PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,

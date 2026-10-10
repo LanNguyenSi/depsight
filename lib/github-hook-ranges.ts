@@ -15,7 +15,9 @@ import { cidrContains, parseAddress, parseCidr, type Cidr } from '@/lib/ip-cidr'
  * - at most one fetch is in flight, it is bounded by a timeout, and a fetch
  *   that failed is not retried before RETRY_MS has passed;
  * - ranges are refreshed once they are older than TTL_MS, and a set that could
- *   not be refreshed is dropped after STALE_MS.
+ *   not be refreshed is dropped after STALE_MS;
+ * - the response is read with a byte cap before it is parsed, and an entry
+ *   wider than a sanity floor (a /0, say) is dropped.
  */
 
 export const GITHUB_META_URL = 'https://api.github.com/meta';
@@ -29,6 +31,19 @@ export const HOOK_RANGES_RETRY_MS = 5 * 60 * 1000;
 export const HOOK_RANGES_FETCH_TIMEOUT_MS = 5000;
 /** GitHub publishes a few dozen hook ranges; a response with more is not trusted. */
 const MAX_RANGES = 500;
+/**
+ * The meta document is a few tens of KiB; a response larger than this (declared
+ * or read) is not parsed, so a hostile or broken answer cannot make the server
+ * buffer and parse an unbounded body.
+ */
+export const HOOK_RANGES_MAX_BODY_BYTES = 2 * 1024 * 1024;
+/**
+ * Sanity floor on a range's prefix length. An entry wider than this (a /0, or
+ * any block no webhook sender occupies) would put most of the Internet into the
+ * hook class, so it is dropped as if it were malformed.
+ */
+export const MIN_HOOK_PREFIX_IPV4 = 8;
+export const MIN_HOOK_PREFIX_IPV6 = 16;
 
 export interface HookRanges {
   /**
@@ -52,14 +67,50 @@ export interface HookRangesOptions {
   timeoutMs?: number;
 }
 
-/** The valid CIDRs of a meta response's `hooks` list, or null when there are none to use. */
+/**
+ * The text of a response body, read with a byte cap: refused when Content-Length
+ * declares more than `maxBytes`, and cancelled as soon as more than `maxBytes`
+ * have arrived, before anything is parsed.
+ */
+async function readTextCapped(res: Response, maxBytes: number): Promise<string> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('response too large');
+  }
+  if (!res.body) throw new Error('empty response');
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error('response too large');
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/** The usable CIDRs of a meta response's `hooks` list, or null when there are none to use. */
 function parseHooks(body: unknown): Cidr[] | null {
   const hooks = (body as { hooks?: unknown } | null)?.hooks;
   if (!Array.isArray(hooks) || hooks.length > MAX_RANGES) return null;
   const cidrs: Cidr[] = [];
   for (const entry of hooks) {
     const cidr = typeof entry === 'string' ? parseCidr(entry) : null;
-    if (cidr) cidrs.push(cidr);
+    if (!cidr) continue;
+    if (cidr.prefix < (cidr.family === 4 ? MIN_HOOK_PREFIX_IPV4 : MIN_HOOK_PREFIX_IPV6)) continue;
+    cidrs.push(cidr);
   }
   return cidrs.length > 0 ? cidrs : null;
 }
@@ -88,7 +139,7 @@ export function createHookRanges(options: HookRangesOptions = {}): HookRanges {
         headers: { accept: 'application/vnd.github+json', 'user-agent': 'depsight' },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const parsed = parseHooks(await res.json());
+      const parsed = parseHooks(JSON.parse(await readTextCapped(res, HOOK_RANGES_MAX_BODY_BYTES)));
       if (!parsed) throw new Error('no usable hooks ranges in the response');
       ranges = parsed;
       fetchedAt = now();

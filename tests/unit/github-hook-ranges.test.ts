@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   GITHUB_META_URL,
   HOOK_RANGES_FETCH_TIMEOUT_MS,
+  HOOK_RANGES_MAX_BODY_BYTES,
+  MIN_HOOK_PREFIX_IPV4,
+  MIN_HOOK_PREFIX_IPV6,
   HOOK_RANGES_RETRY_MS,
   HOOK_RANGES_STALE_MS,
   HOOK_RANGES_TTL_MS,
@@ -122,6 +125,34 @@ describe('createHookRanges', () => {
       });
     }
 
+    it('warns once and retries after the retry delay, not the TTL, when the response holds no valid range', async () => {
+      fetchMock.mockImplementation(async () => meta(['junk', '1.2.3.4', '1.2.3.4/99']));
+      const ranges = make();
+
+      await ranges.refresh();
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(String(vi.mocked(console.warn).mock.calls[0][0])).toContain('no usable hooks ranges');
+      expect(ranges.contains(IN_V4)).toBe(false);
+
+      fetchMock.mockClear();
+      clock += HOOK_RANGES_RETRY_MS - 1;
+      for (let i = 0; i < 50; i++) ranges.contains(IN_V4);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // A second unusable answer does not warn again; a good one is picked up right away.
+      clock += 1;
+      ranges.contains(IN_V4);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await ranges.refresh();
+      expect(console.warn).toHaveBeenCalledTimes(1);
+
+      fetchMock.mockImplementation(async () => meta(HOOKS));
+      clock += HOOK_RANGES_RETRY_MS;
+      ranges.contains(IN_V4);
+      await ranges.refresh();
+      expect(ranges.contains(IN_V4)).toBe(true);
+    });
+
     it('warns once per run of failures and again after a success', async () => {
       fetchMock.mockRejectedValue(new Error('down'));
       const ranges = make();
@@ -189,6 +220,95 @@ describe('createHookRanges', () => {
       expect(ranges.contains(IN_V4)).toBe(true);
       expect(ranges.contains('192.30.252.11')).toBe(false);
       expect(ranges.contains(IN_V6)).toBe(false);
+    });
+  });
+
+  describe('sanity floor on range width', () => {
+    it('drops a range that would cover most of the Internet, so 0.0.0.0/0 and ::/0 classify nothing', async () => {
+      fetchMock.mockImplementation(async () => meta(['0.0.0.0/0', '::/0']));
+      const ranges = make();
+      await ranges.refresh();
+
+      for (const ip of [IN_V4, IN_V6, OUT, '10.0.0.1', '2001:db8::1']) expect(ranges.contains(ip)).toBe(false);
+      expect(console.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the narrow entries of a response that also holds a /0', async () => {
+      fetchMock.mockImplementation(async () => meta(['0.0.0.0/0', ...HOOKS, '::/0']));
+      const ranges = make();
+      await ranges.refresh();
+
+      expect(ranges.contains(IN_V4)).toBe(true);
+      expect(ranges.contains(IN_V6)).toBe(true);
+      expect(ranges.contains(OUT)).toBe(false);
+      expect(ranges.contains('2001:db8::1')).toBe(false);
+    });
+
+    it('accepts the floor itself and rejects one bit wider', async () => {
+      fetchMock.mockImplementation(async () =>
+        meta([`10.0.0.0/${MIN_HOOK_PREFIX_IPV4}`, `11.0.0.0/${MIN_HOOK_PREFIX_IPV4 - 1}`, `3000::/${MIN_HOOK_PREFIX_IPV6}`, `4000::/${MIN_HOOK_PREFIX_IPV6 - 1}`]),
+      );
+      const ranges = make();
+      await ranges.refresh();
+
+      expect(ranges.contains('10.200.0.1')).toBe(true);
+      expect(ranges.contains('11.0.0.1')).toBe(false);
+      expect(ranges.contains('3000:1::1')).toBe(true);
+      expect(ranges.contains('4000::1')).toBe(false);
+    });
+  });
+
+  describe('size of the response', () => {
+    const valid = JSON.stringify({ hooks: HOOKS });
+    /** A valid meta document padded past the cap with an unrelated key. */
+    const padded = JSON.stringify({ hooks: HOOKS, pad: 'x'.repeat(HOOK_RANGES_MAX_BODY_BYTES) });
+
+    it('reads a body under the cap', async () => {
+      const ranges = make();
+      await ranges.refresh();
+      expect(ranges.contains(IN_V4)).toBe(true);
+    });
+
+    it('does not use a body that exceeds the cap, however it is valid otherwise', async () => {
+      expect(padded.length).toBeGreaterThan(HOOK_RANGES_MAX_BODY_BYTES);
+      fetchMock.mockImplementation(async () => new Response(padded));
+      const parse = vi.spyOn(JSON, 'parse');
+      const ranges = make();
+      await ranges.refresh();
+
+      expect(ranges.contains(IN_V4)).toBe(false);
+      expect(String(vi.mocked(console.warn).mock.calls[0][0])).toContain('too large');
+      expect(parse).not.toHaveBeenCalled();
+    });
+
+    it('stops reading a streamed body at the cap', async () => {
+      let sent = 0;
+      const chunk = new Uint8Array(256 * 1024).fill(0x20);
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          sent += chunk.byteLength;
+          controller.enqueue(chunk);
+        },
+      });
+      fetchMock.mockImplementation(async () => new Response(stream));
+      const ranges = make();
+      await ranges.refresh();
+
+      expect(ranges.contains(IN_V4)).toBe(false);
+      // The cap plus the read-ahead of the stream, never an unbounded body.
+      expect(sent).toBeLessThanOrEqual(HOOK_RANGES_MAX_BODY_BYTES + 4 * chunk.byteLength);
+    });
+
+    it('refuses a response whose Content-Length is over the cap without parsing it', async () => {
+      fetchMock.mockImplementation(
+        async () =>
+          new Response(valid, { headers: { 'content-length': String(HOOK_RANGES_MAX_BODY_BYTES + 1) } }),
+      );
+      const ranges = make();
+      await ranges.refresh();
+
+      expect(ranges.contains(IN_V4)).toBe(false);
+      expect(String(vi.mocked(console.warn).mock.calls[0][0])).toContain('too large');
     });
   });
 

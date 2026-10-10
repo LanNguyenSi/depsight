@@ -36,6 +36,13 @@ describe('parseAddress', () => {
     expect(parseAddress('1::ffff:102:304')?.family).toBe(6);
   });
 
+  it('keeps an IPv4-compatible IPv6 address (::a.b.c.d) as IPv6, not as the IPv4 address in its tail', () => {
+    expect(parseAddress('::192.30.252.1')?.family).toBe(6);
+    expect(inRange('192.30.252.0/22', '::192.30.252.1')).toBe(false);
+    // Only the ::ffff: prefix maps; the same tail with it still does.
+    expect(inRange('192.30.252.0/22', '::ffff:192.30.252.1')).toBe(true);
+  });
+
   it('rejects text that is not a plain address', () => {
     for (const bad of ['', 'junk', '1.2.3', '1.2.3.4.5', '256.1.1.1', '1::2::3', '::g', 'fe80::1%eth0']) {
       expect(parseAddress(bad), bad).toBeNull();

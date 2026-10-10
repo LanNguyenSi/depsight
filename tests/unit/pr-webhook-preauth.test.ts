@@ -22,12 +22,14 @@ import { sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import {
   prScanWebhookPreAuthIpRateLimiter,
   prScanWebhookPreAuthTotalRateLimiter,
+  prScanWebhookPreAuthHookIpRateLimiter,
   prScanWebhookPreAuthHookRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
   PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE,
   PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
+  PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
   PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
 } from '@/lib/rate-limit';
 
@@ -100,6 +102,7 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
     prScanWebhookPreAuthIpRateLimiter.reset();
     prScanWebhookPreAuthTotalRateLimiter.reset();
     prScanWebhookPreAuthHookRateLimiter.reset();
+    prScanWebhookPreAuthHookIpRateLimiter.reset();
     // The route may start a background fetch of GitHub's hook ranges; keep it off the network.
     vi.stubGlobal(
       'fetch',
@@ -458,12 +461,50 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
 
     it('still limits one hook address by its own per-address window', async () => {
       await loadHookRanges();
-      exhaustIp(GH_V4);
+      for (let i = 0; i < IP_LIMIT; i++) prScanWebhookPreAuthHookIpRateLimiter.check(GH_V4);
 
       expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
       // The refusal for the address spends neither shared budget.
       expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
       expect((await POST(request({ forwardedFor: '140.82.112.6' }))).status).toBe(202);
+    });
+
+    it('keeps the per-address windows of hook addresses apart from those of other addresses', async () => {
+      await loadHookRanges();
+
+      // Spending the general per-address window of an address does not touch the hook one.
+      exhaustIp(GH_V4);
+      expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(202);
+      expect(prScanWebhookPreAuthHookIpRateLimiter.check(GH_V4).remaining).toBe(IP_LIMIT - 2);
+    });
+
+    describe('when non-GitHub traffic fills the general per-address table', () => {
+      /** Live windows past the cap, then the shared overflow bucket spent, all from non-GitHub keys. */
+      function fillGeneralTable(): void {
+        for (let i = 0; i < PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS; i++) {
+          prScanWebhookPreAuthIpRateLimiter.check(`filler-${i}`);
+        }
+        for (let i = 0; i < IP_LIMIT; i++) prScanWebhookPreAuthIpRateLimiter.check(`overflow-${i}`);
+      }
+
+      it('still accepts a hook-range delivery, while a new non-GitHub address is refused', async () => {
+        await loadHookRanges();
+        fillGeneralTable();
+
+        // Control: an address outside the ranges meets the shared overflow bucket and is refused.
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        // A hook-range delivery has a table of its own.
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(202);
+        expect((await POST(request({ forwardedFor: GH_V6 }))).status).toBe(200);
+      });
+
+      it('refuses the same delivery when its address is not classified as a hook address (control)', async () => {
+        vi.mocked(fetch).mockRejectedValue(new Error('meta unreachable'));
+        await githubHookRanges.refresh();
+        fillGeneralTable();
+
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+      });
     });
 
     it('classifies by the trusted address, not by an entry the caller wrote to the left', async () => {
@@ -491,6 +532,32 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
       expect((await POST(request({ forwardedFor: `${GH_V4}, ${GOOD_IP}, 10.1.1.1` }))).status).toBe(429);
       // Too short a chain: unknown, never a hook address.
       expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+    });
+
+    describe('when no proxy hop is trusted (WEBHOOK_TRUSTED_PROXY_HOPS=0)', () => {
+      it('does not classify a hook address written to X-Forwarded-For, fetches nothing, and counts it against the ceiling', async () => {
+        process.env.WEBHOOK_TRUSTED_PROXY_HOPS = '0';
+
+        // Ranges not loaded yet: a classification attempt would start the fetch.
+        expect((await POST(request({ forwardedFor: GH_V4, signed: false }))).status).toBe(401);
+        expect(fetch).not.toHaveBeenCalled();
+        expect(prScanWebhookPreAuthTotalRateLimiter.check('all').remaining).toBe(TOTAL_LIMIT - 2);
+        expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+      });
+
+      it('shares one unknown address and the ceiling even when the ranges are known', async () => {
+        await loadHookRanges();
+        vi.mocked(fetch).mockClear();
+        process.env.WEBHOOK_TRUSTED_PROXY_HOPS = '0';
+        exhaustTotal();
+
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+        expect((await POST(request({ forwardedFor: `${GOOD_IP}, ${GH_V4}` }))).status).toBe(429);
+        expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+        expect(prScanWebhookPreAuthHookIpRateLimiter.check(GH_V4).remaining).toBe(IP_LIMIT - 1);
+        expect(prScanWebhookPreAuthIpRateLimiter.check('unknown').remaining).toBe(IP_LIMIT - 3);
+        expect(fetch).not.toHaveBeenCalled();
+      });
     });
 
     it('treats a request without a trusted address as non-GitHub', async () => {
