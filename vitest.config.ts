@@ -285,6 +285,22 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Inbound GitHub webhook (unauthenticated apart from its HMAC).
+        // Measured S/B/F/L: route 100/97.77/100/100, webhook-security
+        // 100/100/100/100 (absent from the text report). Floors set below
+        // measured.
+        'app/api/webhooks/github/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'lib/pr/webhook-security.ts': {
+          statements: 95,
+          branches: 85,
+          functions: 95,
+          lines: 95,
+        },
         'lib/github.ts': {
           statements: 95,
           branches: 95,

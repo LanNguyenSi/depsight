@@ -112,6 +112,24 @@ export const ciSyncAllRateLimiter = createRateLimiter({
   windowMs: HOUR_MS,
 });
 
+// POST /api/webhooks/github is unauthenticated apart from its HMAC, so only a
+// verified delivery for a tracked repository reaches these limiters. Each
+// accepted delivery starts a PR scan that spends the tracking user's GitHub
+// quota: one budget per repository, plus one for the whole endpoint.
+export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
+export const PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR = 600;
+
+/** POST /api/webhooks/github, keyed by `owner/repo`. */
+export const prScanWebhookRepoRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/webhooks/github, one shared key for every repository. */
+export const prScanWebhookTotalRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+
 /** Standard 429 response with a Retry-After header. */
 export function rateLimitedResponse(result: RateLimitResult): Response {
   return Response.json(

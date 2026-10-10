@@ -12,6 +12,7 @@
 | `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
 | `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron) |
+| `GITHUB_WEBHOOK_SECRET` | optional | (none) | Shared secret of the GitHub pull-request webhook. Unset or blank disables `POST /api/webhooks/github` (it answers 503 and scans nothing). Generate with `openssl rand -hex 32` |
 
 ## GitHub OAuth (optional)
 
@@ -22,6 +23,22 @@ cp .env.example .env
 # add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to .env
 make dev
 ```
+
+## PR scan webhook (optional)
+
+depsight can scan a pull request automatically and post (or update) its CVE comment, instead of only on the dashboard's PR scan button. It uses the same scan as `POST /api/pr-scan`.
+
+1. Set `GITHUB_WEBHOOK_SECRET` in `.env` (for example the output of `openssl rand -hex 32`) and restart the app. While it is unset the endpoint answers 503.
+2. In the GitHub repository (or organisation) go to Settings, Webhooks, Add webhook:
+   - **Payload URL:** `<NEXTAUTH_URL>/api/webhooks/github`
+   - **Content type:** `application/json`
+   - **Secret:** the same value as `GITHUB_WEBHOOK_SECRET`
+   - **Events:** "Let me select individual events", then only **Pull requests**. GitHub also sends a `ping` event when the webhook is created; depsight answers it 200.
+3. The repository must be tracked in depsight. A delivery for any other repository is answered 200 and ignored.
+
+**Trust model.** `GITHUB_WEBHOOK_SECRET` is instance-wide. Whoever holds it can sign deliveries for any repository tracked by any depsight user, and depsight then scans the pull request and posts the comment with that tracking user's GitHub token. On a multi-user instance keep the secret operator-only and add the webhook only to repositories the operator controls; otherwise leave the variable unset (the endpoint stays disabled) or use it on a single-user instance only. On a public repository the comment is public, and fork pull request authors can trigger a scan.
+
+Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reopened` does not); every other event or action is answered 200 and ignored. The scan runs in the background after a `202` answer and authenticates with the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token, as the auto-scan cron does). See [API reference](api.md#github-pull-request-webhook) for the status codes, the replay protection and the limits.
 
 ## Make targets
 
