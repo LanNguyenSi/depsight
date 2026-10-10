@@ -222,6 +222,14 @@ describe('nearestCargoLock with workspaces', () => {
     expect(nearestCargoLock('crates/a/Cargo.toml', locks, excl)).toBe('crates/a/Cargo.lock');
   });
 
+  it('stops an exclude prefix at a path segment', () => {
+    const excl = { members: ['crates/*'], exclude: ['crates/a'] };
+    expect(isWorkspaceMember(excl, 'crates/ab')).toBe(true);
+    const wsMap = new Map([['', excl]]);
+    const withAb = new Set(['Cargo.lock', 'crates/ab/Cargo.lock']);
+    expect(nearestCargoLock('crates/ab/Cargo.toml', withAb, wsMap)).toBe('Cargo.lock');
+  });
+
   it('returns null for a member whose workspace root has no lock, even if the member has its own', () => {
     const own = new Set(['crates/a/Cargo.lock']);
     expect(nearestCargoLock('crates/a/Cargo.toml', own, ws)).toBeNull();

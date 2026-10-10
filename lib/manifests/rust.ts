@@ -180,7 +180,8 @@ function globToRegExp(pattern: string): RegExp {
  *
  * Not modelled: a `[ workspace ]` header with inner spaces, `package.workspace`
  * pointers, Cargo's implicit membership of path dependencies, `**` as a whole
- * segment (it behaves like `*`), and character classes.
+ * segment (it behaves like `*`), character classes, and a non-glob `members`
+ * entry naming a parent directory overriding `exclude` (Cargo allows that).
  */
 export function isWorkspaceMember(ws: CargoWorkspace, memberDir: string): boolean {
   if (!ws.members.some((p) => globToRegExp(p).test(memberDir))) return false;
