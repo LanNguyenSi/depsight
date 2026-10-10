@@ -120,7 +120,7 @@ export const ciSyncAllRateLimiter = createRateLimiter({
 // server, not a scan budget: it caps accepted deliveries (background scans and
 // replay-guard memory, ~25 MB at the cap), while one user's rows can take at
 // most 120 of it. It does not bound verification CPU: signature verification
-// (one JSON parse of up to 1 MiB, measured at about 8-9 ms for a crafted body,
+// (one JSON parse of up to 1 MiB, measured at roughly 10-30 ms for a crafted body,
 // plus up to 25 HMACs at about 0.35 ms per candidate per MiB) runs before any
 // limiter, and there is no per-IP limit.
 export const PR_SCAN_WEBHOOK_REPO_LIMIT_PER_HOUR = 60;
