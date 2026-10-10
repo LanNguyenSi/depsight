@@ -11,7 +11,7 @@
 | `NEXTAUTH_URL` | yes | `http://localhost:3000` | Public base URL of the app |
 | `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
 | `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
-| `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron) |
+| `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron). A whole number from 1 to 35791 (the largest delay a Node timer holds); unset or blank uses 60. Any other value (0, negative, non-numeric, fractional, larger than 35791) stops the server at startup with an error instead of being clamped |
 | `GITHUB_WEBHOOK_SECRET` | optional | (none) | Shared secret of the GitHub pull-request webhook. Unset or blank disables `POST /api/webhooks/github` (it answers 503 and scans nothing). Generate with `openssl rand -hex 32` |
 | `GITHUB_WEBHOOK_SCAN_FORKS` | optional | `false` | Set to `true` to let the PR scan webhook scan pull requests from forks. By default such deliveries are answered 200 and ignored |
 
