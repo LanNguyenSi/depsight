@@ -221,6 +221,39 @@ describe('nearestCargoLock with workspaces', () => {
     const excl = new Map([['', { members: ['crates/*'], exclude: ['crates/a'] }]]);
     expect(nearestCargoLock('crates/a/Cargo.toml', locks, excl)).toBe('crates/a/Cargo.lock');
   });
+
+  it('returns null for a member whose workspace root has no lock, even if the member has its own', () => {
+    const own = new Set(['crates/a/Cargo.lock']);
+    expect(nearestCargoLock('crates/a/Cargo.toml', own, ws)).toBeNull();
+  });
+
+  it('uses the innermost workspace root for nested workspaces', () => {
+    const nested = new Map([
+      ['', { members: ['a/*'], exclude: [] }],
+      ['a', { members: ['b'], exclude: [] }],
+    ]);
+    const all = new Set(['Cargo.lock', 'a/Cargo.lock', 'a/b/Cargo.lock']);
+    expect(nearestCargoLock('a/b/Cargo.toml', all, nested)).toBe('a/Cargo.lock');
+  });
+
+  it('treats members written as ./path/ like the plain path', () => {
+    const dotted = { members: ['./tools/cli/'], exclude: [] };
+    expect(isWorkspaceMember(dotted, 'tools/cli')).toBe(true);
+    const l = new Set(['Cargo.lock', 'tools/cli/Cargo.lock']);
+    expect(nearestCargoLock('tools/cli/Cargo.toml', l, new Map([['', dotted]]))).toBe('Cargo.lock');
+  });
+
+  it('treats exclude as a path prefix, not a glob', () => {
+    const prefix = new Map([['', { members: ['crates/*'], exclude: ['crates'] }]]);
+    expect(nearestCargoLock('crates/a/Cargo.toml', locks, prefix)).toBe('crates/a/Cargo.lock');
+    expect(isWorkspaceMember({ members: ['crates/*'], exclude: ['crates/*'] }, 'crates/a')).toBe(true);
+  });
+
+  it('lets an explicit non-glob members entry override exclude', () => {
+    const both = { members: ['crates/a'], exclude: ['crates/a'] };
+    expect(isWorkspaceMember(both, 'crates/a')).toBe(true);
+    expect(nearestCargoLock('crates/a/Cargo.toml', locks, new Map([['', both]]))).toBe('Cargo.lock');
+  });
 });
 
 describe('collectRustDeps with Cargo.lock', () => {

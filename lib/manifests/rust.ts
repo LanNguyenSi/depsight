@@ -122,6 +122,8 @@ export interface CargoWorkspace {
  * Returns null when the file has no `[workspace]` table. Arrays may span lines
  * and carry `#` comments; only quoted string entries are read.
  *
+ * Only the exact header `[workspace]` is recognised (not `[ workspace ]`).
+ *
  * Pure function, exported for testing.
  */
 export function parseCargoWorkspace(content: string): CargoWorkspace | null {
@@ -168,16 +170,25 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /**
- * Whether `memberDir` (relative to the workspace root) is a workspace member:
- * it matches an entry of `members` and no entry of `exclude`. Supported glob
- * subset: `*` and `?` inside one path segment (for example `crates/*`), plus
- * exact paths; a leading `./` and a trailing `/` are ignored. `**` and
- * character classes are not supported (`**` behaves like `*`). Cargo's
- * implicit membership of path dependencies is not modelled.
+ * Whether `memberDir` (relative to the workspace root) is a workspace member,
+ * following Cargo: it matches an entry of `members`, and is not excluded. An
+ * `exclude` entry is a path prefix, not a glob (`crates` excludes everything
+ * under `crates/`), and a non-glob `members` entry that names the directory
+ * exactly wins over `exclude`. Supported glob subset in `members`: `*` and `?`
+ * inside one path segment (for example `crates/*`), plus exact paths; a
+ * leading `./` and a trailing `/` are ignored.
+ *
+ * Not modelled: a `[ workspace ]` header with inner spaces, `package.workspace`
+ * pointers, Cargo's implicit membership of path dependencies, `**` as a whole
+ * segment (it behaves like `*`), and character classes.
  */
 export function isWorkspaceMember(ws: CargoWorkspace, memberDir: string): boolean {
-  const matches = (p: string) => globToRegExp(p).test(memberDir);
-  return ws.members.some(matches) && !ws.exclude.some(matches);
+  if (!ws.members.some((p) => globToRegExp(p).test(memberDir))) return false;
+  if (ws.members.some((p) => !/[*?[]/.test(p) && normalizeGlob(p) === memberDir)) return true;
+  return !ws.exclude.some((e) => {
+    const ex = normalizeGlob(e);
+    return memberDir === ex || memberDir.startsWith(`${ex}/`);
+  });
 }
 
 /**
