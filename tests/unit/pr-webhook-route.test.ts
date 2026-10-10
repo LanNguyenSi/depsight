@@ -376,6 +376,25 @@ describe('POST /api/webhooks/github', () => {
       expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
     });
 
+    it('scans a same-repository pull request whose base owner and name are mixed case', async () => {
+      for (const headFullName of ['acme/api', 'Acme/Api']) {
+        scanPRAndCommentMock.mockClear();
+        const res = await POST(
+          signed(
+            payload({
+              repository: { name: 'Api', owner: { login: 'Acme' } },
+              pull_request: {
+                url: 'http://x.invalid',
+                head: { repo: { full_name: headFullName } },
+              },
+            }),
+          ),
+        );
+        expect(res.status).toBe(202);
+        expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
+      }
+    });
+
     it('scans fork pull requests when GITHUB_WEBHOOK_SCAN_FORKS is true', async () => {
       process.env.GITHUB_WEBHOOK_SCAN_FORKS = ' TRUE ';
       const res = await POST(signed(withHead({ repo: null })));

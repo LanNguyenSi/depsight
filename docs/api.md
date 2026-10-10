@@ -57,8 +57,8 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 | Status | When |
 |--------|------|
-| `202` | Signed `opened` or `synchronize` delivery for a tracked repository; the scan runs in the background (GitHub allows a delivery 10 seconds) |
-| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, or a replayed delivery |
+| `202` | Signed `opened` or `synchronize` delivery for a tracked repository, from a pull request in the same repository (or from a fork when `GITHUB_WEBHOOK_SCAN_FORKS=true`); the scan runs in the background (GitHub allows a delivery 10 seconds) |
+| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, a pull request from a fork (unless `GITHUB_WEBHOOK_SCAN_FORKS=true`), or a replayed delivery |
 | `400` | Signed delivery with an invalid JSON body, an invalid owner, repository name or PR number, or a missing or malformed `X-GitHub-Delivery` header |
 | `401` | Missing, malformed or wrong signature (a signature of the wrong length included) |
 | `413` | Body over 1 MiB, rejected without buffering the rest |
