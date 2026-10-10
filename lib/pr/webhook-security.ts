@@ -75,6 +75,8 @@ export interface DeliveryGuard {
   forget(key: string): void;
   /** Number of remembered keys, expired ones not yet dropped included. */
   size(): number;
+  /** The hard cap on remembered keys. */
+  capacity(): number;
   reset(): void;
 }
 
@@ -117,6 +119,9 @@ export function createDeliveryGuard(options: { ttlMs: number; maxEntries: number
     size(): number {
       return seen.size;
     },
+    capacity(): number {
+      return maxEntries;
+    },
     reset(): void {
       seen.clear();
     },
@@ -130,10 +135,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * redelivery window for a delivery that was seen. The capacity is derived from
  * the endpoint's rate limit so the 24 hours hold even at the full rate: at most
  * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR accepted deliveries per hour, two keys
- * each (delivery id and body digest), for 24 hours.
+ * each (delivery id and body digest). The limiter uses fixed hourly windows, so
+ * a 24-hour TTL that starts inside a window can span 25 of them.
  */
 export const PR_WEBHOOK_DELIVERY_TTL_MS = DAY_MS;
-export const PR_WEBHOOK_DELIVERY_MAX_ENTRIES = 2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * 24;
+export const PR_WEBHOOK_DELIVERY_MAX_ENTRIES = 2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * (24 + 1);
 export const prWebhookDeliveries = createDeliveryGuard({
   ttlMs: PR_WEBHOOK_DELIVERY_TTL_MS,
   maxEntries: PR_WEBHOOK_DELIVERY_MAX_ENTRIES,

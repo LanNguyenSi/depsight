@@ -6,6 +6,7 @@ import {
   createDeliveryGuard,
   PR_WEBHOOK_DELIVERY_MAX_ENTRIES,
   PR_WEBHOOK_DELIVERY_TTL_MS,
+  prWebhookDeliveries,
   readBodyCapped,
   verifyGitHubSignature,
 } from '@/lib/pr/webhook-security';
@@ -173,8 +174,13 @@ describe('createDeliveryGuard', () => {
 describe('prWebhookDeliveries capacity', () => {
   it('holds both keys of every delivery the rate limit admits for the whole TTL', () => {
     const hours = PR_WEBHOOK_DELIVERY_TTL_MS / (60 * 60 * 1000);
+    // Fixed hourly rate-limit windows: a TTL starting inside a window spans one more.
     expect(PR_WEBHOOK_DELIVERY_MAX_ENTRIES).toBeGreaterThanOrEqual(
-      2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * hours,
+      2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * (hours + 1),
     );
+  });
+
+  it('builds the production guard with that capacity', () => {
+    expect(prWebhookDeliveries.capacity()).toBe(PR_WEBHOOK_DELIVERY_MAX_ENTRIES);
   });
 });
