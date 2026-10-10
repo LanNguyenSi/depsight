@@ -43,6 +43,11 @@ model Repo {
 
   tracked       Boolean   @default(true)
 
+  // Secret of this row's GitHub PR-scan webhook, AES-256-GCM sealed (see
+  // lib/pr/webhook-secret.ts); null = no webhook configured for this user.
+  webhookSecretEnc       String?
+  webhookSecretRotatedAt DateTime?
+
   // Freshness semantics. lastScannedAt is the last time ANY of the three
   // scanners completed successfully (each scanner writes it on success; the
   // cron does not write it). It says nothing about the other scanners: read

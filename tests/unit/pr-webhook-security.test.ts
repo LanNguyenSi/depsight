@@ -4,6 +4,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 import {
   createDeliveryGuard,
+  hasWellFormedSignature,
   PR_WEBHOOK_DELIVERY_MAX_ENTRIES,
   PR_WEBHOOK_DELIVERY_TTL_MS,
   prWebhookDeliveries,
@@ -183,4 +184,18 @@ describe('prWebhookDeliveries capacity', () => {
   it('builds the production guard with that capacity', () => {
     expect(prWebhookDeliveries.capacity()).toBe(PR_WEBHOOK_DELIVERY_MAX_ENTRIES);
   });
+});
+
+describe('hasWellFormedSignature', () => {
+  it('accepts sha256= plus 64 hex characters, either case', () => {
+    expect(hasWellFormedSignature('sha256=' + 'a'.repeat(64))).toBe(true);
+    expect(hasWellFormedSignature('sha256=' + 'A'.repeat(64))).toBe(true);
+  });
+
+  it.each([null, '', 'sha256=', 'sha256=' + 'a'.repeat(63), 'sha256=' + 'a'.repeat(65), 'sha1=' + 'a'.repeat(64), 'sha256=' + 'g'.repeat(64), ' sha256=' + 'a'.repeat(64)])(
+    'rejects %j',
+    (header) => {
+      expect(hasWellFormedSignature(header)).toBe(false);
+    },
+  );
 });

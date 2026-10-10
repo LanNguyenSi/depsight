@@ -301,6 +301,26 @@ export default defineConfig({
           functions: 95,
           lines: 95,
         },
+        // Per-repository webhook secrets: sealing helper and the owner-only
+        // settings routes (measured at or near 100 for all four metrics).
+        'lib/pr/webhook-secret.ts': {
+          statements: 95,
+          branches: 85,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/webhook-secrets/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
+        'app/api/webhook-secrets/[repoId]/route.ts': {
+          statements: 95,
+          branches: 90,
+          functions: 95,
+          lines: 95,
+        },
         'lib/github.ts': {
           statements: 95,
           branches: 95,

@@ -3,7 +3,7 @@ type: overview
 title: MCP server versus the web API - a thin proxy, narrower than the dashboard
 description: every MCP tool calls the same authenticated REST API the dashboard uses, through one HTTP client with no direct database access; only one tool (depsight_rescan) writes, and the MCP surface has no equivalent for policy CRUD, tokens, webhooks, Slack config, Dependabot enable, repo sync, PR-triggered scans, CI sync, export, or direct license and dependency-age scans (depsight_rescan refreshes CVE data only).
 tags: [mcp, api, surface]
-timestamp: 2026-10-10T10:06:19Z
+timestamp: 2026-10-10T11:13:35Z
 sources:
   - mcp/src/server.ts
   - mcp/src/client.ts
@@ -62,4 +62,4 @@ Every route in this table resolves its caller with `resolveRequestUser` (`lib/au
 
 ## What the web API can do that MCP cannot
 
-The MCP surface has no tool for: creating, updating, or deleting a policy (`POST`/`PUT`/`DELETE` on `/api/policies` and `/api/policies/[id]`, MCP only lists and evaluates); API token management (`/api/tokens`); webhook configuration (`/api/webhooks`); Slack configuration (`/api/slack`); enabling Dependabot, singly or in bulk (`/api/dependabot`, `/api/dependabot/enable-all`); manually triggering a repo sync (`/api/repos/sync`) or CI sync (`/api/ci/sync`); a PR-triggered scan (`/api/pr-scan`); triggering a license scan directly (`POST /api/license`, `app/api/license/route.ts:15`) or a dependency-age scan directly (`POST /api/deps`, `app/api/deps/route.ts:28`); or a repository export bundle (`/api/export`). An agent restricted to the MCP tools can read an existing policy and evaluate it against a scan, but cannot author or change one; the same gap applies to license and dependency data, where `depsight_rescan`'s CVE-only scope means the MCP surface has no tool that can force either one fresh.
+The MCP surface has no tool for: creating, updating, or deleting a policy (`POST`/`PUT`/`DELETE` on `/api/policies` and `/api/policies/[id]`, MCP only lists and evaluates); API token management (`/api/tokens`); webhook configuration (`/api/webhooks`, `/api/webhook-secrets`); Slack configuration (`/api/slack`); enabling Dependabot, singly or in bulk (`/api/dependabot`, `/api/dependabot/enable-all`); manually triggering a repo sync (`/api/repos/sync`) or CI sync (`/api/ci/sync`); a PR-triggered scan (`/api/pr-scan`); triggering a license scan directly (`POST /api/license`, `app/api/license/route.ts:15`) or a dependency-age scan directly (`POST /api/deps`, `app/api/deps/route.ts:28`); or a repository export bundle (`/api/export`). An agent restricted to the MCP tools can read an existing policy and evaluate it against a scan, but cannot author or change one; the same gap applies to license and dependency data, where `depsight_rescan`'s CVE-only scope means the MCP surface has no tool that can force either one fresh.
