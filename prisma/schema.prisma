@@ -73,6 +73,7 @@ model Repo {
 
   @@unique([userId, githubId])
   @@index([userId])
+  @@index([owner, name])
 }
 
 model Scan {
