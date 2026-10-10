@@ -189,6 +189,12 @@ export const prScanWebhookTotalRateLimiter = createRateLimiter({
 export const PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE = 60;
 export const PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE = 600;
 export const PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS = 10_000;
+// Requests whose trusted client address lies in GitHub's published hook ranges
+// (lib/github-hook-ranges.ts) are counted against this budget instead of the
+// ceiling above, so traffic from other addresses cannot spend it. They still
+// count against their own address first. Like the ceiling it bounds
+// pre-verification work, so it adds to the worst case rather than replacing it.
+export const PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE = 300;
 const MINUTE_MS = 60 * 1000;
 
 /** POST /api/webhooks/github before verification, keyed by the trusted client address. */
@@ -200,6 +206,11 @@ export const prScanWebhookPreAuthIpRateLimiter = createRateLimiter({
 /** POST /api/webhooks/github before verification, one shared key for every caller. */
 export const prScanWebhookPreAuthTotalRateLimiter = createRateLimiter({
   limit: PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
+  windowMs: MINUTE_MS,
+});
+/** POST /api/webhooks/github before verification, one shared key for callers in GitHub's hook ranges. */
+export const prScanWebhookPreAuthHookRateLimiter = createRateLimiter({
+  limit: PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE,
   windowMs: MINUTE_MS,
 });
 

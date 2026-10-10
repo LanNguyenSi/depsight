@@ -16,8 +16,11 @@ import {
   IGNORED_INSTANCE_SECRET_WARNING,
 } from '@/lib/pr/webhook-secret';
 import { clientIpFromForwardedFor, trustedProxyHops } from '@/lib/client-ip';
+import { githubHookRanges } from '@/lib/github-hook-ranges';
 import {
+  PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE,
   PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
+  prScanWebhookPreAuthHookRateLimiter,
   prScanWebhookPreAuthIpRateLimiter,
   prScanWebhookPreAuthTotalRateLimiter,
   prScanWebhookRepoRateLimiter,
@@ -92,13 +95,30 @@ function warnCeilingReached(windowResetAt: number): void {
   );
 }
 
+/** End of the hook-range window that was last reported (its resetAt, epoch ms). */
+let hookBudgetWarnedWindow = 0;
+
+/** The budget of GitHub's hook addresses refused a request; say so once per limiter window. */
+function warnHookBudgetReached(windowResetAt: number): void {
+  if (windowResetAt === hookBudgetWarnedWindow) return;
+  hookBudgetWarnedWindow = windowResetAt;
+  console.warn(
+    `PR scan webhook: the pre-verification limit for GitHub's hook addresses (${PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE} requests a minute) was reached; ` +
+      'requests from them are answered 429 until the window ends and GitHub does not redeliver them automatically',
+  );
+}
+
 /**
  * Limits applied before anything of the request is read: per trusted client
- * address, then one endpoint-wide ceiling. Returns the 429 to send, or null.
- * The address comes only from the hop the trusted proxy appended to
- * X-Forwarded-For (see lib/client-ip.ts); a caller that is not behind the
- * proxy can write that value itself, and what still bounds it is the shared
- * ceiling and the capped size of the per-address table.
+ * address, then one budget shared by a class of callers. Returns the 429 to
+ * send, or null. A caller whose trusted address lies in GitHub's published hook
+ * ranges spends the hook budget; everything else (including every caller while
+ * the ranges are unknown) spends the endpoint-wide ceiling, which a hook-range
+ * caller never touches. The address comes only from the hop the trusted proxy
+ * appended to X-Forwarded-For (see lib/client-ip.ts), and so does the
+ * classification: a caller that is not behind the proxy can write that value
+ * itself, and what still bounds it is the two shared budgets and the capped
+ * size of the per-address table.
  */
 function preAuthRateLimited(req: NextRequest): Response | null {
   const ip =
@@ -106,6 +126,14 @@ function preAuthRateLimited(req: NextRequest): Response | null {
     UNKNOWN_CLIENT;
   const ipLimit = prScanWebhookPreAuthIpRateLimiter.check(ip);
   if (!ipLimit.allowed) return rateLimitedResponse(ipLimit);
+  if (githubHookRanges.contains(ip)) {
+    const hookLimit = prScanWebhookPreAuthHookRateLimiter.check('all');
+    if (!hookLimit.allowed) {
+      warnHookBudgetReached(hookLimit.resetAt);
+      return rateLimitedResponse(hookLimit);
+    }
+    return null;
+  }
   const totalLimit = prScanWebhookPreAuthTotalRateLimiter.check('all');
   if (!totalLimit.allowed) {
     warnCeilingReached(totalLimit.resetAt);

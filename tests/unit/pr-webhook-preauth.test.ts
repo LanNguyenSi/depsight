@@ -16,14 +16,17 @@ vi.mock('@/lib/prisma', () => ({ prisma: { repo: { findMany: repoFindManyMock } 
 
 import { NextRequest } from 'next/server';
 import { POST } from '@/app/api/webhooks/github/route';
+import { githubHookRanges } from '@/lib/github-hook-ranges';
 import { prWebhookDeliveries } from '@/lib/pr/webhook-security';
 import { sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import {
   prScanWebhookPreAuthIpRateLimiter,
   prScanWebhookPreAuthTotalRateLimiter,
+  prScanWebhookPreAuthHookRateLimiter,
   prScanWebhookRepoRateLimiter,
   prScanWebhookTotalRateLimiter,
   prScanWebhookUserRateLimiter,
+  PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE,
   PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
   PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE,
 } from '@/lib/rate-limit';
@@ -31,6 +34,11 @@ import {
 const SECRET = 'preauth-test-secret';
 const IP_LIMIT = PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE;
 const GOOD_IP = '203.0.113.9';
+const HOOK_LIMIT = PR_SCAN_WEBHOOK_PREAUTH_HOOK_LIMIT_PER_MINUTE;
+const TOTAL_LIMIT = PR_SCAN_WEBHOOK_PREAUTH_TOTAL_LIMIT_PER_MINUTE;
+// Addresses inside the ranges used by the hook-range tests below.
+const GH_V4 = '140.82.112.5';
+const GH_V6 = '2a0a:a440::7';
 
 let deliveryCounter = 0;
 
@@ -91,6 +99,13 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
     prScanWebhookTotalRateLimiter.reset();
     prScanWebhookPreAuthIpRateLimiter.reset();
     prScanWebhookPreAuthTotalRateLimiter.reset();
+    prScanWebhookPreAuthHookRateLimiter.reset();
+    // The route may start a background fetch of GitHub's hook ranges; keep it off the network.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ hooks: ['2001:db8::/32'] }))),
+    );
+    githubHookRanges.reset();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
@@ -100,6 +115,7 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
     delete process.env.WEBHOOK_TRUSTED_PROXY_HOPS;
     delete process.env.GITHUB_WEBHOOK_DISABLED;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   describe('before the body is read', () => {
@@ -336,6 +352,211 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
     it('stays on for any other value', async () => {
       process.env.GITHUB_WEBHOOK_DISABLED = 'false';
       expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(202);
+    });
+  });
+  describe("GitHub's hook address ranges", () => {
+    /** Make the route see these hook ranges (no network: the global fetch is a mock). */
+    async function loadHookRanges(hooks: string[] = ['140.82.112.0/20', '2a0a:a440::/29']) {
+      vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ hooks })));
+      await githubHookRanges.refresh();
+    }
+
+    function exhaustTotal(): void {
+      for (let i = 0; i < TOTAL_LIMIT; i++) prScanWebhookPreAuthTotalRateLimiter.check('all');
+    }
+
+    function exhaustHook(): void {
+      for (let i = 0; i < HOOK_LIMIT; i++) prScanWebhookPreAuthHookRateLimiter.check('all');
+    }
+
+    it('counts a request from a hook address against the hook budget only', async () => {
+      await loadHookRanges();
+
+      for (let i = 0; i < 5; i++) {
+        expect((await POST(request({ forwardedFor: `140.82.112.${i + 1}`, signed: false }))).status).toBe(401);
+      }
+
+      expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 6);
+      expect(prScanWebhookPreAuthTotalRateLimiter.check('all').remaining).toBe(TOTAL_LIMIT - 1);
+    });
+
+    it('counts a request from any other address against the endpoint-wide ceiling only', async () => {
+      await loadHookRanges();
+
+      expect((await POST(request({ forwardedFor: GOOD_IP, signed: false }))).status).toBe(401);
+
+      expect(prScanWebhookPreAuthTotalRateLimiter.check('all').remaining).toBe(TOTAL_LIMIT - 2);
+      expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+    });
+
+    it('still accepts a hook address after non-GitHub traffic has spent the whole ceiling', async () => {
+      await loadHookRanges();
+      exhaustTotal();
+
+      // Non-GitHub callers are refused ...
+      expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+      // ... and GitHub's deliveries, over IPv4 and IPv6, still get through (the second
+      // carries the same body as the first, so the replay guard answers 200 for it).
+      expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(202);
+      expect((await POST(request({ forwardedFor: GH_V6 }))).status).toBe(200);
+    });
+
+    it('spends the ceiling through the route itself, not only through the limiter', async () => {
+      await loadHookRanges();
+      // Ten source addresses at 60 a minute each: the honest exhaustion the budget exists for.
+      for (let a = 0; a < TOTAL_LIMIT / IP_LIMIT; a++) {
+        for (let i = 0; i < IP_LIMIT; i++) {
+          expect((await POST(request({ forwardedFor: `198.51.100.${a + 1}`, signed: false }))).status).toBe(401);
+        }
+      }
+      expect((await POST(request({ forwardedFor: '198.51.100.99', signed: false }))).status).toBe(429);
+
+      expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(202);
+    });
+
+    it('refuses hook addresses over their own budget without touching the ceiling, and non-GitHub callers stay unaffected', async () => {
+      await loadHookRanges();
+      exhaustHook();
+
+      const req = request({ forwardedFor: GH_V4 });
+      const res = await POST(req);
+
+      expect(res.status).toBe(429);
+      expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+      expect(req.bodyUsed).toBe(false);
+      expect(prScanWebhookPreAuthTotalRateLimiter.check('all').remaining).toBe(TOTAL_LIMIT - 1);
+      expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(202);
+    });
+
+    it('warns once per window when the hook budget refuses requests, and again in the next window', async () => {
+      await loadHookRanges();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const warnings = () =>
+          vi
+            .mocked(console.warn)
+            .mock.calls.filter((c) => String(c[0]).includes("GitHub's hook addresses"));
+        // Far ahead of any window an earlier test opened, so its warning cannot mask this one.
+        vi.setSystemTime(Date.now() + 6 * 60 * 60 * 1000);
+        exhaustHook();
+
+        for (let i = 1; i <= 3; i++) {
+          expect((await POST(request({ forwardedFor: `140.82.112.${i}` }))).status).toBe(429);
+        }
+        expect(warnings()).toHaveLength(1);
+        expect(String(warnings()[0][0])).not.toContain('endpoint-wide');
+
+        vi.setSystemTime(Date.now() + 61 * 1000);
+        prScanWebhookPreAuthIpRateLimiter.reset();
+        exhaustHook();
+        expect((await POST(request({ forwardedFor: '140.82.112.9' }))).status).toBe(429);
+        expect(warnings()).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('still limits one hook address by its own per-address window', async () => {
+      await loadHookRanges();
+      exhaustIp(GH_V4);
+
+      expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+      // The refusal for the address spends neither shared budget.
+      expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+      expect((await POST(request({ forwardedFor: '140.82.112.6' }))).status).toBe(202);
+    });
+
+    it('classifies by the trusted address, not by an entry the caller wrote to the left', async () => {
+      await loadHookRanges();
+      exhaustTotal();
+
+      // A hook address in the leftmost (caller-written) entry, a non-GitHub trusted hop:
+      // counted as non-GitHub, so it meets the exhausted ceiling and spends no hook budget.
+      const spoof = await POST(request({ forwardedFor: `${GH_V4}, ${GOOD_IP}` }));
+      expect(spoof.status).toBe(429);
+      expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+
+      // The reverse is a genuine delivery: trusted hop in the ranges, junk to its left.
+      const genuine = await POST(request({ forwardedFor: `${GOOD_IP}, ${GH_V4}` }));
+      expect(genuine.status).toBe(202);
+    });
+
+    it('classifies by the trusted hop when two proxies are trusted', async () => {
+      process.env.WEBHOOK_TRUSTED_PROXY_HOPS = '2';
+      await loadHookRanges();
+      exhaustTotal();
+
+      // The client is the second entry from the right.
+      expect((await POST(request({ forwardedFor: `${GOOD_IP}, ${GH_V4}, 10.1.1.1` }))).status).toBe(202);
+      expect((await POST(request({ forwardedFor: `${GH_V4}, ${GOOD_IP}, 10.1.1.1` }))).status).toBe(429);
+      // Too short a chain: unknown, never a hook address.
+      expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+    });
+
+    it('treats a request without a trusted address as non-GitHub', async () => {
+      await loadHookRanges();
+      exhaustTotal();
+
+      expect((await POST(request({}))).status).toBe(429);
+      expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+    });
+
+    it('matches an IPv4-mapped IPv6 trusted address against the IPv4 ranges', async () => {
+      await loadHookRanges();
+      exhaustTotal();
+
+      expect((await POST(request({ forwardedFor: '::ffff:140.82.112.5' }))).status).toBe(202);
+      expect((await POST(request({ forwardedFor: '::ffff:140.82.128.0' }))).status).toBe(429);
+    });
+
+    it('uses the first and last address of a range and nothing beyond it', async () => {
+      await loadHookRanges(['140.82.112.0/20']);
+      exhaustTotal();
+
+      // Unsigned, so the replay guard is not reached: 401 means the limiter let it through.
+      expect((await POST(request({ forwardedFor: '140.82.112.0', signed: false }))).status).toBe(401);
+      expect((await POST(request({ forwardedFor: '140.82.127.255', signed: false }))).status).toBe(401);
+      expect((await POST(request({ forwardedFor: '140.82.111.255' }))).status).toBe(429);
+      expect((await POST(request({ forwardedFor: '140.82.128.0' }))).status).toBe(429);
+    });
+
+    describe('when the ranges are not known', () => {
+      it('keeps the single ceiling for everyone after a failed fetch', async () => {
+        vi.mocked(fetch).mockRejectedValue(new Error('meta unreachable'));
+        await githubHookRanges.refresh();
+        exhaustTotal();
+
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+        expect((await POST(request({ forwardedFor: GOOD_IP }))).status).toBe(429);
+        expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('hook address ranges'));
+      });
+
+      it('counts a hook address against the ceiling after a failed fetch, as it did before the budget existed', async () => {
+        vi.mocked(fetch).mockResolvedValue(new Response('bad gateway', { status: 502 }));
+        await githubHookRanges.refresh();
+
+        expect((await POST(request({ forwardedFor: GH_V4, signed: false }))).status).toBe(401);
+
+        expect(prScanWebhookPreAuthTotalRateLimiter.check('all').remaining).toBe(TOTAL_LIMIT - 2);
+        expect(prScanWebhookPreAuthHookRateLimiter.check('all').remaining).toBe(HOOK_LIMIT - 1);
+      });
+
+      it('answers the first request from the ceiling and fetches the ranges in the background, once', async () => {
+        let release: (res: Response) => void = () => undefined;
+        vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => (release = resolve)));
+        exhaustTotal();
+
+        // No ranges yet: the request is classified without them (and not blocked on the fetch).
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(429);
+        expect((await POST(request({ forwardedFor: '140.82.112.6' }))).status).toBe(429);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(fetch).mock.calls[0][0]).toBe('https://api.github.com/meta');
+
+        release(new Response(JSON.stringify({ hooks: ['140.82.112.0/20'] })));
+        await githubHookRanges.refresh();
+        expect((await POST(request({ forwardedFor: GH_V4 }))).status).toBe(202);
+      });
     });
   });
 });
