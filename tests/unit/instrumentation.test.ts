@@ -35,7 +35,10 @@ describe('instrumentation register()', () => {
     const { register } = await import('@/instrumentation');
     await register();
     expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Fatal configuration error'), expect.stringContaining('SCAN_INTERVAL_MINUTES'));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Fatal configuration error'),
+      expect.stringContaining('SCAN_INTERVAL_MINUTES'),
+    );
   });
 
   it('exits non-zero when importing the module throws (the real invalid-env path)', async () => {
