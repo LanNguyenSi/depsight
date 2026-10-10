@@ -32,9 +32,9 @@ docker compose -f docker-compose.dev.yml up   # or: make dev (adds --build)
 ```
 
 The `app` container's entrypoint (`docker/entrypoint.dev.sh`) already runs
-`npm install`, `npx prisma generate`, and `npx prisma db push` against the
+`npm install`, `npx prisma generate`, and `npm run db:push` against the
 `db` service before starting `npm run dev`, so no host-side install or push
-step is needed for this flow. A host-side `npx prisma db push` is only
+step is needed for this flow. A host-side `npm run db:push` (not a bare `npx prisma db push`) is only
 needed if you run Prisma commands directly against Postgres from the host
 (outside the `app` container); in that case set `DATABASE_URL` in `.env` to
 match the `db` service's credentials (`postgresql://dev:dev@localhost:5432/depsight_dev`).
