@@ -754,7 +754,11 @@ describe('POST /api/webhooks/github', () => {
 
       // The complete call list: one call, exactly the template, with the row id only.
       expect(allWarnCalls()).toEqual([[unreadableSecretWarning('row-broken')]]);
-      expect(unreadableSecretWarning('row-broken')).toContain('row-broken');
+      // The template itself is pinned as a literal, so key material added to it is caught too.
+      expect(unreadableSecretWarning('row-broken')).toBe(
+        'PR scan webhook: the stored secret of repository row row-broken cannot be opened ' +
+          '(the key material changed or the value is damaged); rotate it in Settings',
+      );
     });
 
     it('warns separately for a second unreadable row', async () => {
