@@ -551,10 +551,12 @@ describe('POST /api/webhooks/github', () => {
     });
 
     it("caps one user's rows together, so one tenant cannot spend the endpoint-wide budget", async () => {
-      // One user tracks two repositories, each with its own 60 per hour; together they get 120.
+      // One user tracks three repositories with 60 per hour each (180 together); the user cap is 120.
+      const names = ['one', 'two', 'three'];
       table = [
-        row({ id: 'row-1', userId: 'user-a', name: 'one', secret: SECRET, user: { githubToken: 'tok-A' } }),
-        row({ id: 'row-2', userId: 'user-a', name: 'two', secret: SECRET, user: { githubToken: 'tok-A' } }),
+        ...names.map((name, i) =>
+          row({ id: `row-${i}`, userId: 'user-a', name, secret: SECRET, user: { githubToken: 'tok-A' } }),
+        ),
         row({ id: 'row-x', userId: 'user-b', name: 'other', secret: SECRET_B, user: { githubToken: 'tok-B' } }),
       ];
       const repoOf = (name: string, number: number) =>
@@ -564,10 +566,10 @@ describe('POST /api/webhooks/github', () => {
           pull_request: { head: { repo: { full_name: `acme/${name}` } } },
         });
       for (let i = 0; i < PR_SCAN_WEBHOOK_USER_LIMIT_PER_HOUR; i++) {
-        const name = i % 2 === 0 ? 'one' : 'two';
-        expect((await POST(signed(repoOf(name, i + 1), { secret: SECRET }))).status).toBe(202);
+        const res = await POST(signed(repoOf(names[i % 3], i + 1), { secret: SECRET }));
+        expect(res.status).toBe(202);
       }
-      // Neither repository budget is spent (60 each) yet the user budget is.
+      // No repository budget is spent (40 of 60 each), yet the user budget is.
       const limited = await POST(signed(repoOf('one', 9999), { secret: SECRET }));
       expect(limited.status).toBe(429);
       expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThanOrEqual(1);
