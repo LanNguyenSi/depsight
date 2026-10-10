@@ -4,9 +4,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 import {
   createDeliveryGuard,
+  PR_WEBHOOK_DELIVERY_MAX_ENTRIES,
+  PR_WEBHOOK_DELIVERY_TTL_MS,
   readBodyCapped,
   verifyGitHubSignature,
 } from '@/lib/pr/webhook-security';
+import { PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 const SECRET = 'a-webhook-secret';
 
@@ -132,6 +135,23 @@ describe('createDeliveryGuard', () => {
     expect(guard.has('c')).toBe(true);
   });
 
+  it('evicts every expired entry from the front, not only as many as the cap needs', () => {
+    vi.useFakeTimers();
+    const guard = createDeliveryGuard({ ttlMs: 1000, maxEntries: 2 });
+    guard.remember('a');
+    guard.remember('b');
+    expect(guard.size()).toBe(2);
+    vi.advanceTimersByTime(2000);
+    guard.remember('c');
+    // a and b are expired: both are dropped although the cap alone would only
+    // have forced one of them out.
+    expect(guard.size()).toBe(1);
+    guard.remember('d');
+    expect(guard.size()).toBe(2);
+    expect(guard.has('c')).toBe(true);
+    expect(guard.has('d')).toBe(true);
+  });
+
   it('drops expired entries when a new key is remembered', () => {
     vi.useFakeTimers();
     const guard = createDeliveryGuard({ ttlMs: 1000, maxEntries: 10 });
@@ -147,5 +167,14 @@ describe('createDeliveryGuard', () => {
     guard.remember('a');
     guard.reset();
     expect(guard.has('a')).toBe(false);
+  });
+});
+
+describe('prWebhookDeliveries capacity', () => {
+  it('holds both keys of every delivery the rate limit admits for the whole TTL', () => {
+    const hours = PR_WEBHOOK_DELIVERY_TTL_MS / (60 * 60 * 1000);
+    expect(PR_WEBHOOK_DELIVERY_MAX_ENTRIES).toBeGreaterThanOrEqual(
+      2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * hours,
+    );
   });
 });

@@ -49,11 +49,16 @@ function makeRequest(rawBody: string, opts: Opts = {}): NextRequest {
   const event = opts.event === undefined ? 'pull_request' : opts.event;
   if (event !== null) headers['x-github-event'] = event;
   const delivery =
-    opts.delivery === undefined ? `d0000000-0000-0000-0000-${String(++deliveryCounter).padStart(12, '0')}` : opts.delivery;
+    opts.delivery === undefined
+      ? `d0000000-0000-0000-0000-${String(++deliveryCounter).padStart(12, '0')}`
+      : opts.delivery;
   if (delivery !== null) headers['x-github-delivery'] = delivery;
   const signature =
     opts.signature === undefined
-      ? 'sha256=' + createHmac('sha256', opts.secret ?? SECRET).update(rawBody).digest('hex')
+      ? 'sha256=' +
+        createHmac('sha256', opts.secret ?? SECRET)
+          .update(rawBody)
+          .digest('hex')
       : opts.signature;
   if (signature !== null) headers['x-hub-signature-256'] = signature;
   return new NextRequest('http://localhost/api/webhooks/github', {
@@ -90,10 +95,26 @@ describe('POST /api/webhooks/github', () => {
 
     expect(res.status).toBe(202);
     expect(repoFindFirstMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ owner: 'acme', name: 'api', tracked: true }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ owner: 'acme', name: 'api', tracked: true }),
+      }),
     );
     expect(scanPRAndCommentMock).toHaveBeenCalledTimes(1);
     expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-123', 'acme', 'api', 42, 'user-1');
+  });
+
+  it('looks the repository up among tracked rows of users with a stored token, oldest first', async () => {
+    await POST(signed());
+
+    expect(repoFindFirstMock).toHaveBeenCalledTimes(1);
+    const args = repoFindFirstMock.mock.calls[0][0];
+    expect(args.where).toEqual({
+      owner: 'acme',
+      name: 'api',
+      tracked: true,
+      user: { githubToken: { not: '' } },
+    });
+    expect(args.orderBy).toEqual({ createdAt: 'asc' });
   });
 
   it('also scans a synchronize event', async () => {
@@ -147,7 +168,8 @@ describe('POST /api/webhooks/github', () => {
   );
 
   it('verifies the raw bytes, not a re-serialised body', async () => {
-    const raw = '{"action": "opened",  "number": 42, "repository": {"name":"api","owner":{"login":"acme"}}}';
+    const raw =
+      '{"action": "opened",  "number": 42, "repository": {"name":"api","owner":{"login":"acme"}}}';
     const reserialised = JSON.stringify(JSON.parse(raw));
     const signature = 'sha256=' + createHmac('sha256', SECRET).update(reserialised).digest('hex');
     const res = await POST(makeRequest(raw, { signature }));

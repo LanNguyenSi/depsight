@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 /**
  * Helpers for the inbound GitHub webhook (POST /api/webhooks/github): HMAC
@@ -72,6 +73,8 @@ export interface DeliveryGuard {
   remember(key: string): void;
   /** Forget `key` (a delivery whose scan failed may be redelivered). */
   forget(key: string): void;
+  /** Number of remembered keys, expired ones not yet dropped included. */
+  size(): number;
   reset(): void;
 }
 
@@ -82,10 +85,7 @@ export interface DeliveryGuard {
  * cost of a miss is one repeated scan, which is bounded by the webhook rate
  * limit and rewrites the same PR comment, so no shared store is used.
  */
-export function createDeliveryGuard(options: {
-  ttlMs: number;
-  maxEntries: number;
-}): DeliveryGuard {
+export function createDeliveryGuard(options: { ttlMs: number; maxEntries: number }): DeliveryGuard {
   const { ttlMs, maxEntries } = options;
   // Map iteration order is insertion order, so the first key is the oldest.
   const seen = new Map<string, number>();
@@ -114,6 +114,9 @@ export function createDeliveryGuard(options: {
     forget(key: string): void {
       seen.delete(key);
     },
+    size(): number {
+      return seen.size;
+    },
     reset(): void {
       seen.clear();
     },
@@ -124,7 +127,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Replay guard of POST /api/webhooks/github. 24 hours covers GitHub's manual
- * redelivery window for a delivery that was seen; 10 000 entries is far above
- * the volume of the rate limit (two keys per accepted delivery).
+ * redelivery window for a delivery that was seen. The capacity is derived from
+ * the endpoint's rate limit so the 24 hours hold even at the full rate: at most
+ * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR accepted deliveries per hour, two keys
+ * each (delivery id and body digest), for 24 hours.
  */
-export const prWebhookDeliveries = createDeliveryGuard({ ttlMs: DAY_MS, maxEntries: 10_000 });
+export const PR_WEBHOOK_DELIVERY_TTL_MS = DAY_MS;
+export const PR_WEBHOOK_DELIVERY_MAX_ENTRIES = 2 * PR_SCAN_WEBHOOK_TOTAL_LIMIT_PER_HOUR * 24;
+export const prWebhookDeliveries = createDeliveryGuard({
+  ttlMs: PR_WEBHOOK_DELIVERY_TTL_MS,
+  maxEntries: PR_WEBHOOK_DELIVERY_MAX_ENTRIES,
+});

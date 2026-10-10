@@ -99,7 +99,10 @@ export async function POST(req: NextRequest) {
     !Number.isInteger(prNumber) ||
     prNumber < 1
   ) {
-    return NextResponse.json({ error: 'Invalid repository or pull request number' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Invalid repository or pull request number' },
+      { status: 400 },
+    );
   }
 
   // Only repositories a depsight user tracks are scanned. When several users

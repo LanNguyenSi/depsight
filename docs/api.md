@@ -53,6 +53,8 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 `POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body under `GITHUB_WEBHOOK_SECRET`, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time.
 
+**Trust model.** `GITHUB_WEBHOOK_SECRET` is one secret for the whole instance, not one per repository or per user. Whoever holds it can sign a delivery for any repository that any depsight user tracks, and depsight then scans that pull request and posts the comment with the GitHub token of the user who tracks the repository. Treat the secret as operator-only on a multi-user instance, and configure the webhook only on repositories the operator controls (or set the secret only on a single-user instance). On a public repository the comment is public, and an author of a fork pull request can trigger the scan, because GitHub sends the `opened` and `synchronize` deliveries for those pull requests too.
+
 | Status | When |
 |--------|------|
 | `202` | Signed `opened` or `synchronize` delivery for a tracked repository; the scan runs in the background (GitHub allows a delivery 10 seconds) |
@@ -65,7 +67,7 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 Only the owner, repository name and PR number of the payload are used; no URL from the payload is ever fetched. The scan uses the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token). A repository tracked by several users is scanned once per delivery, under that one user.
 
-**Replay protection.** A delivery is remembered for 24 hours under its `X-GitHub-Delivery` id and, because that header is not covered by the signature, also under the SHA-256 of its body; a second delivery with either key is answered `200` and ignored. A delivery whose scan fails is forgotten again so GitHub can redeliver it. The memory is bounded (10 000 keys, oldest dropped first) and lives in the app process: a restart clears it, and several instances would each keep their own, which matches the single-instance deployment. The cost of a miss is one repeated scan that rewrites the same PR comment, bounded by the rate limit.
+**Replay protection.** A delivery is remembered for 24 hours under its `X-GitHub-Delivery` id and, because that header is not covered by the signature, also under the SHA-256 of its body; a second delivery with either key is answered `200` and ignored. A delivery whose scan fails is forgotten again so GitHub can redeliver it. The memory is bounded (28 800 keys, which is two keys for each of the 600 deliveries per hour the rate limit admits, over 24 hours; oldest dropped first) and lives in the app process: a restart clears it, and several instances would each keep their own, which matches the single-instance deployment. The cost of a miss is one repeated scan that rewrites the same PR comment, bounded by the rate limit.
 
 **Rate limit.** Only a signed delivery for a tracked repository counts: 60 per repository and hour, and 600 per hour for the whole endpoint (fixed window, in the app process like the limits above). Unsigned requests and ignored deliveries do not count; there is no per-IP limit, since an unsigned request costs one capped read and one HMAC.
 

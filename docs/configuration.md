@@ -36,6 +36,8 @@ depsight can scan a pull request automatically and post (or update) its CVE comm
    - **Events:** "Let me select individual events", then only **Pull requests**. GitHub also sends a `ping` event when the webhook is created; depsight answers it 200.
 3. The repository must be tracked in depsight. A delivery for any other repository is answered 200 and ignored.
 
+**Trust model.** `GITHUB_WEBHOOK_SECRET` is instance-wide. Whoever holds it can sign deliveries for any repository tracked by any depsight user, and depsight then scans the pull request and posts the comment with that tracking user's GitHub token. On a multi-user instance keep the secret operator-only and add the webhook only to repositories the operator controls; otherwise leave the variable unset (the endpoint stays disabled) or use it on a single-user instance only. On a public repository the comment is public, and fork pull request authors can trigger a scan.
+
 Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reopened` does not); every other event or action is answered 200 and ignored. The scan runs in the background after a `202` answer and authenticates with the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token, as the auto-scan cron does). See [API reference](api.md#github-pull-request-webhook) for the status codes, the replay protection and the limits.
 
 ## Make targets
