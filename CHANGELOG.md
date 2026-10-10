@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Fatal startup configuration errors exit the process.** An invalid `SCAN_INTERVAL_MINUTES` made the instrumentation hook throw, but the Next.js server stayed up and answered every request with 500, so a restart policy never fired. The hook now logs the error and exits with status 1 (verified with the standalone `node server.js` the image runs). Tracker task 894d4d5f.
+- **Settings page disables Generate and Rotate when webhook secrets are unavailable.** With no key material (`WEBHOOK_SECRET_KEY` and `NEXTAUTH_SECRET` unset) both buttons answered 503; they are now disabled with the reason as their title, and Remove stays available. Tracker task 894d4d5f.
+
 - **`SCAN_INTERVAL_MINUTES` is validated at startup.** Values above 35791 minutes overflowed the 32-bit timer delay, so the scan ran in a tight loop. The variable must now be a whole number from 1 to 35791 (unset or blank still means 60); anything else (0, negative, non-numeric, fractional, too large) fails startup with an error naming the maximum instead of being silently replaced by 60 or overflowing. Tracker task 0e581af9.
 
 - `Repo` has a non-unique index on `(owner, name)`, so the PR scan webhook's tracked-repository lookup and other lookups by owner and name no longer scan the table. The deploy hook (`.relay.yml` `post_update`) applies it with its bare `prisma db push` and no `--accept-data-loss`; a replay of the hook commands (prisma 5.22.0) against a Postgres holding `Repo` rows with the same owner and name under two users applied it without a prompt and a second push found nothing to change. Tracker task d40188f4.

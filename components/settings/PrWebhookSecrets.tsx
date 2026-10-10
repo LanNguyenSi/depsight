@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
+import { SecretRowActions } from '@/components/settings/SecretRowActions';
 import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
 
 interface RepoRow {
@@ -177,35 +178,21 @@ export function PrWebhookSecrets() {
                 )}
               </div>
               <div className="flex shrink-0 gap-3 text-xs">
-                {repo.configured ? (
-                  <>
-                    <button
-                      type="button"
-                      disabled={busyId === repo.id}
-                      onClick={() => setPending({ kind: 'rotate', repo })}
-                      className="text-gray-300 hover:text-white disabled:opacity-50 transition-colors"
-                    >
-                      {busyId === repo.id ? t['settings.prwh.working'] : t['settings.prwh.rotate']}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === repo.id}
-                      onClick={() => setPending({ kind: 'remove', repo })}
-                      className="text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
-                    >
-                      {t['settings.prwh.remove']}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={busyId === repo.id}
-                    onClick={() => void generate(repo)}
-                    className="text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
-                  >
-                    {busyId === repo.id ? t['settings.prwh.working'] : t['settings.prwh.generate']}
-                  </button>
-                )}
+                <SecretRowActions
+                  configured={repo.configured}
+                  available={available}
+                  busy={busyId === repo.id}
+                  labels={{
+                    generate: t['settings.prwh.generate'],
+                    rotate: t['settings.prwh.rotate'],
+                    remove: t['settings.prwh.remove'],
+                    working: t['settings.prwh.working'],
+                    unavailable: t['settings.prwh.unavailable'],
+                  }}
+                  onGenerate={() => void generate(repo)}
+                  onRotate={() => setPending({ kind: 'rotate', repo })}
+                  onRemove={() => setPending({ kind: 'remove', repo })}
+                />
               </div>
             </li>
           ))}
