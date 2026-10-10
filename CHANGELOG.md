@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The per-repository fork opt-in of the PR scan webhook is ignored for public repositories:** the webhook now judges visibility from each delivery's `repository.private` and `repository.visibility` (a missing, mistyped or contradictory value counts as public; an `internal` repository counts as private), so a repository that turned public stops scanning outsiders' forks with its next delivery, without waiting for a sync. An explicit opt-out still holds and `GITHUB_WEBHOOK_SCAN_FORKS` keeps its meaning. `GET /api/webhook-secrets` reports the stored `private` flag; the settings page keeps Ignore selectable and disables Scan on a public row, says why, and disables the select for a row without a secret. Tracker task 9a2eadf8.
+
 ### Added
 
 - **PR scan webhook: GitHub's hook addresses get their own pre-verification budget:** a request whose trusted client address (the hop chosen by `WEBHOOK_TRUSTED_PROXY_HOPS`, never an entry to its left) lies in the `hooks` ranges of `https://api.github.com/meta` (IPv4 and IPv6; an IPv4-mapped IPv6 address counts as its IPv4 address) is counted against a budget of 300 a minute that other addresses cannot spend, instead of the 600 endpoint-wide ceiling, which it no longer touches. It still counts against its own address's 60. So a caller with many source addresses that exhausts the ceiling no longer makes GitHub's deliveries answer 429, and GitHub does not redeliver those by itself. The ranges are fetched lazily (never at import, by one background fetch with a 5-second timeout and no waiting request), cached for an hour, retried no sooner than five minutes after a failure and dropped after 24 hours without a refresh; before the first successful fetch, after a failure, or for an unusable response every request shares the single ceiling as before. The first refusal over the hook budget in a window logs one warning. CIDR matching is a small dependency-free matcher in `lib/ip-cidr.ts`. The budget rests on the trusted hop: where the app is reached without the proxy a caller can write that entry and claim a hook address. Documented in `docs/api.md`, `docs/configuration.md` and `.env.example`. Tests: `tests/unit/ip-cidr.test.ts`, `tests/unit/github-hook-ranges.test.ts`, `tests/unit/pr-webhook-preauth.test.ts`. Tracker task 7894b047.
@@ -21,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Fork-scan default read in one place:** the webhook route and `GET /api/webhook-secrets` read `GITHUB_WEBHOOK_SCAN_FORKS` through one helper (`lib/pr/scan-forks-default.ts`), so the default the settings page shows cannot drift from the one the webhook applies; the settings-route tests reset the variable after each test. Tracker task 7c744d19.
 - **Fatal startup configuration errors exit the process.** An invalid `SCAN_INTERVAL_MINUTES` made the instrumentation hook throw, but the Next.js server stayed up and answered every request with 500, so a restart policy never fired. The hook now logs the error and exits with status 1 (verified with the standalone `node server.js` the image runs). Tracker task 894d4d5f.
 - **Settings page disables Generate and Rotate when webhook secrets are unavailable.** With no key material (`WEBHOOK_SECRET_KEY` and `NEXTAUTH_SECRET` unset) both buttons answered 503; they are now disabled with the reason as their title, and Remove stays available. Tracker task 894d4d5f.
 

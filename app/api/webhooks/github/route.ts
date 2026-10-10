@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { scanPRAndComment } from '@/lib/pr/pr-scanner';
+import { scanForksDefault } from '@/lib/pr/scan-forks-default';
 import {
   MAX_BODY_BYTES,
   hasWellFormedSignature,
@@ -41,7 +42,7 @@ const DELIVERY_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 interface PullRequestPayload {
   action?: unknown;
   number?: unknown;
-  repository?: { name?: unknown; owner?: { login?: unknown } };
+  repository?: { name?: unknown; owner?: { login?: unknown }; private?: unknown; visibility?: unknown };
   pull_request?: { head?: { repo?: { full_name?: unknown } | null } | null } | null;
 }
 
@@ -58,15 +59,41 @@ function isForkPullRequest(payload: PullRequestPayload, owner: string, repo: str
 }
 
 /**
+ * True only when the payload says the repository is private. Visibility is
+ * judged from this delivery, not from the stored `Repo.private`, so a
+ * private-to-public flip applies to the very next delivery without waiting for
+ * a sync. A missing, mistyped or contradictory field counts as public, so the
+ * check fails safe.
+ */
+function isPrivateRepository(payload: PullRequestPayload): boolean {
+  const repository = payload.repository;
+  const flag = typeof repository?.private === 'boolean' ? repository.private : undefined;
+  const visibility = repository?.visibility;
+  const fromVisibility =
+    visibility === 'private' || visibility === 'internal'
+      ? true
+      : visibility === 'public'
+        ? false
+        : undefined;
+  if (flag === undefined && fromVisibility === undefined) return false;
+  if (flag !== undefined && fromVisibility !== undefined && flag !== fromVisibility) return false;
+  return flag ?? fromVisibility ?? false;
+}
+
+/**
  * Whether fork pull requests are scanned for one tracking row. The row's own
  * setting (set by its owner) wins; null follows the instance default
  * GITHUB_WEBHOOK_SCAN_FORKS, which scans forks only when it is `true`. The
  * argument is the verified row alone, so one row's opt-in never reaches the
- * row of another owner that tracks the same GitHub repository.
+ * row of another owner that tracks the same GitHub repository. On a public
+ * repository the row's opt-in is ignored (an explicit opt-out still holds), so
+ * a repository that became public stops scanning outsiders' forks on its own.
  */
-function scansForks(row: { webhookScanForks: boolean | null }): boolean {
-  if (row.webhookScanForks !== null) return row.webhookScanForks;
-  return process.env.GITHUB_WEBHOOK_SCAN_FORKS?.trim().toLowerCase() === 'true';
+function scansForks(row: { webhookScanForks: boolean | null }, isPrivate: boolean): boolean {
+  const instanceDefault = scanForksDefault();
+  if (row.webhookScanForks === null) return instanceDefault;
+  if (!isPrivate && row.webhookScanForks) return instanceDefault;
+  return row.webhookScanForks;
 }
 
 /** The operator switched the endpoint off (GITHUB_WEBHOOK_DISABLED=true). */
@@ -235,10 +262,11 @@ function claimedRepository(
  * before verification, and after it only the PR number and action (no URL from
  * the payload is ever fetched).
  *
- * Pull requests from forks are ignored (200) unless the verified row's owner
- * opted in (Repo.webhookScanForks) or, for a row without a setting,
- * GITHUB_WEBHOOK_SCAN_FORKS is `true`, because on a public repository any outsider can open one and the
- * comment publishes alert data.
+ * Pull requests from forks are ignored (200) unless the repository is private
+ * and the verified row's owner opted in (Repo.webhookScanForks), or
+ * GITHUB_WEBHOOK_SCAN_FORKS is `true` and the row has no setting (or opted in
+ * on a public repository, where the opt-in is ignored), because on a public
+ * repository any outsider can open one and the comment publishes alert data.
  *
  * The scan runs in the background and the route answers 202 at once: GitHub
  * gives a delivery 10 seconds, a scan can take longer. depsight is a
@@ -333,11 +361,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid pull request number' }, { status: 400 });
   }
 
-  // Fork pull requests are ignored (200) unless the operator opted in. This
+  // Fork pull requests are ignored (200) unless the operator opted in (a
+  // per-row opt-in counts only for a private repository, judged from this
+  // delivery's payload; see scansForks). This
   // sits after the signature check, so only a verified caller can ever see this
   // answer and it tells an unverified one nothing, and before the replay guard
   // and the rate limiters, so a fork delivery spends no scan budget.
-  if (!scansForks(tracked) && isForkPullRequest(payload, tracked.owner, tracked.name)) {
+  if (!scansForks(tracked, isPrivateRepository(payload)) && isForkPullRequest(payload, tracked.owner, tracked.name)) {
     return ignored('fork pull request');
   }
 

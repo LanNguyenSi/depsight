@@ -5,6 +5,7 @@ import { useLocale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { SecretRowActions } from '@/components/settings/SecretRowActions';
 import { showRotateHint } from '@/lib/pr/webhook-secret-notice';
+import { ForkScanSelect } from '@/components/settings/ForkScanSelect';
 
 interface RepoRow {
   id: string;
@@ -13,6 +14,7 @@ interface RepoRow {
   usable: boolean;
   rotatedAt: string | null;
   scanForks: boolean | null;
+  private: boolean;
 }
 
 interface Pending {
@@ -196,23 +198,21 @@ export function PrWebhookSecrets() {
                       }`
                     : t['settings.prwh.notConfigured']}
                 </div>
-                <label className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
-                  <span>{t['settings.prwh.forks']}</span>
-                  <select
-                    value={repo.scanForks === null ? 'default' : String(repo.scanForks)}
-                    disabled={busyId === repo.id}
-                    onChange={(e) =>
-                      void setScanForks(repo, e.target.value === 'default' ? null : e.target.value === 'true')
-                    }
-                    className="rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
-                  >
-                    <option value="default">
-                      {forksDefault ? t['settings.prwh.forksDefaultOn'] : t['settings.prwh.forksDefaultOff']}
-                    </option>
-                    <option value="true">{t['settings.prwh.forksOn']}</option>
-                    <option value="false">{t['settings.prwh.forksOff']}</option>
-                  </select>
-                </label>
+                <ForkScanSelect
+                  row={repo}
+                  forksDefault={forksDefault}
+                  busy={busyId === repo.id}
+                  labels={{
+                    title: t['settings.prwh.forks'],
+                    defaultOn: t['settings.prwh.forksDefaultOn'],
+                    defaultOff: t['settings.prwh.forksDefaultOff'],
+                    scan: t['settings.prwh.forksOn'],
+                    ignore: t['settings.prwh.forksOff'],
+                    publicNote: t['settings.prwh.forksPublic'],
+                    noSecretNote: t['settings.prwh.forksNoSecret'],
+                  }}
+                  onChange={(value) => void setScanForks(repo, value)}
+                />
                 {showRotateHint(available, repo) && (
                   <div className="text-xs text-amber-400" role="alert">
                     {t['settings.prwh.unusable']}
