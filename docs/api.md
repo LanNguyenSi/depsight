@@ -1,6 +1,6 @@
 # API reference
 
-All endpoints except `GET /api/health` and the NextAuth sign-in handlers under `/api/auth/*` require authentication. Which credentials an endpoint accepts depends on the route:
+All endpoints except `GET /api/health`, the NextAuth sign-in handlers under `/api/auth/*` and the GitHub webhook `POST /api/webhooks/github` (authenticated by its HMAC signature, see [GitHub pull-request webhook](#github-pull-request-webhook)) require authentication. Which credentials an endpoint accepts depends on the route:
 
 - **Session or Bearer token:** `/api/scan`, `/api/license`, `/api/deps`, `/api/history`, `/api/overview`, `/api/sbom`, `/api/repos`, `/api/repos/tracked-ids`, `/api/policies`, `/api/policies/[id]`, `/api/policies/evaluate`, `/api/advisory-state`, `/api/ci/analytics/*` and `/api/ci/sync` accept either a NextAuth session (the dashboard) or an `Authorization: Bearer dsat_...` API token (headless agents such as the MCP server).
 - **Session only:** `/api/export`, `/api/repos/sync`, `/api/dependabot`, `/api/dependabot/check`, `/api/dependabot/enable-all`, `/api/pr-scan`, `/api/me`, `/api/tokens` and `/api/tokens/[id]`, `/api/webhooks` and `/api/webhooks/[id]`, and `/api/slack` reject a Bearer token with 401. Token management is session-only on purpose: a `dsat_` token can never mint, list, or revoke tokens.
@@ -31,6 +31,7 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `GET` | `/api/dependabot/check` | Check which repos have Dependabot disabled |
 | `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot for the caller's tracked repos among the given `repoIds` (body: `{ repoIds }`) |
 | `POST` | `/api/ci/sync` | Sync GitHub Actions run data into the CI Health analytics (session or `WRITE` Bearer token; optional body `{ repoId }`, omit to sync all tracked repos); rate limited, see [Rate limits](#rate-limits) |
+| `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: scans the PR and posts or updates its CVE comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC, see [GitHub pull-request webhook](#github-pull-request-webhook) |
 | `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
 
 ## Rate limits
@@ -47,6 +48,26 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `POST /api/ci/sync` without a `repoId` (30-day sync of every tracked repo) | 12 |
 
 Over the limit the endpoint answers `429` with a `Retry-After` header (whole seconds until the window resets) and a body `{ "error": "Rate limit exceeded", "retryAfterSeconds": <n> }`; no scan, sync or repository listing is started. A request that fails authentication (401) or the write-scope check (403) does not count; every other answer counts, including a 400 for a missing `repoId` and, on `/api/deps`, a 404 for a repository the caller does not own. Every row of the table is its own budget. One `GET /api/repos` call costs ceil(N/100) GitHub requests for N visible repositories, so the limit counts calls, not GitHub requests. The counters live in the app process, which matches the single-instance deployment (one `app` service); behind several instances each instance would enforce the limit separately. The 300 per hour limits sit above the dashboard's "scan all" run for an account with up to 300 tracked repositories (it calls scan, license and deps once per repository, so each endpoint sees at most 300 calls) and above a CI job that syncs one repository after every push (`/api/ci/sync` with a `repoId`).
+
+## GitHub pull-request webhook
+
+`POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body under `GITHUB_WEBHOOK_SECRET`, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time.
+
+| Status | When |
+|--------|------|
+| `202` | Signed `opened` or `synchronize` delivery for a tracked repository; the scan runs in the background (GitHub allows a delivery 10 seconds) |
+| `200` | Signed delivery that is ignored: a `ping`, any other event, any other action (including `reopened`), a repository depsight does not track, or a replayed delivery |
+| `400` | Signed delivery with an invalid JSON body, an invalid owner, repository name or PR number, or a missing or malformed `X-GitHub-Delivery` header |
+| `401` | Missing, malformed or wrong signature (a signature of the wrong length included) |
+| `413` | Body over 1 MiB, rejected without buffering the rest |
+| `429` | Rate limit, with a `Retry-After` header |
+| `503` | `GITHUB_WEBHOOK_SECRET` unset or blank: the endpoint is disabled and scans nothing |
+
+Only the owner, repository name and PR number of the payload are used; no URL from the payload is ever fetched. The scan uses the GitHub token of the user who tracks the repository (the oldest tracking row with a stored token). A repository tracked by several users is scanned once per delivery, under that one user.
+
+**Replay protection.** A delivery is remembered for 24 hours under its `X-GitHub-Delivery` id and, because that header is not covered by the signature, also under the SHA-256 of its body; a second delivery with either key is answered `200` and ignored. A delivery whose scan fails is forgotten again so GitHub can redeliver it. The memory is bounded (10 000 keys, oldest dropped first) and lives in the app process: a restart clears it, and several instances would each keep their own, which matches the single-instance deployment. The cost of a miss is one repeated scan that rewrites the same PR comment, bounded by the rate limit.
+
+**Rate limit.** Only a signed delivery for a tracked repository counts: 60 per repository and hour, and 600 per hour for the whole endpoint (fixed window, in the app process like the limits above). Unsigned requests and ignored deliveries do not count; there is no per-IP limit, since an unsigned request costs one capped read and one HMAC.
 
 ## MCP server
 
