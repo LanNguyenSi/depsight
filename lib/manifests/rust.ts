@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { fetchManifestContents, type Octokit } from '@/lib/manifest-discovery';
 
 export interface CargoDep {
@@ -11,15 +12,31 @@ export interface CargoDep {
   inheritsWorkspace?: boolean;
 }
 
-const DEFAULT_PATHS = ['Cargo.toml', 'Cargo.lock'];
+const DEFAULT_PATHS = ['Cargo.toml'];
 
 const CRATES_IO_SOURCES = new Set([
   'registry+https://github.com/rust-lang/crates.io-index',
   'sparse+https://index.crates.io/',
 ]);
 
-function isCargoLockPath(path: string): boolean {
-  return (path.split('/').pop() ?? path) === 'Cargo.lock';
+/**
+ * Candidate Cargo.lock paths for a set of Cargo.toml paths: the repo root plus
+ * every ancestor directory and the directory of each manifest. Cargo keeps one
+ * lockfile at the workspace root, so a member crate's Cargo.toml in a
+ * subdirectory resolves against the root (or an enclosing workspace) lock.
+ * Probed paths may not exist; the fetch skips the missing ones.
+ *
+ * Pure function, exported for testing.
+ */
+export function discoverCargoLockPaths(manifestPaths: string[]): string[] {
+  const lockPaths = new Set<string>(['Cargo.lock']);
+  for (const p of manifestPaths) {
+    const parts = p.split('/').slice(0, -1);
+    for (let i = 1; i <= parts.length; i++) {
+      lockPaths.add(`${parts.slice(0, i).join('/')}/Cargo.lock`);
+    }
+  }
+  return [...lockPaths];
 }
 
 /**
@@ -30,8 +47,7 @@ function isCargoLockPath(path: string): boolean {
  *   - no `source` (the workspace's own member crates and `path` dependencies)
  *   - `git+...` sources
  *   - alternate registries (`registry+`/`sparse+` URLs other than crates.io)
- * Transitive packages are included: the lockfile resolves the full graph. A
- * crate locked at several versions yields one entry per version.
+ * A crate locked at several versions yields one entry per version.
  */
 export function parseCargoLock(content: string): CargoDep[] {
   const deps: CargoDep[] = [];
@@ -67,18 +83,24 @@ export function parseCargoLock(content: string): CargoDep[] {
 }
 
 /**
- * Order manifests so that, within one directory, Cargo.lock comes before its
- * Cargo.toml: the lockfile's exact version wins the first-seen dedupe over the
- * manifest's version requirement. Directory order (root-first) is preserved.
+ * Pick the locked version that resolves a Cargo.toml requirement. Cargo reads a
+ * bare `1.2` as `^1.2` and joins comparators with commas, which npm-style
+ * semver ranges spell differently, so the requirement is translated first. When
+ * several locked versions satisfy it the highest wins; when the requirement
+ * cannot be parsed the highest locked version is used; when none satisfies it
+ * (or nothing is locked) null is returned and the caller keeps the requirement.
  */
-function lockBeforeManifest<T extends { path: string }>(items: T[]): T[] {
-  const dirOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/') + 1));
-  const dirs: string[] = [];
-  for (const it of items) if (!dirs.includes(dirOf(it.path))) dirs.push(dirOf(it.path));
-  return dirs.flatMap((d) => {
-    const inDir = items.filter((it) => dirOf(it.path) === d);
-    return [...inDir.filter((it) => isCargoLockPath(it.path)), ...inDir.filter((it) => !isCargoLockPath(it.path))];
-  });
+export function pickLockedVersion(requirement: string, locked: string[]): string | null {
+  if (locked.length === 0) return null;
+  const cargoReq = requirement
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .map((c) => (/^\d/.test(c) ? `^${c}` : c))
+    .join(' ');
+  const range = cargoReq && cargoReq !== '*' ? semver.validRange(cargoReq) : '*';
+  if (range === null) return semver.rsort([...locked])[0] ?? null;
+  return semver.maxSatisfying(locked, range);
 }
 
 /**
@@ -183,12 +205,11 @@ export function parseCargoWorkspaceDeps(content: string): CargoDep[] {
 }
 
 /**
- * Read every discovered Cargo.toml (workspace root + member crates) and
- * Cargo.lock and union their dependencies (see `parseCargoLock` for what a
- * lockfile contributes). Deduped by crate name with first-seen (root-first) wins.
- * A virtual workspace root (only `[workspace]`, no `[dependencies]`) contributes
- * nothing of its own. Pure path-only `{ path = "../x" }` member deps carry no
- * version and are skipped by the parser.
+ * Read every discovered Cargo.toml (workspace root + member crates) and union
+ * the crates they DECLARE. Deduped by crate name with first-seen (root-first)
+ * wins. A virtual workspace root (only `[workspace]`, no `[dependencies]`)
+ * contributes nothing of its own. Pure path-only `{ path = "../x" }` member
+ * deps carry no version and are skipped by the parser.
  *
  * Workspace dependency inheritance is resolved: versions declared once in a
  * `[workspace.dependencies]` table are applied to member crates that opt in via
@@ -196,6 +217,13 @@ export function parseCargoWorkspaceDeps(content: string): CargoDep[] {
  * workspace table keeps an empty version (surfaced as UNKNOWN downstream) rather
  * than being dropped. Resolution only spans the discovered manifests; it does
  * not chase a workspace root outside the repo.
+ *
+ * Cargo.lock only sharpens the version of a declared crate: the root lock, each
+ * ancestor directory's lock and each manifest's own lock are read, and a
+ * declared crate's requirement is replaced by the locked version that satisfies
+ * it (highest on several matches). Crates present only in the lock
+ * (transitive dependencies), and workspace-local, git and alternate-registry
+ * packages, are never added.
  */
 export async function collectRustDeps(
   octokit: Octokit,
@@ -204,27 +232,44 @@ export async function collectRustDeps(
   manifestPaths: string[] = [],
 ): Promise<CargoDep[]> {
   const paths = manifestPaths.length > 0 ? manifestPaths : DEFAULT_PATHS;
-  const contents = lockBeforeManifest(await fetchManifestContents(octokit, owner, repo, paths));
+  const contents = await fetchManifestContents(octokit, owner, repo, paths);
 
   // Pass 1: collect the workspace dependency versions (the table is usually in
   // the workspace root, but is gathered from every manifest defensively).
   const workspaceVersions = new Map<string, string>();
-  for (const { path, content } of contents) {
-    if (isCargoLockPath(path)) continue;
+  for (const { content } of contents) {
     for (const dep of parseCargoWorkspaceDeps(content)) {
       if (!workspaceVersions.has(dep.name)) workspaceVersions.set(dep.name, dep.version);
     }
   }
 
-  // Pass 2: union member deps, resolving workspace-inherited versions.
+  // Locked versions per crate name, across every lockfile found.
+  const locked = new Map<string, string[]>();
+  const lockContents = await fetchManifestContents(
+    octokit,
+    owner,
+    repo,
+    discoverCargoLockPaths(contents.map((c) => c.path)),
+  );
+  for (const { content } of lockContents) {
+    for (const dep of parseCargoLock(content)) {
+      const versions = locked.get(dep.name) ?? [];
+      if (!versions.includes(dep.version)) versions.push(dep.version);
+      locked.set(dep.name, versions);
+    }
+  }
+
+  // Pass 2: union member deps, resolving workspace-inherited versions, then
+  // replacing each requirement by the version the lockfile resolved it to.
   const byName = new Map<string, CargoDep>();
-  for (const { path, content } of contents) {
-    const parsed = isCargoLockPath(path) ? parseCargoLock(content) : parseCargoToml(content);
-    for (const dep of parsed) {
-      const version = dep.inheritsWorkspace
+  for (const { content } of contents) {
+    for (const dep of parseCargoToml(content)) {
+      if (byName.has(dep.name)) continue;
+      const requirement = dep.inheritsWorkspace
         ? (workspaceVersions.get(dep.name) ?? '')
         : dep.version;
-      if (!byName.has(dep.name)) byName.set(dep.name, { name: dep.name, version });
+      const exact = pickLockedVersion(requirement, locked.get(dep.name) ?? []);
+      byName.set(dep.name, { name: dep.name, version: exact ?? requirement });
     }
   }
 

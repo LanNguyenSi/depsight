@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { collectRustDeps, parseCargoLock } from '@/lib/manifests/rust';
+import {
+  collectRustDeps,
+  discoverCargoLockPaths,
+  parseCargoLock,
+  pickLockedVersion,
+} from '@/lib/manifests/rust';
+import { pickPrimaryEcosystem, selectManifestPaths } from '@/lib/manifest-discovery';
 
 type Octokit = Parameters<typeof collectRustDeps>[0];
 
@@ -102,31 +108,142 @@ describe('parseCargoLock', () => {
   });
 });
 
+function pkg(name: string, version: string): string {
+  return `[[package]]\nname = "${name}"\nversion = "${version}"\nsource = "${CRATES_IO}"\n`;
+}
+
+describe('discoverCargoLockPaths', () => {
+  it('always probes the root and adds each manifest ancestor', () => {
+    expect(discoverCargoLockPaths([])).toEqual(['Cargo.lock']);
+    expect(discoverCargoLockPaths(['Cargo.toml', 'crates/a/Cargo.toml'])).toEqual([
+      'Cargo.lock',
+      'crates/Cargo.lock',
+      'crates/a/Cargo.lock',
+    ]);
+  });
+});
+
+describe('pickLockedVersion', () => {
+  it('reads a bare requirement as caret and takes the highest match', () => {
+    expect(pickLockedVersion('1.0', ['2.0.50', '1.0.109', '1.0.3'])).toBe('1.0.109');
+    expect(pickLockedVersion('2', ['1.0.109', '2.0.50'])).toBe('2.0.50');
+  });
+
+  it('honours exact, tilde and comma-joined requirements', () => {
+    expect(pickLockedVersion('=1.0.3', ['1.0.109', '1.0.3'])).toBe('1.0.3');
+    expect(pickLockedVersion('~1.0.3', ['1.1.0', '1.0.9'])).toBe('1.0.9');
+    expect(pickLockedVersion('>=1.0, <1.1', ['1.0.5', '1.2.0'])).toBe('1.0.5');
+  });
+
+  it('returns null when nothing is locked or nothing satisfies', () => {
+    expect(pickLockedVersion('1.0', [])).toBeNull();
+    expect(pickLockedVersion('3', ['1.0.109', '2.0.50'])).toBeNull();
+  });
+
+  it('falls back to the highest locked version for an unparseable requirement', () => {
+    expect(pickLockedVersion('not a range', ['1.0.0', '1.2.0'])).toBe('1.2.0');
+  });
+});
+
 describe('collectRustDeps with Cargo.lock', () => {
-  it('lets the lockfile exact version win over the Cargo.toml requirement in the same directory', async () => {
+  it('replaces a declared requirement with the locked version and adds no transitive crates', async () => {
     const toml = `[package]\nname = "app"\n[dependencies]\nserde = "1.0"\nregex = "1"\n`;
-    // Cargo.toml listed first on purpose: the lock must still win.
     const oct = octokitWith({ 'Cargo.toml': toml, 'Cargo.lock': lock });
-    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'Cargo.lock']);
-    expect(deps.find((d) => d.name === 'serde')?.version).toBe('1.0.197');
-    expect(deps.find((d) => d.name === 'regex')?.version).toBe('1');
-    expect(deps.map((d) => d.name).sort()).toEqual(['regex', 'serde', 'tokio']);
-  });
-
-  it('keeps root-first ordering across directories', async () => {
-    const rootToml = `[dependencies]\nserde = "1.0"\n`;
-    const memberLock = `[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "${CRATES_IO}"\n`;
-    const oct = octokitWith({ 'Cargo.toml': rootToml, 'crate-a/Cargo.lock': memberLock });
-    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'crate-a/Cargo.lock']);
-    expect(deps).toEqual([{ name: 'serde', version: '1.0' }]);
-  });
-
-  it('does not read Cargo.lock as a workspace.dependencies source', async () => {
-    const oct = octokitWith({ 'Cargo.lock': lock });
-    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.lock']);
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml']);
     expect(deps).toEqual([
       { name: 'serde', version: '1.0.197' },
-      { name: 'tokio', version: '1.36.0' },
+      { name: 'regex', version: '1' },
     ]);
+  });
+
+  it('chooses the locked version that satisfies the requirement when a crate is locked twice', async () => {
+    const toml = `[dependencies]\nsyn = "1"\n`;
+    const twice = pkg('syn', '2.0.50') + '\n' + pkg('syn', '1.0.109');
+    const oct = octokitWith({ 'Cargo.toml': toml, 'Cargo.lock': twice });
+    expect(await collectRustDeps(oct, 'o', 'r', ['Cargo.toml'])).toEqual([
+      { name: 'syn', version: '1.0.109' },
+    ]);
+  });
+
+  it('keeps the requirement when the lock has no satisfying version', async () => {
+    const toml = `[dependencies]\nsyn = "3"\n`;
+    const oct = octokitWith({ 'Cargo.toml': toml, 'Cargo.lock': pkg('syn', '2.0.50') });
+    expect(await collectRustDeps(oct, 'o', 'r', ['Cargo.toml'])).toEqual([
+      { name: 'syn', version: '3' },
+    ]);
+  });
+
+  it('resolves workspace members in subdirectories against the root lock', async () => {
+    const rootToml = `[workspace]\nmembers = ["crates/a"]\n[workspace.dependencies]\ntokio = "1"\n`;
+    const memberToml = `[package]\nname = "a"\n[dependencies]\ntokio = { workspace = true }\nserde = "1.0"\n`;
+    const rootLock = pkg('tokio', '1.36.0') + '\n' + pkg('serde', '1.0.197');
+    const oct = octokitWith({
+      'Cargo.toml': rootToml,
+      'crates/a/Cargo.toml': memberToml,
+      'Cargo.lock': rootLock,
+    });
+    const deps = await collectRustDeps(oct, 'o', 'r', ['Cargo.toml', 'crates/a/Cargo.toml']);
+    expect(deps).toEqual([
+      { name: 'tokio', version: '1.36.0' },
+      { name: 'serde', version: '1.0.197' },
+    ]);
+  });
+
+  it('reads a co-located lock of a nested manifest', async () => {
+    const oct = octokitWith({
+      'tools/x/Cargo.toml': `[dependencies]\nrand = "0.8"\n`,
+      'tools/x/Cargo.lock': pkg('rand', '0.8.5'),
+    });
+    expect(await collectRustDeps(oct, 'o', 'r', ['tools/x/Cargo.toml'])).toEqual([
+      { name: 'rand', version: '0.8.5' },
+    ]);
+  });
+
+  it('reads the root lock on the default-path fallback (no manifest list)', async () => {
+    const oct = octokitWith({
+      'Cargo.toml': `[dependencies]\nserde = "1.0"\n`,
+      'Cargo.lock': lock,
+    });
+    expect(await collectRustDeps(oct, 'o', 'r', [])).toEqual([
+      { name: 'serde', version: '1.0.197' },
+    ]);
+  });
+
+  it('works through the real manifest selection (a Cargo.lock in the tree is not a manifest)', async () => {
+    const refs = selectManifestPaths([
+      { path: 'Cargo.toml', type: 'blob' },
+      { path: 'Cargo.lock', type: 'blob' },
+    ]);
+    expect(refs.map((r) => r.path)).toEqual(['Cargo.toml']);
+    const oct = octokitWith({
+      'Cargo.toml': `[dependencies]\nserde = "1.0"\n`,
+      'Cargo.lock': lock,
+    });
+    const deps = await collectRustDeps(oct, 'o', 'r', refs.map((r) => r.path));
+    expect(deps).toEqual([{ name: 'serde', version: '1.0.197' }]);
+  });
+});
+
+describe('Cargo.lock does not steer ecosystem detection', () => {
+  it('npm stays primary for package.json + Cargo.toml + Cargo.lock', () => {
+    const refs = selectManifestPaths([
+      { path: 'package.json', type: 'blob' },
+      { path: 'Cargo.toml', type: 'blob' },
+      { path: 'Cargo.lock', type: 'blob' },
+    ]);
+    expect(pickPrimaryEcosystem(refs)).toBe('npm');
+  });
+
+  it('python stays primary for pyproject.toml + Cargo.toml + Cargo.lock', () => {
+    const refs = selectManifestPaths([
+      { path: 'pyproject.toml', type: 'blob' },
+      { path: 'Cargo.toml', type: 'blob' },
+      { path: 'Cargo.lock', type: 'blob' },
+    ]);
+    expect(pickPrimaryEcosystem(refs)).toBe('python');
+  });
+
+  it('a lone Cargo.lock yields no manifest', () => {
+    expect(selectManifestPaths([{ path: 'Cargo.lock', type: 'blob' }])).toEqual([]);
   });
 });

@@ -53,7 +53,6 @@ export const MANIFEST_MAP: Array<{ file: string; ecosystem: Ecosystem }> = [
   { file: 'build.gradle.kts', ecosystem: 'java' },
   { file: 'go.mod', ecosystem: 'go' },
   { file: 'Cargo.toml', ecosystem: 'rust' },
-  { file: 'Cargo.lock', ecosystem: 'rust' },
   { file: 'composer.json', ecosystem: 'php' },
   { file: 'Gemfile', ecosystem: 'ruby' },
   { file: 'Gemfile.lock', ecosystem: 'ruby' },
