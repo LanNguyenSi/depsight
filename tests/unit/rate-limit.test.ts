@@ -43,6 +43,15 @@ describe('createRateLimiter', () => {
     });
   });
 
+  it('reports the window end on an allowed call later in the same window', () => {
+    const limiter = createRateLimiter({ limit: 2, windowMs: 60_000 });
+    const start = Date.now();
+    limiter.check('u1');
+    vi.advanceTimersByTime(5_000);
+
+    expect(limiter.check('u1')).toMatchObject({ allowed: true, resetAt: start + 60_000 });
+  });
+
   it('keeps counting separate keys separately', () => {
     const limiter = createRateLimiter({ limit: 1, windowMs: 60_000 });
 
@@ -84,11 +93,16 @@ describe('createRateLimiter', () => {
 
 describe('rateLimitedResponse', () => {
   it('is a 429 carrying the Retry-After header and body', async () => {
-    const res = rateLimitedResponse({ allowed: false, remaining: 0, retryAfterSeconds: 42 });
+    const res = rateLimitedResponse({
+      allowed: false,
+      remaining: 0,
+      retryAfterSeconds: 42,
+      resetAt: 0,
+    });
 
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBe('42');
-    expect(await res.json()).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: 42 });
+    expect(await res.json()).toStrictEqual({ error: 'Rate limit exceeded', retryAfterSeconds: 42 });
   });
 });
 
