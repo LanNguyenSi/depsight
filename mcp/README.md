@@ -17,7 +17,7 @@ This is a thin wrapper around depsight's existing Next.js REST API. It does not 
 | `depsight_evaluate_policy` | Run enabled policies against a specific scan |
 | `depsight_ci_analytics` | GitHub Actions CI insights — per-repo (with `repoId`) or cross-repo (without) |
 | `depsight_get_sbom` | Export the CycloneDX 1.4 SBOM for a repo (requires a completed scan) |
-| `depsight_list_policies` | List the user's configured dependency policies |
+| `depsight_list_policies` | List the user's configured policies (license, CVE and dependency rules) |
 | `depsight_rescan` | Trigger a synchronous CVE scan for a tracked repository (the one write tool; the underlying `POST /api/scan` is rate limited per user, see [Rate limits](../docs/api.md#rate-limits)) |
 
 All tools are **read-only** except `depsight_rescan`, which triggers a CVE scan for a tracked repository. Webhook management and policy mutation are not exposed.
@@ -60,7 +60,11 @@ Both env vars are **required**; the server aborts on startup otherwise.
 
 ## Minting a token
 
-API tokens live in the `ApiToken` Prisma model, are scoped to a single depsight user, and each carries a `READ` or `WRITE` scope. Inside the depsight repo:
+Create a token on the depsight Settings page, in the API tokens section. Choose `READ` unless the agent needs `depsight_rescan`, which requires `WRITE`. Revoke it on the same page.
+
+API tokens live in the `ApiToken` Prisma model, are scoped to a single depsight user, and each carries a `READ` or `WRITE` scope.
+
+Operator alternative (needs `DATABASE_URL` and the user's internal id), inside the depsight repo:
 
 ```bash
 # ensure DATABASE_URL is set in your shell
@@ -72,9 +76,9 @@ npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop --scope 
 npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop --scope WRITE
 ```
 
-`--scope` defaults to `WRITE` when omitted, matching this script's behaviour from before the scope field existed; pass `--scope READ` explicitly for a read-only token. Every tool in the table above except `depsight_rescan` works with a `READ` token; `depsight_rescan` (`POST /api/scan`) requires `WRITE` and returns a 403 for a `READ` token. Since v1 does not expose policy mutation or webhook management (see Scope / limitations below), no other shipped tool needs `WRITE` today.
+The script's `--scope` defaults to `WRITE` when omitted, matching this script's behaviour from before the scope field existed; pass `--scope READ` explicitly for a read-only token. Every tool in the table above except `depsight_rescan` works with a `READ` token; `depsight_rescan` (`POST /api/scan`) requires `WRITE` and returns a 403 for a `READ` token. Since v1 does not expose policy mutation or webhook management (see Scope / limitations below), no other shipped tool needs `WRITE` today.
 
-The raw `dsat_…` value is printed **once**. Store it in your agent config (env var, secret manager); there is no retrieve-existing endpoint. To rotate, mint a new one and `UPDATE "ApiToken" SET "revokedAt" = NOW() WHERE id = '…';` on the old row.
+The raw `dsat_…` value is shown **once** (on the Settings page, or printed by the script). Store it in your agent config (env var, secret manager); there is no retrieve-existing endpoint. depsight stores the token unhashed, so protect database access and backups. To rotate, create a new token and revoke the old one in Settings (or `DELETE /api/tokens/<id>` from a signed-in session).
 
 All data is scoped to the minting user: tools only see repos that user owns.
 
@@ -121,7 +125,7 @@ A 429 from a per-user rate limit adds `retryAfterSeconds` to the error object an
 - Read-only except `depsight_rescan` (scan trigger). v1 intentionally omits the other write operations (webhook management, policy mutation, Slack config).
 - Per-token ACL via `ApiToken.scope`: a `READ` token can call every read tool, but `depsight_rescan` (the one write tool) requires a `WRITE` token and 403s for a `READ` token. There is still no finer-grained per-tool ACL beyond the read/write split.
 - No pagination beyond what the underlying REST endpoints already expose. Very large repos may produce large JSON responses.
-- Tokens never expire automatically. Operators must rotate manually.
+- Tokens never expire automatically. Rotate them by hand in Settings.
 
 ## Development
 

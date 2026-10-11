@@ -20,6 +20,17 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npm test
    ```
 
+   CI runs more than that. To match it, also run:
+
+   ```bash
+   npm run lint
+   npx tsc --noEmit
+   npm run test:coverage            # CI's test command: global and per-file coverage floors, so it can fail where npm test passes
+   (cd mcp && npm ci && npm test)   # the MCP package has its own lockfile and tests
+   ```
+
+   CI also runs a Postgres-backed test that is skipped locally unless `DEPSIGHT_TEST_DATABASE_URL` is set, see [tests/README.md](tests/README.md).
+
 4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it).
 5. Open the PR with a clear summary, motivation, and test plan.
 

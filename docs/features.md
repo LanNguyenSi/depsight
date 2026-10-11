@@ -5,7 +5,7 @@ A complete list of what depsight does today, beyond the headline value props in 
 ## Core scans
 
 - **CVE scanning** per repository: severity breakdown, risk scores, vulnerability timeline, risk score history.
-- **License detection** and copyleft compliance checking across all supported ecosystems.
+- **License detection** and copyleft compliance checking for npm, Python, Java, Rust and PHP. Go modules are listed with license `UNKNOWN` and flagged for review (see Known limitations).
 - **Per-finding triage.** A finding of the CVE list can be acknowledged or ignored for its repository, with the user and time that set it and an optional note (`AdvisoryState`, `PUT`/`DELETE /api/advisory-state`). The state is keyed by advisory id plus package, so it survives the next scan, and clearing it ("Reopen") makes the finding open again. It is informational: the CVE counts, the risk score, policies, notifications and the MCP `depsight_get_cves` counts still include ignored findings (the MCP advisory list carries the `state` object, so an agent can filter on it). The CVE list can hide ignored findings. One scan holds a given advisory and package once: repeated Dependabot alerts for it (one per manifest in a monorepo) count once. The key is the advisory id plus the package name, not the ecosystem, so the same advisory id on the same package name in two ecosystems collapses into the first row seen.
 - **Dependency age tracking** and outdated alerts.
 - **Multi-ecosystem support:** npm, Python, Go, Java, Rust, PHP.
@@ -34,6 +34,10 @@ A complete list of what depsight does today, beyond the headline value props in 
   "nothing here" (no manifest, no license file, a repository without commits,
   Dependabot alerts not enabled) and a single package whose registry lookup
   failed, which stays an unknown or needs-review row for that package.
+- **Go licenses are not detected.** Every Go module is reported as `UNKNOWN`
+  and needs review, so the copyleft check and `LICENSE_DENY` never flag a Go
+  dependency, while `LICENSE_ALLOW_ONLY` flags every Go dependency unless
+  `UNKNOWN` is on its allow list.
 - **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
@@ -94,23 +98,28 @@ A complete list of what depsight does today, beyond the headline value props in 
 ## Reporting and export
 
 - **SBOM export** in CycloneDX 1.4 format.
-- **Repository export** (download as zip).
+- **Repository export** (download as zip; missing scans can be run first, see `POST /api/export` in [docs/api.md](api.md)).
 - **Cross-repo comparison** and team health overview.
+
+## Scores
+
+- **Risk score** (per CVE scan): `min(100, round(10 * critical + 5 * high + 2 * medium + 0.5 * low))` over all advisories of the scan, both channels merged, so ten CRITICAL advisories already reach 100. Acknowledged and ignored findings still count (see Per-finding triage above). The overview groups repositories by risk score: 70 and above is high, 40 to 69 medium, below 40 low.
+- **Health score** (per repository, overview): 100, minus half the risk score, minus 5 per license issue (at most 20), minus up to 30 for the share of outdated dependencies, minus a CI penalty, clamped to 0 to 100.
 
 ## Workflow integrations
 
 - **GitHub OAuth** login and repository discovery.
-- **PR integration** with automatic CVE comments: the dashboard's PR scan button, or a GitHub `pull_request` webhook (HMAC-verified under a per-repository secret, `opened` and `synchronize`) that scans tracked repositories automatically. Setup is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional).
-- **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories. Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings; the message lists the most severe advisories first and adds a Mittel or Niedrig count field when MEDIUM or LOW rows are listed. The `scan.completed` payload carries `degradedReason` (null unless the scan was degraded, see Known limitations).
+- **PR integration** with automatic CVE comments: the dashboard's PR scan button, or a GitHub `pull_request` webhook (HMAC-verified under a per-repository secret, `opened` and `synchronize`) that scans tracked repositories automatically. Setup is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). The comment lists open Dependabot alerts that are new since the last scan; it does not analyse the pull request's diff.
+- **Webhook and Slack notifications.** Webhooks subscribe to `cve.critical`, `cve.high` and `scan.completed`; the two CVE events carry only CRITICAL and HIGH advisories and repeat on every CVE scan while such advisories stay open. Payloads, headers and the signature are described in [Outgoing webhooks](api.md#outgoing-webhooks). Slack delivers when a scan's worst advisory reaches the configured minimum severity (CRITICAL, HIGH, MEDIUM or LOW), so a MEDIUM or LOW minimum also posts MEDIUM or LOW findings; the message lists the most severe advisories first and adds a Mittel or Niedrig count field when MEDIUM or LOW rows are listed. The `scan.completed` payload carries `degradedReason` (null unless the scan was degraded, see Known limitations).
 - **Dependabot integration:** status check, enable per-repo, bulk-enable across all repos.
 
 ## Policy engine
 
-Custom CVE and license rules: define what severity / license combinations are allowed, denied, or require a waiver. See the `/api/policies` endpoint in [docs/api.md](api.md).
+Custom CVE, license and dependency rules: a license deny list or allow list, a minimum CVE severity, a maximum dependency age, and a per-package minimum version. Each enabled policy is evaluated against a scan and reports violations. There is no waiver or exception mechanism. See the `/api/policies` and `/api/policies/[id]` endpoints in [docs/api.md](api.md).
 
 Supported policy types are `LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE` and `DEPENDENCY_MIN_VERSION` (`lib/policy/engine.ts`). Every type is evaluated per scan against the licenses, advisories or dependency ages/versions of that scan.
 
-`DEPENDENCY_MIN_VERSION` expresses a per-package minimum version floor (rule shape `{ package: string, minVersion: string }`, e.g. "package X must resolve to at least version Y"). It compares each matching dependency's installed version from the scan against the floor with semver; installed versions that are not valid semver (a git ref, a `workspace:*` reference, a range) are skipped and counted as unparseable rather than reported as a violation. Because those installations are silently excluded rather than treated as violations, a policy can report clean without having actually checked every installation of the target package (a monorepo where every install uses the workspace protocol is a common case, not an edge case); the evaluator logs a server-side warning when this happens, but the policy result itself does not reflect it. A pre-release of the floor version (e.g. `8.5.18-beta.1` against a floor of `8.5.18`) sorts below the floor under semver ordering and is therefore reported as a violation; this is intended behavior. The `minVersion` must itself be a valid semver version — this is validated when the policy is created or updated, not only at evaluation time.
+`DEPENDENCY_MIN_VERSION` expresses a per-package minimum version floor (rule shape `{ package: string, minVersion: string }`, e.g. "package X must resolve to at least version Y"). It compares each matching dependency's installed version from the scan against the floor with semver; installed versions that are not valid semver (a git ref, a `workspace:*` reference, a range) are skipped and counted as unparseable rather than reported as a violation. Because those installations are silently excluded rather than treated as violations, a policy can report clean without having actually checked every installation of the target package (a monorepo where every install uses the workspace protocol is a common case, not an edge case); the evaluator logs a server-side warning when this happens, but the policy result itself does not reflect it. A pre-release of the floor version (e.g. `8.5.18-beta.1` against a floor of `8.5.18`) sorts below the floor under semver ordering and is therefore reported as a violation; this is intended behavior. The `minVersion` must itself be a valid semver version — this is validated when the policy is created or updated, not only at evaluation time. `package` must be a lowercase npm-style package name (optionally scoped, such as `@babel/core`). Names in other formats, such as Maven `group:artifact` coordinates, Go module paths or Composer `vendor/name` packages, are rejected with 400, so this policy type cannot target Java, Go or PHP dependencies.
 
 Every policy type has its rule shape validated when a policy is created or updated (`POST /api/policies`, `PUT /api/policies/[id]`); a rule that does not fit its type is rejected with a 400 and a message naming the field. The shapes are `{ deniedLicenses: string[] }` for `LICENSE_DENY`, `{ allowedLicenses: string[] }` for `LICENSE_ALLOW_ONLY`, `{ minSeverity: Severity }` for `CVE_MIN_SEVERITY` (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW` or `UNKNOWN`, uppercase) and `{ maxAgeDays: number }` for `DEPENDENCY_MAX_AGE`. A `PUT` is validated against the resulting type and rule pair, so changing only `type` re-checks the stored rule against the new type. Policies stored before this validation existed are not migrated or rejected: every evaluation logs a server-side `[policy] ... has a malformed rule` warning for each stored row whose rule fails its type's shape check, and evaluation itself is unchanged.
 
@@ -125,7 +134,10 @@ Queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-
 ## Settings
 
 - **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only) or `WRITE` (read and write, the default) scope at creation time; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`), on the scan-triggering POSTs and on `POST /api/ci/sync`. Which endpoints accept a token at all is listed in [docs/api.md](api.md).
-- **UI language switch:** English / German.
+- **Outgoing webhooks:** add, enable, disable and delete webhooks for the `cve.critical`, `cve.high` and `scan.completed` events, see [Outgoing webhooks](api.md#outgoing-webhooks).
+- **Slack:** a Slack incoming-webhook URL, an optional channel and the minimum severity that triggers a message, see Workflow integrations above.
+- **PR scan webhook secrets:** generate, rotate and remove the per-repository secret, and choose whether fork pull requests are scanned, see [PR scan webhook](configuration.md#pr-scan-webhook-optional).
+- **UI language switch:** English / German. The UI starts in German until a language is chosen. PR comments, Slack messages and policy violation messages are always in German.
 
 ## Operational
 

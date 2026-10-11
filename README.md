@@ -2,13 +2,13 @@
 
 GitHub-connected security dashboard: CVEs, licenses, and dependency health, self-hosted.
 
-**Live demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/). Dev Login is on the login page; no credentials needed to look around.
+**Live demo:** [depsight.opentriologue.ai](https://depsight.opentriologue.ai/). Sign in with a GitHub account. The password-less Dev Login exists only in a development build (`make dev`, see [Quick start](#quick-start)).
 
 ![depsight dashboard: a repository CVE summary with risk score, severity breakdown, and an advisory list of CVE IDs, affected ranges, and fix versions](docs/img/dashboard.png)
 
 ## Overview
 
-Dependency trees rot quietly: a CVE disclosed against a dependency installed six months ago will not surface until something fails, or until a customer asks. depsight runs continuous CVE, license, and staleness scanning across every repository a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a dashboard view rather than an afternoon of manual audits, across npm, Python, Go, Java, Rust, and PHP. depsight reads the Dependabot alerts GitHub has raised for a repository and supplements them with an OSV query over the dependencies declared in its manifests; a package installed only transitively shows up only once GitHub has raised a Dependabot alert for it, so a 0-advisory scan does not rule out a vulnerable transitive dependency (see [Known limitations](docs/features.md#known-limitations)).
+Dependency trees rot quietly: a CVE disclosed against a dependency installed six months ago will not surface until something fails, or until a customer asks. depsight runs continuous CVE, license, and staleness scanning across every repository a team owns, so the answer to "are we shipping known-vulnerable code right now?" is a dashboard view rather than an afternoon of manual audits, across npm, Python, Go, Java, Rust, and PHP (license detection does not cover Go). depsight reads the Dependabot alerts GitHub has raised for a repository and supplements them with an OSV query over the dependencies declared in its manifests; a package installed only transitively shows up only once GitHub has raised a Dependabot alert for it, so a 0-advisory scan does not rule out a vulnerable transitive dependency (see [Known limitations](docs/features.md#known-limitations)).
 
 For the broader operational picture beyond security, see [agent-ops-dashboard](https://github.com/LanNguyenSi/agent-ops-dashboard), which complements depsight with a fleet-wide repo-health view.
 
@@ -17,10 +17,10 @@ For the broader operational picture beyond security, see [agent-ops-dashboard](h
 - Per-repo CVE scanning: severity breakdown, risk scores, vulnerability timeline.
 - License detection and copyleft/policy-driven compliance checking.
 - Dependency age tracking, outdated alerts, and Dependabot status, with bulk-enable across repos.
-- PR auto-comments on CVEs.
+- PR comments listing Dependabot alerts that are new since the last scan.
 - Slack and webhook alerts.
 - SBOM export (CycloneDX 1.4).
-- A policy engine for custom CVE and license rules.
+- A policy engine for custom CVE, license and dependency rules.
 - An MCP server for agent access (Claude and other MCP-capable clients).
 
 Full feature list, including known limitations, in [docs/features.md](docs/features.md).
@@ -35,7 +35,7 @@ cd depsight
 make dev          # docker compose up: app + Postgres, pushes the DB schema, starts dev server
 ```
 
-Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets.
+Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets, and [Self-hosting](docs/configuration.md#self-hosting) for a production deployment.
 
 ## Usage
 
@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/api/scan \
   -d '{"repoId": "<repo-id>"}'
 ```
 
-Create an API token on the Settings page (or via `POST /api/tokens` from a signed-in session); triggering scans needs the default WRITE scope. The dashboard UI covers the same actions without a token. Full endpoint list in [docs/api.md](docs/api.md).
+Create an API token on the Settings page (or via `POST /api/tokens` from a signed-in session); triggering scans needs the default WRITE scope. The dashboard UI covers the same actions without a token. Endpoint reference in [docs/api.md](docs/api.md).
 
 ## Documentation
 
@@ -73,7 +73,7 @@ npm test              # vitest
 npm run lint          # eslint
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR workflow and the Docker Compose dev setup.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR workflow, the checks CI runs, and the Docker Compose dev setup.
 
 ## License
 

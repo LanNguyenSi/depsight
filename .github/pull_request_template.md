@@ -10,7 +10,7 @@
 
 - [ ] `npm run build`
 - [ ] `npm test`
-- [ ] For Prisma changes: migration committed alongside schema
+- [ ] For Prisma schema changes: `npm run db:push` applies cleanly (no migrations directory; a new unique key over existing rows needs a step in `prisma/pre-push/`, see CONTRIBUTING.md)
 - [ ] Manual smoke check: <!-- command or scenario -->
 
 ## Notes for reviewer

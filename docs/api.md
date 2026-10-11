@@ -9,7 +9,7 @@ A Bearer `dsat_` token carries a `READ` or `WRITE` scope (`POST /api/tokens` acc
 
 A session counts only when it carries a user id: a signed-in session whose user row no longer exists has none and is treated as no session (401 on every session-only route, and a Bearer token is then tried on the routes that accept one).
 
-This table is a curated subset; the app exposes more route handlers (e.g. `/api/me`, `/api/tokens`, `/api/webhooks`, `/api/slack`, `/api/history`, `/api/overview`, `/api/pr-scan`, `/api/ci/analytics/*`) than are listed here.
+The table lists every route handler except the NextAuth handlers under `/api/auth/*` and the webhook-secret routes, which are listed under [GitHub pull-request webhook](#github-pull-request-webhook).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -18,20 +18,41 @@ This table is a curated subset; the app exposes more route handlers (e.g. `/api/
 | `PUT` | `/api/advisory-state` | Acknowledge or ignore one finding (body: `{ repoId, ghsaId, packageName, status: 'ACKNOWLEDGED' \| 'IGNORED', note? }`, note up to 500 characters). 404 for a repository the caller does not own or an advisory that repository never reported. Session or `WRITE` Bearer token |
 | `DELETE` | `/api/advisory-state` | Clear the state of one finding, it is open again (body: `{ repoId, ghsaId, packageName }`). Idempotent. Session or `WRITE` Bearer token |
 | `POST` | `/api/license` | Run license compliance check (body: `{ repoId }`); rate limited, see [Rate limits](#rate-limits) |
-| `GET` | `/api/deps` | Fetch dependency list with age/outdated info |
+| `GET` | `/api/license` | License results of the latest completed license scan of a repository (`?repoId=`): `{ scanId, scannedAt, licenseCount, conflictCount, summary, licenses }`; `{ licenses: [], summary: {}, conflictCount: 0 }` while there is none |
+| `GET` | `/api/deps` | Fetch the dependency list with age/outdated info of the latest dependency scan (`?repoId=`) |
 | `POST` | `/api/deps` | Run the dependency age analysis for a repository (body: `{ repoId }`); rate limited, see [Rate limits](#rate-limits) |
-| `GET` | `/api/sbom` | Export SBOM (CycloneDX 1.4) |
-| `POST` | `/api/export` | Export CVE, license and dependency results as a zip archive (body: `{ repoId }`) |
+| `GET` | `/api/history` | CVE scan history of a repository (`?repoId=&limit=`, `limit` default 30, at most 100): risk score and counts of its completed CVE scans, oldest first; with more scans than `limit`, the oldest ones are returned. 404 for a repository the caller does not track |
+| `GET` | `/api/overview` | Team health across the caller's tracked repositories: `{ repos, aggregate, topRiskyRepos, mostOutdated }`, with `riskScore`, `healthScore` and `scannerStatus` per repository (see [Scores](features.md#scores)) |
+| `GET` | `/api/sbom` | Export a CycloneDX 1.4 SBOM built from the latest CVE, license and dependency scans (`?repoId=`); 404 `no_scan` until the repository has a completed scan |
+| `POST` | `/api/export` | Export CVE, license and dependency results as a zip archive (body: `{ repoId, runMissingScans? }`). Without `runMissingScans: true`, a repository lacking a completed CVE, license or dependency scan answers 409 `missing_scans` with the list. With it, the missing scans run first (409 `scan_in_progress` while a CVE scan of the repository is already running) |
 | `GET` | `/api/repos` | List the live GitHub repos for the authenticated user; archived repos are excluded unless `?includeArchived=true`; rate limited, see [Rate limits](#rate-limits) |
 | `GET` | `/api/repos/tracked-ids` | Cheap per-tracked-repo id pair, `{ repos: [{ repoId, githubId }] }`; no team-health computation |
 | `POST` | `/api/repos/sync` | Sync repositories from GitHub; archived repos are excluded and untracked; response `{ synced, removed, archived }` |
 | `GET` | `/api/policies` | List policy rules |
-| `POST` | `/api/policies` | Create or update a policy rule (`LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE`, `DEPENDENCY_MIN_VERSION`); a `rule` that does not fit the type's shape returns 400 |
+| `POST` | `/api/policies` | Create a policy (body: `{ name, type, severity, rule, enabled? }`; `type` one of `LICENSE_DENY`, `LICENSE_ALLOW_ONLY`, `CVE_MIN_SEVERITY`, `DEPENDENCY_MAX_AGE`, `DEPENDENCY_MIN_VERSION`; `severity` one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `UNKNOWN`; `enabled` defaults to true). Answers 201 `{ policy }`. A `rule` that does not fit the type's shape returns 400 |
+| `GET` | `/api/policies/[id]` | One policy, `{ policy }`; 404 if it is not the caller's |
+| `PUT` | `/api/policies/[id]` | Partial update of `name`, `type`, `severity`, `rule` or `enabled`; the resulting type and rule pair is validated (400 otherwise). Answers `{ policy }`; 404 if it is not the caller's. Session or `WRITE` Bearer token |
+| `DELETE` | `/api/policies/[id]` | Delete a policy; answers `{ success: true }`, 404 if it is not the caller's. Session or `WRITE` Bearer token |
+| `POST` | `/api/policies/evaluate` | Evaluate the caller's enabled policies against one scan (body: `{ scanId }`); answers `{ violations, count }`. 400 without `scanId`; a scan the caller does not own answers 500 |
 | `POST` | `/api/dependabot` | Enable Dependabot alerts for a repo (body: `{ repoId }`) |
 | `GET` | `/api/dependabot/check` | Check which repos have Dependabot disabled |
 | `POST` | `/api/dependabot/enable-all` | Bulk-enable Dependabot for the caller's tracked repos among the given `repoIds` (body: `{ repoIds }`) |
 | `POST` | `/api/ci/sync` | Sync GitHub Actions run data into the CI Health analytics (session or `WRITE` Bearer token; optional body `{ repoId }`, omit to sync all tracked repos); rate limited, see [Rate limits](#rate-limits) |
-| `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: scans the PR and posts or updates its CVE comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC under the secret of the tracked repository it names, see [GitHub pull-request webhook](#github-pull-request-webhook) |
+| `GET` | `/api/ci/analytics/[repoId]` | CI analytics of one repository (`?type=fail-rate\|build-times\|flaky\|bottleneck`, default `fail-rate`; `&period=1\|7\|30` days, default and fallback 30): `{ type, period, data }`. 400 for an unknown type, 404 for a repository the caller does not own |
+| `GET` | `/api/ci/analytics/cross-repo` | CI health summary across the caller's repositories (`?period=1\|7\|30`, default and fallback 30): `{ period, summaries }` |
+| `GET` | `/api/tokens` | The caller's API tokens, metadata only (`id`, `name`, `scope`, `createdAt`, `lastUsedAt`, `revokedAt`), never the token value |
+| `POST` | `/api/tokens` | Create a token (body: `{ name, scope? }`, `name` up to 100 characters, `scope` `READ` or `WRITE`, default `WRITE`). Answers 201 `{ token, record }`; no other endpoint returns the `dsat_` value again. 400 for a missing or too long name or an unknown scope |
+| `DELETE` | `/api/tokens/[id]` | Revoke a token (sets `revokedAt`); answers `{ ok: true }`, or 404 when the token is unknown, not the caller's or already revoked |
+| `GET` | `/api/webhooks` | The caller's outgoing webhooks (`id`, `name`, `url`, `events`, `enabled`, `createdAt`), without the secret |
+| `POST` | `/api/webhooks` | Create an outgoing webhook (body: `{ name, url, secret?, events }`, `events` from `cve.critical`, `cve.high`, `scan.completed`; `url` must be a public `http(s)` target). Answers 201 `{ webhook }` with the full row, secret included; 400 for a missing field, a non-public URL or an unknown event. See [Outgoing webhooks](#outgoing-webhooks) |
+| `PATCH` | `/api/webhooks/[id]` | Enable or disable a webhook (body: `{ enabled? }`; without `enabled` it toggles). Answers `{ webhook }` with the full row, secret included; 404 if it is not the caller's |
+| `DELETE` | `/api/webhooks/[id]` | Delete a webhook; answers `{ success: true }`, 404 if it is not the caller's |
+| `GET` | `/api/slack` | The caller's Slack configuration, `{ config }` (null when none is set) |
+| `POST` | `/api/slack` | Create or replace the Slack configuration (body: `{ webhookUrl, channel?, minSeverity?, enabled? }`; `minSeverity` one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, default `HIGH`; `enabled` defaults to true; `webhookUrl` must be a public `http(s)` target). Answers `{ config }` |
+| `DELETE` | `/api/slack` | Remove the Slack configuration; answers `{ success: true }` |
+| `POST` | `/api/pr-scan` | Run the PR scan for one pull request and post or update its comment (body: `{ owner, repo, prNumber }`); answers `{ success, commented, newCVECount, commentUrl }`. The scan lists open Dependabot alerts that were not in the repository's most recent completed scan, see [PR scan webhook](configuration.md#pr-scan-webhook-optional). 400 for a missing field or a PR number that is not a positive integer |
+| `GET` | `/api/me` | The signed-in user, `{ githubLogin, avatarUrl }` |
+| `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: runs the PR scan (open Dependabot alerts not in the last completed scan, see [configuration.md](configuration.md#pr-scan-webhook-optional)) and posts or updates its comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC under the secret of the tracked repository it names, see [GitHub pull-request webhook](#github-pull-request-webhook) |
 | `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
 
 ## Rate limits
@@ -51,7 +72,33 @@ Over the limit the endpoint answers `429` with a `Retry-After` header (whole sec
 
 ## GitHub pull-request webhook
 
-`POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same scan as `POST /api/pr-scan`. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time, under the webhook secret of a user who tracks the repository the payload names. The endpoint is on whenever sealing key material exists unless the operator sets `GITHUB_WEBHOOK_DISABLED=true` (then it answers `404` before reading the request), and because the secret belongs to the tracking row it does a database lookup of the repository named by the payload before the signature is verified (an indexed lookup of at most 25 rows). Without key material it answers `503`: `WEBHOOK_SECRET_KEY` or `NEXTAUTH_SECRET` is needed, and a deployment that sets only `AUTH_SECRET` has neither. A stored secret that no longer opens is logged once per process by row id, and the instance-wide `GITHUB_WEBHOOK_SECRET` is ignored with a one-time warning at the first delivery.
+`POST /api/webhooks/github` takes GitHub's `pull_request` webhook and runs the same PR scan as `POST /api/pr-scan` (the open Dependabot alerts that were not in the repository's most recent completed scan, see [What the PR scan compares](configuration.md#pr-scan-webhook-optional)), then posts or updates its comment. Setup (secret, payload URL, events) is in [docs/configuration.md](configuration.md#pr-scan-webhook-optional). It has no session and no Bearer token: the only authentication is the HMAC-SHA256 of the raw request body, sent as `X-Hub-Signature-256: sha256=<hex>` and compared in constant time, under the webhook secret of a user who tracks the repository the payload names. The endpoint is on whenever sealing key material exists unless the operator sets `GITHUB_WEBHOOK_DISABLED=true` (then it answers `404` before reading the request), and because the secret belongs to the tracking row it does a database lookup of the repository named by the payload before the signature is verified (an indexed lookup of at most 25 rows). Without key material it answers `503`: `WEBHOOK_SECRET_KEY` or `NEXTAUTH_SECRET` is needed, and a deployment that sets only `AUTH_SECRET` has neither. A stored secret that no longer opens is logged once per process by row id, and the instance-wide `GITHUB_WEBHOOK_SECRET` is ignored with a one-time warning at the first delivery.
+
+The diagram shows the order of the checks and the answer each step returns; the paragraphs below describe each one.
+
+```mermaid
+sequenceDiagram
+  participant GH as GitHub
+  participant R as POST /api/webhooks/github
+  participant DB as PostgreSQL
+  participant S as PR scan
+  GH->>R: pull_request delivery
+  Note over R: switched off: 404. No key material: 503
+  Note over R: pre-verification limit: 429, body unread
+  R->>R: read body (over 1 MiB: 413)
+  R->>R: signature well-formed and repository named (else 401)
+  R->>DB: tracked rows of that repository with a secret (at most 25)
+  R->>R: HMAC against every candidate (none verifies: 401)
+  R->>DB: refresh stored visibility of the verified row if it changed
+  Note over R: ping or other event: 200 ignored
+  Note over R: missing or malformed X-GitHub-Delivery: 400
+  Note over R: other action: 200 ignored. Invalid PR number: 400
+  Note over R: fork PR not opted in, or replayed delivery: 200 ignored
+  Note over R: per-row, per-user or endpoint budget spent: 429
+  R-)S: start scan in background
+  R-->>GH: 202 accepted
+  S->>GH: read Dependabot alerts, post or update the PR comment
+```
 
 **Secrets.** Each tracked repository row carries its own secret, minted and rotated by its owner (session only):
 
@@ -96,6 +143,62 @@ Only the PR number, action and head repository name of a verified payload are us
 - The ranges are fetched lazily and cached in the app process: nothing is fetched at start-up, the first request that carries an address starts one background fetch (it does not wait for it and is counted against the ceiling), at most one fetch runs at a time with a 5-second timeout, and the cache is refreshed when it is an hour old. A fetch that fails is retried no sooner than five minutes later (one warning is logged per run of failures), and ranges that could not be refreshed for 24 hours are dropped. The response is read with a cap of 2 MiB (refused when `Content-Length` declares more, and cancelled as soon as more has arrived) before it is parsed, and an entry wider than an IPv4 /8 or an IPv6 /16 is dropped as implausible, so a `0.0.0.0/0` in the answer cannot put every address in the hook class. The app needs outbound HTTPS to `api.github.com` for this.
 - Every failure ends in the single ceiling. Before the first successful fetch, after a failed one, for a response without a usable `hooks` list, and once stale ranges are dropped, every request is counted against the endpoint-wide ceiling exactly as if the budget did not exist, so the residual described above applies again until a fetch succeeds.
 - A deployment whose webhooks do not come from github.com (GitHub Enterprise Server) has no matching public ranges; its deliveries stay on the ceiling.
+
+## Outgoing webhooks
+
+A user's outgoing webhooks (Settings, or `/api/webhooks` from a signed-in session) each subscribe to one or more of three events:
+
+- `cve.critical` and `cve.high`: after every CVE scan that holds at least one CRITICAL or HIGH advisory, depsight sends one event, `cve.critical` when one of those advisories is CRITICAL, else `cve.high`, to the enabled webhooks subscribed to that event. A webhook subscribed only to `cve.high` therefore gets nothing for a scan that also holds a CRITICAL advisory. `newAdvisories` lists every CRITICAL and HIGH advisory of the scan, not only the ones that are new since the previous scan, so a subscriber is notified again on every CVE scan (the auto-scan cron included) while such a finding stays open.
+- `scan.completed`: after every completed CVE, license and dependency scan, degraded ones included, with the policy violations of that scan.
+
+```json
+{
+  "event": "cve.critical",
+  "repoFullName": "owner/repo",
+  "repoId": "…",
+  "scanId": "…",
+  "riskScore": 15,
+  "newAdvisories": [
+    {
+      "ghsaId": "GHSA-…",
+      "cveId": "CVE-…",
+      "severity": "CRITICAL",
+      "summary": "…",
+      "packageName": "…",
+      "fixedVersion": "…",
+      "url": "https://…"
+    }
+  ],
+  "scannedAt": "…"
+}
+```
+
+```json
+{
+  "event": "scan.completed",
+  "repoFullName": "owner/repo",
+  "repoId": "…",
+  "scanId": "…",
+  "scanType": "cve",
+  "summary": { "cveCount": 1, "riskScore": 15, "criticalCount": 1, "highCount": 0 },
+  "policyViolations": [
+    { "policyName": "…", "severity": "HIGH", "message": "…", "affectedPackages": ["…"] }
+  ],
+  "scannedAt": "…",
+  "degradedReason": null
+}
+```
+
+`scanType` is `cve`, `license` or `deps`, and `summary` follows it: `{ cveCount, riskScore, criticalCount, highCount }` for a CVE scan, `{ licenseCount, conflictCount }` for a license scan, and `{ summary: { total, upToDate, outdated, majorBehind, deprecated, unknown, outdatedPercent } }` for a dependency scan. `degradedReason` is null unless a source could not be read (see [Known limitations](features.md#known-limitations)). Policy violation messages are in German.
+
+Each delivery is a `POST` with the JSON body and these headers:
+
+- `Content-Type: application/json`
+- `User-Agent: depsight/1.0`
+- `X-depsight-Event: <event>`
+- `X-depsight-Signature: sha256=<hex>`, only when the webhook has a secret: the HMAC-SHA256 of the raw request body under that secret. To verify, compute the same HMAC over the raw body as received and compare it in constant time.
+
+The URL must be a public `http(s)` target: it is checked when the webhook is created and again at every delivery, and a non-public target is not called. Each event is delivered once; a failed delivery is not retried.
 
 ## MCP server
 

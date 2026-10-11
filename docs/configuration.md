@@ -2,24 +2,27 @@
 
 ## Environment variables
 
-`.env.example` ships the full set; copy it to `.env` and fill in values before `make dev`.
+`.env.example` holds the common variables; copy it to `.env` and fill in values before `make dev`. The table below also lists optional variables that `.env.example` leaves out.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | yes | `postgresql://depsight:password@localhost:5432/depsight` | PostgreSQL connection string |
+| `DATABASE_URL` | yes | (none; each compose file sets its own) | PostgreSQL connection string. The compose files set it for the app container, so a value in `.env` applies only to commands run on the host (for example `npm run db:push`) |
 | `NEXTAUTH_SECRET` | yes | (none) | NextAuth session signing secret. Generate with `openssl rand -base64 32`. While neither this nor `WEBHOOK_SECRET_KEY` is set, the settings page disables Generate and Rotate with the reason (the API would answer `503`); Remove stays available |
 | `NEXTAUTH_URL` | yes | `http://localhost:3000` | Public base URL of the app |
-| `GITHUB_CLIENT_ID` | optional | (none) | GitHub OAuth client id. Only needed for real GitHub login (the **Dev Login** button works without it) |
-| `GITHUB_CLIENT_SECRET` | optional | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID` |
+| `GITHUB_CLIENT_ID` | in production | (none) | GitHub OAuth client id. A production build (`make prod`, the Docker image) has no Dev Login, so without this pair nobody can sign in. A development build also offers the Dev Login button |
+| `GITHUB_CLIENT_SECRET` | in production | (none) | GitHub OAuth client secret. Pair with `GITHUB_CLIENT_ID`; required for every production deployment for the same reason |
 | `SCAN_INTERVAL_MINUTES` | optional | `60` | Minutes between automatic background re-scans (auto-scan cron). A whole number from 1 to 35791 (the largest delay a Node timer holds); unset or blank uses 60. Any other value (0, negative, non-numeric, fractional, larger than 35791) stops the server at startup with an error instead of being clamped: the process logs the error and exits with status 1, so a container restart policy (`restart: unless-stopped` in the shipped compose files) sees the failure instead of a server that stays up and answers 500 |
+| `SCAN_RUNNING_WINDOW_MS` | optional | `300000` | Milliseconds a RUNNING CVE scan counts as in progress: a new CVE scan of the same repository inside this window returns the running scan instead of starting another (`POST /api/scan` then answers `status: running`). Only a positive number is honoured; anything else uses the default |
 | `WEBHOOK_SECRET_KEY` | optional | (none) | Key material that seals the per-repository PR-scan webhook secrets at rest (AES-256-GCM). Unset or blank falls back to `NEXTAUTH_SECRET`. Set it before the first secret is created and keep it: changing it (or `NEXTAUTH_SECRET`, when this is unset) makes every stored webhook secret unreadable until it is rotated. Generate with `openssl rand -base64 32` |
 | `GITHUB_WEBHOOK_DISABLED` | optional | `false` | Set to `true` to switch the PR scan webhook off: `POST /api/webhooks/github` answers 404 without reading the request, whatever key material and secrets exist |
 | `WEBHOOK_TRUSTED_PROXY_HOPS` | optional | `1` | Number of trusted reverse proxies in front of the app, used to read the client address from `X-Forwarded-For` for the webhook's pre-verification rate limit (60 requests a minute per address, then 600 for the endpoint, or a separate 300 for addresses in GitHub's published hook ranges). `1` suits the traefik deployment; `0` ignores the header (every caller shares one bucket and the endpoint-wide ceiling; no request is classified as a GitHub hook address and nothing is fetched from `api.github.com`); a value that is not a whole number from 0 to 8 falls back to `1` with a warning |
 | `GITHUB_WEBHOOK_SCAN_FORKS` | optional | `false` | Instance default for the PR scan webhook: set to `true` to scan pull requests from forks for every tracked repository that has no setting of its own. By default such deliveries are answered 200 and ignored. A repository's owner can opt out per tracked repository in Settings, or opt in on a private one (an `internal` repository counts as private) |
 
-## GitHub OAuth (optional)
+## GitHub OAuth
 
-`make dev` works out of the box with the **Dev Login** on the login page (no GitHub credentials needed). For real GitHub login, register an OAuth app at [github.com/settings/developers](https://github.com/settings/developers) and add the two `GITHUB_CLIENT_*` values above:
+`make dev` works out of the box with the **Dev Login** on the login page (no GitHub credentials needed); Dev Login exists only in a development build. For real GitHub login, register an OAuth app at [github.com/settings/developers](https://github.com/settings/developers) and add the two `GITHUB_CLIENT_*` values above. It is required for every production deployment.
+
+When registering the OAuth app, set the Homepage URL to your `NEXTAUTH_URL` and the Authorization callback URL to `<NEXTAUTH_URL>/api/auth/callback/github`. depsight requests the scopes `repo`, `user:email` and `read:org`. `repo` gives read and write access to the signed-in user's private repositories, which depsight uses to read manifests and Dependabot alerts, post PR scan comments and enable Dependabot alerts.
 
 ```bash
 cp .env.example .env
@@ -30,6 +33,8 @@ make dev
 ## PR scan webhook (optional)
 
 depsight can scan a pull request automatically and post (or update) its CVE comment, instead of only on the dashboard's PR scan button. It uses the same scan as `POST /api/pr-scan`.
+
+**What the PR scan compares.** The PR scan does not read the pull request's changes. It lists the repository's open Dependabot alerts that were not in the repository's most recent completed scan. It also reports the Dependabot-only alert count and risk score, which can differ from the dashboard's values. The OSV channel is not used. A vulnerable dependency added by the pull request is not reported until GitHub raises a Dependabot alert for it. An alert raised since the last scan is reported on whichever pull request is scanned next. Read the comment as a repository status note, not as a pre-merge gate.
 
 Every tracked repository has its own webhook secret, minted by the user who tracks it. There is no instance-wide secret and no environment variable that enables the endpoint: a repository without a secret simply cannot be scanned through it. The endpoint is always on when sealing key material exists, unless `GITHUB_WEBHOOK_DISABLED=true` switches it off altogether. Requests are rate limited before the body is read (per client address and for the endpoint as a whole); the address is read from `X-Forwarded-For` according to `WEBHOOK_TRUSTED_PROXY_HOPS` (and decides whether GitHub's hook-range budget applies; the app then needs outbound HTTPS to `api.github.com`, and without it every request shares the one ceiling), see [API reference](api.md#github-pull-request-webhook).
 
@@ -55,17 +60,53 @@ Only the `opened` and `synchronize` actions of `pull_request` start a scan (`reo
 
 ## Make targets
 
+`make` with no target lists them all.
+
 ```bash
-make dev         # Start dev environment (foreground): app + Postgres via docker-compose.dev.yml
-make dev-up      # Same as dev, but in background
-make dev-down    # Stop dev environment
-make dev-logs    # Tail dev logs
-make dev-clean   # Stop + delete DB volumes (full reset)
-make prod        # Production build + start
-make test        # Run tests inside the dev container
-make lint        # Lint + type-check inside the dev container
-make ci          # Full CI pipeline
+make dev           # Start dev environment (foreground): app + Postgres via docker-compose.dev.yml
+make dev-up        # Same as dev, but in background
+make dev-down      # Stop dev environment
+make dev-logs      # Tail dev logs
+make dev-ps        # List dev containers
+make dev-clean     # Stop + delete DB volumes (full reset)
+make prod          # Production build + start (docker-compose.yml), see Self-hosting below
+make prod-down     # Stop production containers
+make test          # Run tests inside the dev container
+make lint          # Lint + type-check inside the dev container
+make format        # Prettier (write) inside the dev container
+make format-check  # Prettier (check) inside the dev container
+make ci            # format-check, lint, type-check and test in the dev container (not the same set as the GitHub CI)
+make build         # Production build inside the dev container
+make install       # npm ci and prisma generate locally, no Docker
+make hooks         # Set up the Husky pre-commit hook (lint-staged)
+make clean         # Remove node_modules, .next, dist, build and coverage
 ```
+
+## Self-hosting
+
+`make prod` runs `docker compose up --build -d` on `docker-compose.yml`: the app image (which starts `node server.js` and nothing else) and a Postgres 16 container. A first deployment needs these steps:
+
+1. Set `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. A production build has no Dev Login, so without the GitHub pair nobody can sign in (see [GitHub OAuth](#github-oauth)). `DATABASE_URL` in `.env` is ignored by the app container, because `docker-compose.yml` sets it.
+2. Run `make prod`.
+3. Apply the schema once, and again after every upgrade; the image does not do it. For example, from a checkout with `npm ci`, run `DATABASE_URL=postgresql://depsight:depsight@localhost:5432/depsight npm run db:push`. That runs the pre-push SQL, then `prisma db push`, the same steps as the `.relay.yml` deploy hook (see [Deploying the Advisory unique key](#deploying-the-advisory-unique-key)).
+4. Before exposing the host, change `POSTGRES_PASSWORD` and the app's `DATABASE_URL` in `docker-compose.yml` together (both use the password `depsight`). Remove the published 5432 port, or bind it and 3000 to 127.0.0.1 behind a reverse proxy (the command in step 3 needs 5432 reachable from the host); a reachable 3000 port also bypasses the proxy that `WEBHOOK_TRUSTED_PROXY_HOPS` relies on (see [API reference](api.md#github-pull-request-webhook)).
+5. Check `GET /api/health`.
+
+`docker-compose.traefik.yml` is an example for a traefik setup: its hostnames and the external `traefik-public` network must be adapted before use.
+
+How depsight stores credentials and separates users is summarised in [Security model](architecture.md#security-model).
+
+### Network access
+
+The app needs outbound HTTPS to these hosts:
+
+- GitHub REST API (`api.github.com`): repository and CI sync, Dependabot alerts, manifests, PR comments, and the hook ranges of the PR scan webhook (`api.github.com/meta`).
+- OSV (`api.osv.dev`): the second CVE channel.
+- Package registries for dependency age: `registry.npmjs.org`, `pypi.org`, `proxy.golang.org`, `crates.io`, `repo.packagist.org`, `search.maven.org`.
+- Package registries for license detection: `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `crates.io`, `repo1.maven.org`.
+- Each user-configured outgoing webhook and Slack URL.
+
+An unreachable source does not fail the scan: an unreadable GitHub or OSV source marks the scan degraded (see [Known limitations](features.md#known-limitations)), and a failed registry lookup leaves that package as an unknown or needs-review row.
 
 ## Database management
 
