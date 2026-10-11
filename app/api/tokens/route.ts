@@ -33,8 +33,8 @@ export async function GET() {
   return NextResponse.json({ tokens });
 }
 
-// POST /api/tokens — mint a new token. The raw dsat_ value is returned ONCE
-// in this response and is never stored anywhere it can be read back.
+// POST /api/tokens — mint a new token. The raw dsat_ value is returned once
+// here; it is stored as-is for lookup but no endpoint returns it again.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {

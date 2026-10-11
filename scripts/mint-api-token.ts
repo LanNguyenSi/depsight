@@ -10,9 +10,10 @@
  * to mint a read-only token, e.g. for a headless agent that should not be
  * able to trigger scans or mutate policies.
  *
- * Prints the raw token ONCE to stdout. The raw token is never stored
- * on the database (only the row). Losing it means revoking and
- * minting a new one — there is no retrieve-existing endpoint.
+ * Prints the raw token once to stdout. The token is stored as-is in
+ * ApiToken.token, the column every request is matched against
+ * (lib/auth-api.ts), so database read access is enough to use it. No
+ * endpoint shows it again: a lost token is revoked and replaced.
  *
  * Intended for operators wiring headless agents (e.g. the depsight
  * MCP server) to a specific user's data scope.

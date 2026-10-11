@@ -15,7 +15,7 @@ model User {
   email         String?   @unique
   githubId      String    @unique
   githubLogin   String
-  githubToken   String    // OAuth access token (encrypted at rest)
+  githubToken   String    // GitHub OAuth access token, stored in plaintext (scopes: repo user:email read:org, lib/auth.ts)
   avatarUrl     String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

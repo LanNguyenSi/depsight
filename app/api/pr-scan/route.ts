@@ -6,7 +6,9 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/pr-scan
- * Trigger a CVE scan for a specific PR and post a comment with results.
+ * Run the PR scan for a specific PR (open Dependabot alerts that were not in
+ * the repository's most recent completed scan; the PR's changes are not read)
+ * and post or update a comment with the result.
  *
  * Body: { owner: string, repo: string, prNumber: number }
  */
