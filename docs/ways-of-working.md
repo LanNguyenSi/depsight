@@ -3,7 +3,7 @@
 ## Git Workflow
 
 1. `master` branch is production
-2. Feature branches: `feat/<task-id>-<short-name>`
+2. Feature branches: `feat/<short-name>` or `fix/<short-name>` (see [CONTRIBUTING.md](../CONTRIBUTING.md))
 3. PRs reviewed before merge
 4. Conventional commits: `feat:`, `fix:`, `docs:`, `chore:`
 
@@ -16,6 +16,8 @@ npm run db:push      # Push schema changes (no migrations directory)
 ```
 
 ## Deployment
+
+The hosted instance is deployed with `docker-compose.traefik.yml`, whose hostnames and external `traefik-public` network belong to that setup; for your own deployment see [Self-hosting](configuration.md#self-hosting).
 
 ```bash
 docker compose -f docker-compose.traefik.yml build --no-cache app
@@ -30,5 +32,5 @@ The container does not apply schema changes; the deploy hook in `.relay.yml` (`p
 - [ ] No `any` types
 - [ ] DB mutations use transactions where needed
 - [ ] Responsive design (mobile + desktop)
-- [ ] DE UI strings
+- [ ] UI strings in both locales (DE and EN, `lib/i18n/translations.ts`)
 - [ ] Meaningful commit messages

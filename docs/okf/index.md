@@ -20,14 +20,20 @@ them.
   and when it reaches `scan.completed` subscribers as a policy violation (an
   enabled `CVE_MIN_SEVERITY` policy at MEDIUM or below).
 - [Dependency age scanning](dependency-age-scanning.md), the shared
-  per-ecosystem scanner contract and npm's inline exception, plus why the
-  `-1` unknown-age sentinel that is converted to `null` before the only
-  write, which the schema comment and the age policy check both state.
+  per-ecosystem scanner contract and npm's inline exception, plus the `-1`
+  unknown-age sentinel, which `lib/deps/scanner.ts` converts to `null` before
+  the only write, so a stored unknown age is always `null`, as the schema
+  comment and the age policy check both state.
 - [License classification](license-classification.md), the one shared
   `classifyLicense`, copyleft set and needs-review list in
   `lib/license/classifier.ts` used by every ecosystem but Go, and the
   per-ecosystem preparation (Java full-name matching, PyPI free-text
   normalization, Rust dual-license reduction) that runs before it.
+- [CVE channel merge and scores](cve-channel-merge-and-scores.md), how the
+  Dependabot and OSV channels become one advisory list keyed by identifier and
+  package, the one risk formula and the three lists it is applied to (the
+  merged scan, the Advisory dedupe SQL, the PR scan's raw Dependabot alerts),
+  and the inputs and penalties of the overview's health score.
 
 ## Modules
 
@@ -36,12 +42,25 @@ them.
   stored, and how per-scanner success times and failure messages keep a
   persistently failing scanner visible while `lastScannedAt` now means "any
   scanner last succeeded" and the cron only records its own attempt.
+- [PR scan semantics](pr-scan-semantics.md), what `POST /api/pr-scan` and
+  the GitHub `pull_request` webhook compare (open Dependabot alerts against
+  the newest completed scan of any scanner, never the diff or OSV), why a
+  newer license or dependency scan empties the baseline, and how the comment
+  is kept up to date.
+
+## Concepts
+
+- [Credentials and trust boundaries](credentials-and-trust-boundaries.md),
+  who a session or `dsat_` request acts as and with which GitHub token, which
+  stored secrets are plaintext and which is sealed, where the stored GitHub
+  token is read for background work, the two checks on outgoing URLs, and the
+  development-only Dev Login.
 
 ## Overview
 
 - [MCP server versus the web API](mcp-vs-web-api.md), the 11 MCP tools
   mapped to the REST endpoints they proxy, confirmation that only one tool
-  writes, and the web API capabilities (policy CRUD, tokens, webhooks,
-  Slack, Dependabot enable, repo sync, PR-triggered scans, CI sync,
-  export, direct license and dependency-age scans) that have no MCP
-  equivalent.
+  writes, and the web API capabilities (policy CRUD, finding triage,
+  tokens, webhooks, Slack, the Dependabot status check and Dependabot
+  enable, repo sync, PR-triggered scans, CI sync, export, direct license
+  and dependency-age scans) that have no MCP equivalent.

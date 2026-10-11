@@ -9,8 +9,8 @@ export interface Config {
  * `DEPSIGHT_URL` — base URL of the depsight Next.js app (e.g.
  *   `https://depsight.opentriologue.ai` or `http://localhost:3000`).
  *   Required. Trailing slashes are stripped.
- * `DEPSIGHT_API_TOKEN` — `dsat_` prefixed API token minted via
- *   `scripts/mint-api-token.ts`. Required. Scopes to the user who
+ * `DEPSIGHT_API_TOKEN` — `dsat_` prefixed API token created on the depsight
+ *   Settings page (or by an operator with `scripts/mint-api-token.ts`). Required. Scopes to the user who
  *   minted it; depsight has no per-tool ACL today.
  */
 export function loadConfig(): Config {
