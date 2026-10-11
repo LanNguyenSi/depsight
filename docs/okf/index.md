@@ -20,9 +20,10 @@ them.
   and when it reaches `scan.completed` subscribers as a policy violation (an
   enabled `CVE_MIN_SEVERITY` policy at MEDIUM or below).
 - [Dependency age scanning](dependency-age-scanning.md), the shared
-  per-ecosystem scanner contract and npm's inline exception, plus why the
-  `-1` unknown-age sentinel that is converted to `null` before the only
-  write, which the schema comment and the age policy check both state.
+  per-ecosystem scanner contract and npm's inline exception, plus the `-1`
+  unknown-age sentinel, which `lib/deps/scanner.ts` converts to `null` before
+  the only write, so a stored unknown age is always `null`, as the schema
+  comment and the age policy check both state.
 - [License classification](license-classification.md), the one shared
   `classifyLicense`, copyleft set and needs-review list in
   `lib/license/classifier.ts` used by every ecosystem but Go, and the
@@ -41,7 +42,7 @@ them.
 
 - [MCP server versus the web API](mcp-vs-web-api.md), the 11 MCP tools
   mapped to the REST endpoints they proxy, confirmation that only one tool
-  writes, and the web API capabilities (policy CRUD, tokens, webhooks,
-  Slack, Dependabot enable, repo sync, PR-triggered scans, CI sync,
-  export, direct license and dependency-age scans) that have no MCP
-  equivalent.
+  writes, and the web API capabilities (policy CRUD, finding triage,
+  tokens, webhooks, Slack, the Dependabot status check and Dependabot
+  enable, repo sync, PR-triggered scans, CI sync, export, direct license
+  and dependency-age scans) that have no MCP equivalent.
