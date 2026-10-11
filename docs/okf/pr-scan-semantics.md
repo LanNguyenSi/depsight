@@ -32,12 +32,13 @@ The flowchart below shows what one PR scan reads and writes.
 flowchart TD
   A["POST /api/pr-scan<br/>(session user's token)"] --> S["scanPRAndComment<br/>lib/pr/pr-scanner.ts"]
   B["POST /api/webhooks/github<br/>(verified row owner's token)"] --> S
-  S -->|"owner, repo"| D["fetchRepoAdvisories<br/>open Dependabot alerts"]
   S -->|"caller's tracked row"| P[("Scan<br/>newest COMPLETED row, any scanner")]
+  S -->|"owner, repo"| D["fetchRepoAdvisories<br/>open Dependabot alerts"]
   D --> N{"ghsaId among the<br/>baseline's Advisory rows?"}
   P -->|"Advisory ghsaIds"| N
+  N -->|"yes"| X["not listed<br/>(still counted in total and risk score)"]
   N -->|"no: new"| F["formatCVEComment<br/>lib/pr/comment-formatter.ts"]
-  N -->|"yes"| X["left out of the comment"]
+  D -->|"total, risk score<br/>(all open alerts)"| F
   F --> G["GitHub issue comment<br/>update by marker, else create"]
 ```
 
@@ -52,7 +53,7 @@ Consequences that follow from the code:
 - **Any scanner's row is a baseline.** The query has no `cvePayload` filter, which is how `GET /api/scan` picks the latest CVE scan (`app/api/scan/route.ts:68-76#"orderBy: { scannedAt: 'desc' },"`). The license and dependency scanners write `Scan` rows too (`lib/license/scanner.ts:18-20#"data: { repoId, status: 'RUNNING' },"`, `lib/deps/scanner.ts:26-37#"data: { repoId, status: 'RUNNING' },"`) and attach no Advisory rows to them. When such a row is the newest completed one, the baseline is empty and every open alert is reported as new.
 - **The dependency scan row tends to be the newest.** The dependency scanner creates its row only after its analysis has finished (the same `lib/deps/scanner.ts` range), while the CVE scanner creates its row before it reads any source (`lib/cve/scanner.ts:62-68#"status: 'RUNNING',"`). The cron starts all three scanners together for each due repository (`lib/cron/auto-scan.ts:118-121#"scanDependencies(user.id, repo.id, user.githubToken),"`), so after a cron cycle the dependency scan's row normally carries the latest `scannedAt`.
 - **No tracked row, no baseline.** When the caller tracks no row for the repository, `previousGhsaIds` stays empty and every open alert is new. `POST /api/pr-scan` does not check tracking before it scans.
-- **Nothing is stored.** The PR scan writes no `Scan` or `Advisory` row, so repeated PR scans compare against the same baseline until another scan of the repository completes. An alert raised since that scan is reported on whichever pull request is scanned next.
+- **Nothing is stored.** The PR scan writes no `Scan` or `Advisory` row, so repeated PR scans compare against the same baseline until another scan of the repository completes. An alert that is not in that baseline is listed on every pull request scanned until then.
 - **Dependabot off reads as "no new CVEs".** A `404` or a `403` that is not a rate limit returns an empty result flagged `dependabotDisabled` (`lib/cve/github-advisories.ts:127-129#"return { ...buildScanResult([]), dependabotDisabled: true };"`). `scanPRAndComment` ignores the flag, so the comment states that no new CVEs were introduced, with a risk score of 0 and a total of 0 (`lib/pr/comment-formatter.ts:9-10#"Keine neuen CVEs"`). A rate-limited `403` is rethrown (`lib/cve/github-advisories.ts:124-125#"throw error; // transient"`) and fails the PR scan.
 
 ## Totals and risk score in the comment

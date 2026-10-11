@@ -17,7 +17,7 @@ For the broader operational picture beyond security, see [agent-ops-dashboard](h
 - Per-repo CVE scanning: severity breakdown, risk scores, vulnerability timeline.
 - License detection and copyleft/policy-driven compliance checking.
 - Dependency age tracking, outdated alerts, and Dependabot status, with bulk-enable across repos.
-- PR comments listing Dependabot alerts that are new since the last scan.
+- PR comments listing the open Dependabot alerts that were not in the repository's latest completed scan (often all of them, see [docs/configuration.md](docs/configuration.md#pr-scan-webhook-optional)).
 - Slack and webhook alerts.
 - SBOM export (CycloneDX 1.4).
 - A policy engine for custom CVE, license and dependency rules.
