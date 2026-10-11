@@ -53,7 +53,7 @@ scripts/            Token minting, CI helpers
 
 ## Data flow
 
-depsight has four entry points: the browser (Server Components and API routes under a NextAuth session), the MCP server (API routes with a `dsat_` Bearer token), GitHub's `pull_request` webhook (`POST /api/webhooks/github`, verified by a per-repository HMAC secret) and the auto-scan cron, which `instrumentation.ts` starts with the server. The cron syncs every user's repositories and CI runs and runs the three scanners for repositories that are due; API routes run the same scanners on demand. The PR scan (started by the webhook or by `POST /api/pr-scan`) reads Dependabot alerts and posts the PR comment. Everything is stored in PostgreSQL through Prisma.
+depsight has four entry points: the browser (Server Components and API routes under a NextAuth session), `dsat_` token clients such as the MCP server or a CI job (API routes with a `dsat_` Bearer token), GitHub's `pull_request` webhook (`POST /api/webhooks/github`, verified by a per-repository HMAC secret) and the auto-scan cron, which `instrumentation.ts` starts with the server. The cron syncs every user's repositories and CI runs and runs the three scanners for repositories that are due; API routes run the same scanners on demand. The PR scan (started by the webhook or by `POST /api/pr-scan`) reads Dependabot alerts and posts the PR comment. Everything is stored in PostgreSQL through Prisma.
 
 The first diagram shows the entry points and what each one calls:
 
@@ -61,7 +61,7 @@ The first diagram shows the entry points and what each one calls:
 flowchart TD
   Browser -->|session| SC["Server Components (app/)"]
   Browser -->|session| API["API routes (app/api/)"]
-  MCP["depsight-mcp (mcp/)"] -->|"Bearer dsat_ token"| API
+  MCP["dsat_ token clients<br/>(depsight-mcp, CI jobs, scripts)"] -->|"Bearer dsat_ token"| API
   INST["instrumentation.ts"] --> CRON["auto-scan cron (lib/cron/)"]
   GHWH["GitHub pull_request webhook"] -->|"HMAC signature"| WH["POST /api/webhooks/github"]
   SC --> DB[("PostgreSQL via Prisma")]
@@ -71,6 +71,9 @@ flowchart TD
   SCN --> DB
   WH --> PR["PR scan (lib/pr/)"]
   API --> PR
+  PR -->|"scan baseline"| DB
+  WH -->|"candidate rows,<br/>visibility refresh"| DB
+  CRON -->|"users, due repos,<br/>lastScanAttemptAt"| DB
   WH -->|"hook ranges"| META["api.github.com/meta"]
   API -->|"repo list and sync,<br/>CI sync, Dependabot"| GH["GitHub API"]
   CRON -->|"repo sync, CI sync"| GH
@@ -84,9 +87,9 @@ flowchart TD
   OSV["api.osv.dev"] -->|advisories| CVE["CVE scanner (lib/cve/)"]
   GH["GitHub API"] -->|"Dependabot alerts, manifests"| CVE
   GH -->|manifests| LIC["license scanner (lib/license/)"]
-  GH --> DEPS["dependency-age scanner (lib/deps/)"]
-  REG["package registries"] -->|"versions, release dates"| DEPS
-  REG --> LIC
+  REG["package registries"] -->|"license metadata"| LIC
+  GH ---->|manifests| DEPS["dependency-age scanner (lib/deps/)"]
+  REG -->|"versions, release dates"| DEPS
   CVE -->|"advisories of the scan"| NOTIFY["notifier (lib/alerts/notifier.ts)"]
   CVE --> POST["post-scan hooks (lib/alerts/post-scan.ts)"]
   LIC --> POST

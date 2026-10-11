@@ -35,9 +35,10 @@ A complete list of what depsight does today, beyond the headline value props in 
   Dependabot alerts not enabled) and a single package whose registry lookup
   failed, which stays an unknown or needs-review row for that package.
 - **Go licenses are not detected.** Every Go module is reported as `UNKNOWN`
-  and needs review, so the copyleft check and `LICENSE_DENY` never flag a Go
-  dependency, while `LICENSE_ALLOW_ONLY` flags every Go dependency unless
-  `UNKNOWN` is on its allow list.
+  and needs review, so the copyleft check never flags a Go dependency,
+  `LICENSE_DENY` flags one only when `UNKNOWN` is on its deny list, and
+  `LICENSE_ALLOW_ONLY` flags every Go dependency unless `UNKNOWN` is on its
+  allow list.
 - **CVE scanning does not count Dependabot alerts GitHub auto-dismissed.**
   The Dependabot channel (`lib/cve/github-advisories.ts`) fetches only
   `state: 'open'` alerts. GitHub's "Dismiss low impact issues for
@@ -133,7 +134,7 @@ Queries (CVEs, licenses, deps, policies, CI analytics), SBOM export, and a scan-
 
 ## Settings
 
-- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only) or `WRITE` (read and write, the default) scope at creation time; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`), on the scan-triggering POSTs and on `POST /api/ci/sync`. Which endpoints accept a token at all is listed in [docs/api.md](api.md).
+- **API token management:** mint, view-once, and revoke `dsat_` API tokens from the Settings page, choosing a `READ` (read-only, preselected on the page) or `WRITE` (read and write) scope at creation time, while `POST /api/tokens` without a scope creates a `WRITE` token; a `READ` token gets 403 on the policy write routes (`POST`/`PUT`/`DELETE`), on the scan-triggering POSTs and on `POST /api/ci/sync`. Which endpoints accept a token at all is listed in [docs/api.md](api.md).
 - **Outgoing webhooks:** add webhooks for the `cve.critical`, `cve.high` and `scan.completed` events and see whether each is enabled. The page cannot enable, disable or delete a webhook; only `PATCH` and `DELETE /api/webhooks/[id]` from a signed-in session do, see [Outgoing webhooks](api.md#outgoing-webhooks).
 - **Slack:** a Slack incoming-webhook URL, an optional channel and the minimum severity that triggers a message, see Workflow integrations above.
 - **PR scan webhook secrets:** generate, rotate and remove the per-repository secret, and choose whether fork pull requests are scanned, see [PR scan webhook](configuration.md#pr-scan-webhook-optional).

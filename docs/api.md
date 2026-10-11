@@ -50,7 +50,7 @@ The table lists every route handler except the NextAuth handlers under `/api/aut
 | `GET` | `/api/slack` | The caller's Slack configuration, `{ config }` (null when none is set) |
 | `POST` | `/api/slack` | Create or replace the Slack configuration (body: `{ webhookUrl, channel?, minSeverity?, enabled? }`; `minSeverity` one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, default `HIGH`; `enabled` defaults to true; `webhookUrl` must be a public `http(s)` target). Answers `{ config }` |
 | `DELETE` | `/api/slack` | Remove the Slack configuration; answers `{ success: true }` |
-| `POST` | `/api/pr-scan` | Run the PR scan for one pull request and post or update its comment (body: `{ owner, repo, prNumber }`); answers `{ success, commented, newCVECount, commentUrl }`. The scan lists the open Dependabot alerts that were not in the caller's newest completed scan of the repository, of any type (CVE, license or dependency), so after a license or dependency scan every open alert is listed, see [PR scan webhook](configuration.md#pr-scan-webhook-optional). 400 for a missing field or a PR number that is not a positive integer |
+| `POST` | `/api/pr-scan` | Run the PR scan for one pull request and post or update its comment (body: `{ owner, repo, prNumber }`); answers `{ success, commented, newCVECount, commentUrl }`. The scan lists the open Dependabot alerts that were not in the caller's newest completed scan of the repository, of any type (CVE, license or dependency), so when a license or dependency scan is the newest, every open alert is listed, see [PR scan webhook](configuration.md#pr-scan-webhook-optional). 400 for a missing field or a PR number that is not a positive integer |
 | `GET` | `/api/me` | The signed-in user, `{ githubLogin, avatarUrl }` |
 | `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: runs the PR scan (open Dependabot alerts not in the newest completed scan of any type, see [configuration.md](configuration.md#pr-scan-webhook-optional)) and posts or updates its comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC under the secret of the tracked repository it names, see [GitHub pull-request webhook](#github-pull-request-webhook) |
 | `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
@@ -97,7 +97,9 @@ sequenceDiagram
   Note over R: per-row, per-user or endpoint budget spent: 429
   R-)S: start scan in background
   R-->>GH: 202 accepted
-  S->>GH: read Dependabot alerts, post or update the PR comment
+  S->>GH: read open Dependabot alerts
+  S->>DB: newest completed scan of the verified row (baseline)
+  S->>GH: post or update the PR comment
 ```
 
 **Secrets.** Each tracked repository row carries its own secret, minted and rotated by its owner (session only):
@@ -157,7 +159,7 @@ A user's outgoing webhooks (Settings, or `/api/webhooks` from a signed-in sessio
   "repoFullName": "owner/repo",
   "repoId": "…",
   "scanId": "…",
-  "riskScore": 15,
+  "riskScore": 10,
   "newAdvisories": [
     {
       "ghsaId": "GHSA-…",
@@ -180,7 +182,7 @@ A user's outgoing webhooks (Settings, or `/api/webhooks` from a signed-in sessio
   "repoId": "…",
   "scanId": "…",
   "scanType": "cve",
-  "summary": { "cveCount": 1, "riskScore": 15, "criticalCount": 1, "highCount": 0 },
+  "summary": { "cveCount": 1, "riskScore": 10, "criticalCount": 1, "highCount": 0 },
   "policyViolations": [
     { "policyName": "…", "severity": "HIGH", "message": "…", "affectedPackages": ["…"] }
   ],

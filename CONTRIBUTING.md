@@ -26,7 +26,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npm run lint
    npx tsc --noEmit
    npm run test:coverage            # CI's test command: global and per-file coverage floors, so it can fail where npm test passes
-   (cd mcp && npm ci && npm test)   # the MCP package has its own lockfile and tests
+   (cd mcp && npm ci && npx tsc --noEmit && npm test)   # the MCP package has its own lockfile, typecheck and tests
    ```
 
    CI also runs a Postgres-backed test that is skipped locally unless `DEPSIGHT_TEST_DATABASE_URL` is set, see [tests/README.md](tests/README.md).

@@ -48,7 +48,7 @@ curl -X POST http://localhost:3000/api/scan \
   -d '{"repoId": "<repo-id>"}'
 ```
 
-Create an API token on the Settings page (or via `POST /api/tokens` from a signed-in session); triggering scans needs the default WRITE scope. The dashboard UI covers the same actions without a token. Endpoint reference in [docs/api.md](docs/api.md).
+Create an API token on the Settings page (or via `POST /api/tokens` from a signed-in session); triggering scans needs the WRITE scope (the Settings form preselects READ; `POST /api/tokens` without a scope creates a WRITE token). The dashboard UI covers the same actions without a token. Endpoint reference in [docs/api.md](docs/api.md).
 
 ## Documentation
 
