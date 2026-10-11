@@ -29,6 +29,11 @@ them.
   `lib/license/classifier.ts` used by every ecosystem but Go, and the
   per-ecosystem preparation (Java full-name matching, PyPI free-text
   normalization, Rust dual-license reduction) that runs before it.
+- [CVE channel merge and scores](cve-channel-merge-and-scores.md), how the
+  Dependabot and OSV channels become one advisory list keyed by identifier and
+  package, the one risk formula and the three lists it is applied to (the
+  merged scan, the Advisory dedupe SQL, the PR scan's raw Dependabot alerts),
+  and the inputs and penalties of the overview's health score.
 
 ## Modules
 
@@ -37,6 +42,19 @@ them.
   stored, and how per-scanner success times and failure messages keep a
   persistently failing scanner visible while `lastScannedAt` now means "any
   scanner last succeeded" and the cron only records its own attempt.
+- [PR scan semantics](pr-scan-semantics.md), what `POST /api/pr-scan` and
+  the GitHub `pull_request` webhook compare (open Dependabot alerts against
+  the newest completed scan of any scanner, never the diff or OSV), why a
+  newer license or dependency scan empties the baseline, and how the comment
+  is kept up to date.
+
+## Concepts
+
+- [Credentials and trust boundaries](credentials-and-trust-boundaries.md),
+  who a session or `dsat_` request acts as and with which GitHub token, which
+  stored secrets are plaintext and which is sealed, where the stored GitHub
+  token is read for background work, the two checks on outgoing URLs, and the
+  development-only Dev Login.
 
 ## Overview
 
