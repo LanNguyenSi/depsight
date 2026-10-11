@@ -3,7 +3,7 @@ type: concept
 title: Credentials and trust boundaries - who a request acts as, and which secrets are stored how
 description: an API route acts either for a NextAuth session user (always WRITE) or for the owner of a dsat_ Bearer token (READ or WRITE, matched by its stored value), and in both cases calls GitHub with that user's stored OAuth token; token management is session-only; the GitHub OAuth token (written at every GitHub sign-in, used by the cron, the PR webhook and CI ingestion), the dsat_ token and the outgoing-webhook signing secret are stored as plaintext columns, while the PR-scan webhook secret is sealed with AES-256-GCM bound to its row; outgoing webhook and Slack URLs pass the public-address check at save and again at every delivery; Dev Login exists only in development builds.
 tags: [auth, tokens, secrets, webhooks, security]
-timestamp: 2026-10-11T15:51:49Z
+timestamp: 2026-10-11T16:26:54Z
 sources:
   - lib/auth.ts
   - lib/auth-api.ts
@@ -17,6 +17,7 @@ sources:
   - app/api/webhooks/[id]/route.ts
   - app/api/webhooks/github/route.ts
   - app/api/slack/route.ts
+  - app/api/webhook-secrets/route.ts
   - app/api/scan/route.ts
   - app/api/repos/route.ts
   - lib/cron/auto-scan.ts
@@ -41,7 +42,7 @@ Routes that call `auth()` instead of `resolveRequestUser` are session-only. Toke
 
 ## API tokens
 
-`POST /api/tokens` mints `dsat_` plus 32 random bytes in hex, stores that value in `ApiToken.token` and returns it once (`app/api/tokens/route.ts:68-75#"return NextResponse.json({ token: rawToken, record }, { status: 201 });"`). Without a `scope` in the body the token is `WRITE` (`app/api/tokens/route.ts:60-65#"scope = body.scope as ApiTokenScope;"`). `GET /api/tokens` returns metadata only (`app/api/tokens/route.ts:20-28#"revokedAt: true,"`), and `DELETE /api/tokens/[id]` sets `revokedAt` on a token of the caller (`app/api/tokens/[id]/route.ts:22-24#"data: { revokedAt: new Date() },"`). The operator script `scripts/mint-api-token.ts` writes the same kind of row for any user id, also `WRITE` by default (`scripts/mint-api-token.ts:64-74#"select: { id: true, name: true, scope: true, createdAt: true },"`). The model has no expiry column (`prisma/schema.prisma:238-241#"@default(now())"`): a token works until it is revoked.
+`POST /api/tokens` mints `dsat_` plus 32 random bytes in hex, stores that value in `ApiToken.token` and returns it once (`app/api/tokens/route.ts:68-75#"return NextResponse.json({ token: rawToken, record }, { status: 201 });"`). Without a `scope` in the body the token is `WRITE` (`app/api/tokens/route.ts:60-65#"scope = body.scope as ApiTokenScope;"`). `GET /api/tokens` returns metadata only (`app/api/tokens/route.ts:20-28#"revokedAt: true,"`), and `DELETE /api/tokens/[id]` sets `revokedAt` on a token of the caller (`app/api/tokens/[id]/route.ts:22-24#"data: { revokedAt: new Date() },"`). The operator script `scripts/mint-api-token.ts` writes the same kind of row for any user id, also `WRITE` by default (`scripts/mint-api-token.ts:46#"let resolvedScope: ApiTokenScope = ApiTokenScope.WRITE;"`, `scripts/mint-api-token.ts:64-74#"select: { id: true, name: true, scope: true, createdAt: true },"`). The model has no expiry column (`prisma/schema.prisma:238-241#"@default(now())"`): a token works until it is revoked.
 
 ## Where the stored GitHub token is used
 
@@ -60,10 +61,10 @@ Only sign-in writes the column: the GitHub sign-in callback, and Dev Login when 
 | GitHub OAuth token | `User.githubToken` (`prisma/schema.prisma:18#"stored in plaintext"`) | plaintext | the session callback, `resolveRequestUser` and the three uses above |
 | `dsat_` API token | `ApiToken.token` (`prisma/schema.prisma:231#"@unique"`) | plaintext, unique, matched by value | `resolveRequestUser`; no endpoint returns it after minting |
 | Outgoing webhook signing secret | `WebhookConfig.secret` (`prisma/schema.prisma:290#"// HMAC signing secret"`) | plaintext | the webhook delivery; also returned by `POST /api/webhooks` and `PATCH /api/webhooks/[id]` |
-| Slack incoming webhook URL | `SlackConfig.webhookUrl` (`prisma/schema.prisma:304#"// Slack incoming webhook URL"`) | plaintext | the Slack delivery; also returned by `GET /api/slack` |
-| PR-scan webhook secret | `Repo.webhookSecretEnc` (`prisma/schema.prisma:46-48#"webhookSecretEnc"`) | sealed (AES-256-GCM) | the PR-scan webhook route; the plaintext is shown only when it is minted |
+| Slack incoming webhook URL | `SlackConfig.webhookUrl` (`prisma/schema.prisma:304#"// Slack incoming webhook URL"`) | plaintext | the Slack delivery; also returned by `GET /api/slack` and `POST /api/slack` |
+| PR-scan webhook secret | `Repo.webhookSecretEnc` (`prisma/schema.prisma:46-48#"webhookSecretEnc"`) | sealed (AES-256-GCM) | the PR-scan webhook route; `GET /api/webhook-secrets` also opens it to report `usable`, without returning it (`app/api/webhook-secrets/route.ts:52#"usable: row.webhookSecretEnc !== null && openWebhookSecret(row.webhookSecretEnc, row.id) !== null,"`); the plaintext is shown only when it is minted |
 
-The outgoing webhook secret is the HMAC key of the `X-depsight-Signature` header (`lib/alerts/notifier.ts:52-69#"headers['X-depsight-Signature'] = signPayload(secret, body);"`). `GET /api/webhooks` selects the columns without it (`app/api/webhooks/route.ts:13-16#"select: { id: true, name: true, url: true, events: true, enabled: true, createdAt: true },"`), while `POST /api/webhooks` returns the created row (`app/api/webhooks/route.ts:58-68#"return NextResponse.json({ webhook }, { status: 201 });"`) and `PATCH /api/webhooks/[id]` the updated row (`app/api/webhooks/[id]/route.ts:36-49#"return NextResponse.json({ webhook: updated });"`). `GET /api/slack` returns the whole Slack configuration (`app/api/slack/route.ts:13-17#"return NextResponse.json({ config });"`).
+The outgoing webhook secret is the HMAC key of the `X-depsight-Signature` header (`lib/alerts/notifier.ts:52-69#"headers['X-depsight-Signature'] = signPayload(secret, body);"`). `GET /api/webhooks` selects the columns without it (`app/api/webhooks/route.ts:13-16#"select: { id: true, name: true, url: true, events: true, enabled: true, createdAt: true },"`), while `POST /api/webhooks` returns the created row (`app/api/webhooks/route.ts:58-68#"return NextResponse.json({ webhook }, { status: 201 });"`) and `PATCH /api/webhooks/[id]` the updated row (`app/api/webhooks/[id]/route.ts:36-49#"return NextResponse.json({ webhook: updated });"`). `GET /api/slack` and `POST /api/slack` return the whole Slack configuration (`app/api/slack/route.ts:13-17#"return NextResponse.json({ config });"`, `app/api/slack/route.ts:72#"return NextResponse.json({ config });"`).
 
 The PR-scan webhook secret is sealed because HMAC verification needs the plaintext, so it cannot be hashed (`lib/pr/webhook-secret.ts:6#"so it cannot be hashed"`). The key is derived with HKDF-SHA256 from `WEBHOOK_SECRET_KEY`, or from `NEXTAUTH_SECRET` when that is unset or blank (`lib/pr/webhook-secret.ts:32-37#"return Buffer.from(hkdfSync('sha256', material, KEY_SALT, KEY_INFO, 32));"`), and the row id is bound in as additional authenticated data (`lib/pr/webhook-secret.ts:45-57#"].join('.');"`). Opening returns `null` instead of throwing for a malformed value, a value sealed for another row, or a changed key (`lib/pr/webhook-secret.ts:65-79#"return plain === '' ? null : plain;"`), and the webhook route counts such a row as not verifying (`app/api/webhooks/github/route.ts:374-379#"if (secret && verifyGitHubSignature(rawBody, signature, secret)) verified.push(candidate);"`).
 
@@ -78,4 +79,4 @@ Outgoing webhook and Slack URLs are user input, checked twice by `lib/net/safe-f
 
 ## Dev Login
 
-The GitHub provider is registered only when its client id and secret are set (`lib/auth.ts:11#"if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {"`), and the `dev-login` credentials provider only when `NODE_ENV` is `development` (`lib/auth.ts:25-45#"githubToken: 'dev-token',"`). Dev Login accepts any username without a password and creates the user `dev-<username>` with the placeholder GitHub token `dev-token`.
+The GitHub provider is registered only when its client id and secret are set (`lib/auth.ts:11#"if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {"`), and the `dev-login` credentials provider only when `NODE_ENV` is `development` (`lib/auth.ts:25-45#"githubToken: 'dev-token',"`). Dev Login accepts any username without a password and creates a user with GitHub id `dev-<username>`, login `<username>` and the placeholder GitHub token `dev-token`.

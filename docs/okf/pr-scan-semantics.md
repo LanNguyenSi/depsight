@@ -3,7 +3,7 @@ type: module
 title: PR scan semantics - open Dependabot alerts against the newest completed scan, not the pull request diff
 description: POST /api/pr-scan and the GitHub pull_request webhook both run scanPRAndComment, which lists the repository's open Dependabot alerts whose GHSA id is not among the Advisory rows of the caller's newest COMPLETED Scan row (of any scanner, with no cvePayload filter, so a newer license or dependency scan leaves an empty baseline); it never reads the pull request's changes, never queries OSV, stores nothing, reports a Dependabot-only total and risk score over the raw alert list, and keeps one German comment per pull request by updating the comment that carries its marker.
 tags: [pr-scan, webhook, cve, dependabot]
-timestamp: 2026-10-11T16:14:41Z
+timestamp: 2026-10-11T16:26:54Z
 sources:
   - lib/pr/pr-scanner.ts
   - lib/pr/comment-formatter.ts
@@ -23,7 +23,7 @@ sources:
 
 Both entry points call `scanPRAndComment(accessToken, owner, repo, prNumber, userId)` in `lib/pr/pr-scanner.ts`.
 
-- `POST /api/pr-scan` is session-only (`app/api/pr-scan/route.ts:15-19#"return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });"`). It passes the signed-in user's stored GitHub token and user id (`app/api/pr-scan/route.ts:41-46#"session.user.id,"`), waits for the result and answers `500` with the error message when the scan throws (`app/api/pr-scan/route.ts:53-55#"return NextResponse.json({ error: message }, { status: 500 });"`).
+- `POST /api/pr-scan` is session-only (`app/api/pr-scan/route.ts:17-21#"return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });"`). It passes the signed-in user's stored GitHub token and user id (`app/api/pr-scan/route.ts:43-48#"session.user.id,"`), waits for the result and answers `500` with the error message when the scan throws (`app/api/pr-scan/route.ts:55-57#"return NextResponse.json({ error: message }, { status: 500 });"`).
 - `POST /api/webhooks/github` acts for the oldest tracking row whose secret verifies the delivery (`app/api/webhooks/github/route.ts:348-356#"orderBy: { createdAt: 'asc' },"`, `app/api/webhooks/github/route.ts:383-384#"if (!tracked) return invalidSignature();"`), only for the `opened` and `synchronize` actions (`app/api/webhooks/github/route.ts:37#"const SCAN_ACTIONS = new Set(['opened', 'synchronize']);"`). After the fork rule, the replay guard and the rate limits it starts the scan with that row owner's GitHub token without awaiting it and answers `202` (`app/api/webhooks/github/route.ts:444-458#"return NextResponse.json({ ok: true, accepted: true }, { status: 202 });"`). A failed scan is only logged, and its replay keys are released so GitHub can redeliver (`app/api/webhooks/github/route.ts:450-453#"prWebhookDeliveries.forget(bodyKey);"`).
 
 The flowchart below shows what one PR scan reads and writes.
