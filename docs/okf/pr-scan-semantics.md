@@ -3,7 +3,7 @@ type: module
 title: PR scan semantics - open Dependabot alerts against the newest completed CVE scan, not the pull request diff
 description: POST /api/pr-scan and the GitHub pull_request webhook both run scanPRAndComment, which lists the repository's open Dependabot alerts whose GHSA id is not among the Advisory rows of the caller's newest COMPLETED CVE Scan row (rows without a cvePayload, which the license and dependency scanners write, are skipped); it never reads the pull request's changes, never queries OSV, stores nothing, reports a Dependabot-only total and risk score over the raw alert list, and keeps one German comment per pull request by updating the comment that carries its marker.
 tags: [pr-scan, webhook, cve, dependabot]
-timestamp: 2026-10-11T16:26:54Z
+timestamp: 2026-10-12T15:48:40Z
 sources:
   - lib/pr/pr-scanner.ts
   - lib/pr/comment-formatter.ts

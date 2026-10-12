@@ -3,7 +3,7 @@ type: concept
 title: Credentials and trust boundaries - who a request acts as, and which secrets are stored how
 description: an API route acts either for a NextAuth session user (always WRITE) or for the owner of a dsat_ Bearer token (READ or WRITE, matched by its stored value), and in both cases calls GitHub with that user's stored OAuth token; token management is session-only; the GitHub OAuth token (written at every GitHub sign-in, used by the cron, the PR webhook and CI ingestion), the dsat_ token and the outgoing-webhook signing secret are stored as plaintext columns, while the PR-scan webhook secret is sealed with AES-256-GCM bound to its row; outgoing webhook and Slack URLs pass the public-address check at save and again at every delivery; Dev Login exists only in development builds.
 tags: [auth, tokens, secrets, webhooks, security]
-timestamp: 2026-10-11T16:26:54Z
+timestamp: 2026-10-12T15:48:40Z
 sources:
   - lib/auth.ts
   - lib/auth-api.ts
