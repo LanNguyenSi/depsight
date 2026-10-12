@@ -11,7 +11,7 @@ body:
         - API routes
         - MCP server
         - runner / scoring
-        - Prisma schema / migrations
+        - Prisma schema
         - hosted instance (depsight.opentriologue.ai)
         - other / unsure
     validations:

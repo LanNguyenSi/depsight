@@ -66,6 +66,18 @@ describe('PR Comment Formatter', () => {
     expect(comment).toContain('CVE-2024-99999');
   });
 
+  it('does not attribute alerts to the pull request and has no placeholder link', () => {
+    const none = formatCVEComment('owner/repo', [], 5, 30);
+    const advisories = Array.from({ length: 15 }, (_, i) =>
+      makeAdvisory({ id: `adv-${i}`, ghsaId: `GHSA-test-${i.toString().padStart(4, '0')}-0000` })
+    );
+    const many = formatCVEComment('owner/repo', advisories, 15, 75);
+    for (const text of [none, many]) {
+      expect(text).not.toMatch(/diesen PR|diesem PR/);
+      expect(text).not.toContain('](#)');
+    }
+  });
+
   it('truncates list at 10 CVEs with overflow notice', () => {
     const advisories = Array.from({ length: 15 }, (_, i) =>
       makeAdvisory({ id: `adv-${i}`, ghsaId: `GHSA-test-${i.toString().padStart(4, '0')}-0000` })

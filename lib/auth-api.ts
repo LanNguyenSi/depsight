@@ -36,8 +36,8 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
     return {
       id: session.user.id,
       githubLogin: session.user.githubLogin ?? null,
-      // githubToken may be "" for dev-login; callers that need GitHub
-      // access must handle that.
+      // Dev Login users carry the placeholder token "dev-token" (lib/auth.ts),
+      // which GitHub rejects; callers that need GitHub access must handle that.
       githubToken: session.user.githubToken ?? '',
       // A logged-in browser user always has full access, same as before
       // ApiToken.scope existed.

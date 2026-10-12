@@ -5,6 +5,7 @@
 // left real (pure, already covered by tests/unit/pr-comment-formatter.test.ts)
 // so we can assert on the actual comment body content.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -158,13 +159,52 @@ describe('scanPRAndComment — success path', () => {
     });
 
     expect(scanFindFirst).toHaveBeenCalledWith({
-      where: { repoId: 'db-repo-1', status: 'COMPLETED' },
+      where: { repoId: 'db-repo-1', status: 'COMPLETED', cvePayload: { not: Prisma.DbNull } },
       orderBy: { scannedAt: 'desc' },
       include: { advisories: { select: { ghsaId: true } } },
     });
     expect(result.newCVECount).toBe(1);
     // Only the NEW advisory (GHSA-new-new-new) appears in the comment body;
     // the already-seen GHSA-aaaa-bbbb-cccc is filtered out.
+    const body = createCommentMock.mock.calls[0][0].body as string;
+    expect(body).toContain('GHSA-new-new-new');
+    expect(body).not.toContain('GHSA-aaaa-bbbb-cccc');
+  });
+});
+
+describe('scanPRAndComment — baseline selection', () => {
+  it('ignores completed license/dependency scans (no CVE payload) when picking the baseline', async () => {
+    repoFindFirst.mockResolvedValue({ id: 'db-repo-1' });
+    const cveScan = {
+      scannedAt: new Date('2026-01-01T00:00:00Z'),
+      cvePayload: { advisories: [] },
+      advisories: [{ ghsaId: 'GHSA-aaaa-bbbb-cccc' }],
+    };
+    // Newer COMPLETED scan of another type: no CVE payload, no advisories.
+    const depsScan = {
+      scannedAt: new Date('2026-01-02T00:00:00Z'),
+      cvePayload: null,
+      advisories: [],
+    };
+    // Emulate the database applying the where clause (cvePayload: { not: DbNull })
+    // and the newest-first ordering to the stored rows.
+    scanFindFirst.mockImplementation(async (args: { where: { cvePayload?: unknown } }) => {
+      const rows = [cveScan, depsScan].filter(
+        (r) => args.where.cvePayload === undefined || r.cvePayload !== null,
+      );
+      rows.sort((a, b) => b.scannedAt.getTime() - a.scannedAt.getTime());
+      return rows[0] ?? null;
+    });
+    fetchRepoAdvisoriesMock.mockResolvedValue({
+      advisories: [makeAdvisory({ ghsaId: 'GHSA-aaaa-bbbb-cccc' }), makeAdvisory({ ghsaId: 'GHSA-new-new-new' })],
+      counts: { critical: 0, high: 2, medium: 0, low: 0, unknown: 0, total: 2 },
+      riskScore: 40,
+    });
+    createCommentMock.mockResolvedValue({ data: { html_url: 'https://x/comment' } });
+
+    const result = await scanPRAndComment('tok-123', 'acme', 'api', 1, 'user-1');
+
+    expect(result.newCVECount).toBe(1);
     const body = createCommentMock.mock.calls[0][0].body as string;
     expect(body).toContain('GHSA-new-new-new');
     expect(body).not.toContain('GHSA-aaaa-bbbb-cccc');

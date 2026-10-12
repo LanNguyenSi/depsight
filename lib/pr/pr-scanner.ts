@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { createGitHubClient } from '@/lib/github';
 import { fetchRepoAdvisories } from '@/lib/cve/github-advisories';
 import { prisma } from '@/lib/prisma';
@@ -26,7 +27,13 @@ export async function scanPRAndComment(
   let previousGhsaIds = new Set<string>();
   if (dbRepo) {
     const prevScan = await prisma.scan.findFirst({
-      where: { repoId: dbRepo.id, status: 'COMPLETED' },
+      // CVE scans only: license and dependency scans also write COMPLETED rows, but
+      // they carry no advisories and would make every open alert look new.
+      where: {
+        repoId: dbRepo.id,
+        status: 'COMPLETED',
+        cvePayload: { not: Prisma.DbNull },
+      },
       orderBy: { scannedAt: 'desc' },
       include: { advisories: { select: { ghsaId: true } } },
     });

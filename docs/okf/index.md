@@ -44,8 +44,8 @@ them.
   scanner last succeeded" and the cron only records its own attempt.
 - [PR scan semantics](pr-scan-semantics.md), what `POST /api/pr-scan` and
   the GitHub `pull_request` webhook compare (open Dependabot alerts against
-  the newest completed scan of any scanner, never the diff or OSV), why a
-  newer license or dependency scan empties the baseline, and how the comment
+  the newest completed CVE scan, never the diff or OSV), why license and
+  dependency scans are skipped as baselines, and how the comment
   is kept up to date.
 
 ## Concepts

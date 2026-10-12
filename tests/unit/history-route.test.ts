@@ -148,6 +148,35 @@ describe('GET /api/history', () => {
     expect(entry.licenseIssues).toBe(2);
   });
 
+  it('returns the newest `limit` scans, oldest first, when the repository has more scans than the limit', async () => {
+    repoFindFirst.mockResolvedValue({ id: 'repo-1', fullName: 'owner/repo' });
+    const rows = [1, 2, 3, 4, 5].map((n) => ({
+      id: `scan-${n}`,
+      scannedAt: new Date(`2026-01-0${n}T00:00:00Z`),
+      riskScore: n,
+      cveCount: 0,
+      criticalCount: 0,
+      highCount: 0,
+      mediumCount: 0,
+      lowCount: 0,
+      licenseCount: 0,
+      licenseIssues: 0,
+    }));
+    // Emulate the database honouring orderBy and take on the stored rows.
+    scanFindMany.mockImplementation(async (args: { orderBy: { scannedAt: 'asc' | 'desc' }; take: number }) => {
+      const sorted = [...rows].sort((a, b) =>
+        args.orderBy.scannedAt === 'asc'
+          ? a.scannedAt.getTime() - b.scannedAt.getTime()
+          : b.scannedAt.getTime() - a.scannedAt.getTime(),
+      );
+      return sorted.slice(0, args.take);
+    });
+    const req = new NextRequest('http://localhost/api/history?repoId=repo-1&limit=3');
+    const res = await GET(req);
+    const body = await res.json() as { history: Array<{ scanId: string }> };
+    expect(body.history.map((h) => h.scanId)).toEqual(['scan-3', 'scan-4', 'scan-5']);
+  });
+
   it('caps the take at 100 when limit exceeds 100', async () => {
     repoFindFirst.mockResolvedValue({ id: 'repo-1', fullName: 'owner/repo' });
     scanFindMany.mockResolvedValue([]);
