@@ -188,10 +188,11 @@ describe('scanPRAndComment — baseline selection', () => {
     };
     // Emulate the database applying the where clause (cvePayload: { not: DbNull })
     // and the newest-first ordering to the stored rows.
-    scanFindFirst.mockImplementation(async (args: { where: { cvePayload?: unknown } }) => {
-      const rows = [cveScan, depsScan].filter(
-        (r) => args.where.cvePayload === undefined || r.cvePayload !== null,
-      );
+    // Only the exact Prisma.DbNull sentinel (identity, not deep equality)
+    // filters out rows without a CVE payload.
+    scanFindFirst.mockImplementation(async (args: { where: { cvePayload?: { not?: unknown } } }) => {
+      const excludesDbNull = args.where.cvePayload?.not === Prisma.DbNull;
+      const rows = [cveScan, depsScan].filter((r) => !excludesDbNull || r.cvePayload !== null);
       rows.sort((a, b) => b.scannedAt.getTime() - a.scannedAt.getTime());
       return rows[0] ?? null;
     });
