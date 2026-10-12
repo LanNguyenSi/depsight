@@ -21,6 +21,20 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(/DEPSIGHT_API_TOKEN/);
   });
 
+  it("names the Settings page before the mint script in the missing-token error", () => {
+    process.env.DEPSIGHT_URL = "http://localhost:3000";
+    let message = "";
+    try {
+      loadConfig();
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/Settings page/);
+    expect(message.indexOf("Settings page")).toBeLessThan(
+      message.indexOf("scripts/mint-api-token.ts"),
+    );
+  });
+
   it("strips a single trailing slash from the URL", () => {
     process.env.DEPSIGHT_URL = "http://localhost:3000/";
     process.env.DEPSIGHT_API_TOKEN = "dsat_x";

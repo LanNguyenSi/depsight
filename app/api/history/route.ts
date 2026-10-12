@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
       status: 'COMPLETED',
       cvePayload: { not: Prisma.DbNull },
     },
-    orderBy: { scannedAt: 'asc' },
+    // Newest `limit` scans; the response below is reversed to oldest first.
+    orderBy: { scannedAt: 'desc' },
     take: limit,
     select: {
       id: true,
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     repoId,
     repoName: repo.fullName,
-    history: scans.map((s) => ({
+    history: [...scans].reverse().map((s) => ({
       scanId: s.id,
       scannedAt: s.scannedAt.toISOString(),
       riskScore: s.riskScore,

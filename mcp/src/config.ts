@@ -26,7 +26,8 @@ export function loadConfig(): Config {
   if (!apiToken) {
     throw new Error(
       "DEPSIGHT_API_TOKEN environment variable is required.\n" +
-        "Mint one with `npx tsx scripts/mint-api-token.ts --user <id>` inside the depsight repo.",
+        "Create one on the Settings page of your depsight instance (API tokens), or, as an operator, " +
+        "run `npx tsx scripts/mint-api-token.ts --user <id>` inside the depsight repo.",
     );
   }
 

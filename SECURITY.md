@@ -16,4 +16,6 @@ Email **contact@lan-nguyen-si.de** with:
 - Reproduction steps or proof-of-concept
 - Impact assessment
 
+For how depsight authenticates and isolates users, see the [security model](docs/architecture.md#security-model).
+
 You will get an acknowledgement within 72 hours and an initial assessment within 7 days. A fix timeline depends on severity and complexity, communicated in the assessment.

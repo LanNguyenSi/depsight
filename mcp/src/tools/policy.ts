@@ -9,7 +9,7 @@ export function registerPolicyTools(
 ): void {
   server.tool(
     "depsight_list_policies",
-    "List the user's configured dependency policies. Returns each policy's name, type (LICENSE_DENY, LICENSE_ALLOW_ONLY, CVE_MIN_SEVERITY, DEPENDENCY_MAX_AGE, DEPENDENCY_MIN_VERSION), rule object, severity, and enabled flag. Use this before depsight_evaluate_policy to see which policies are active.",
+    "List the user's configured policies (license, CVE and dependency rules). Returns each policy's name, type (LICENSE_DENY, LICENSE_ALLOW_ONLY, CVE_MIN_SEVERITY, DEPENDENCY_MAX_AGE, DEPENDENCY_MIN_VERSION), rule object, severity, and enabled flag. Use this before depsight_evaluate_policy to see which policies are active.",
     {},
     async () => {
       try {
