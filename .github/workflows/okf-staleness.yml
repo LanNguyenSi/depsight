@@ -3,7 +3,7 @@ name: OKF staleness
 # GENERATED FROM THE OKF-KIT TEMPLATE `templates/okf-staleness.yml` of the
 # okf-kit package (LanNguyenSi/agent-dx, packages/okf-kit; the template
 # first ships in the okf-kit release after 0.16.0), pinned to okf-kit
-# 0.16.0 below. Do not hand-edit this file outside the lines marked
+# 0.18.0 below. Do not hand-edit this file outside the lines marked
 # "REPO-SPECIFIC": re-sync it from the template whenever the pin moves.
 # A repo that deviates documents the deviation in a comment block at the
 # deviating spot, next to the REPO-SPECIFIC marker.
@@ -64,7 +64,7 @@ jobs:
         # output is registry-influenced text, so it runs through the repo's
         # stop-commands wrapper (scripts/ci/stop-commands-run.sh) instead of
         # printing raw. Exit status is the install's own.
-        run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm install -g okf-kit@0.16.0 --no-audit --no-fund
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm install -g okf-kit@0.18.0 --no-audit --no-fund
 
       - name: Assert CLI is alive (output, not exit code)
         shell: bash
