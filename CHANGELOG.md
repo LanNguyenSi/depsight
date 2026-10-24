@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **body-parser 2.4.0** (GHSA-27r3-jxmh-p828): the lockfile resolves 2.4.0 (with content-type 2.1.0, iconv-lite 0.7.3 and qs 6.16.1, which it requires), so trailing bytes after a compressed request body no longer cause a denial of service.
 - **fast-uri 3.1.9** (GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h, GHSA-333x-w4r6-6crp): the lockfile resolves 3.1.9, which fixes scheme spoofing, host confusion, path equivalence and scheme injection in URI parsing. It is installed through `ajv`.
 - **ip-address 10.7.4** (GHSA-rxp7-6hxx-x8q5): the lockfile resolves 10.7.4, which fixes quadratic-time matching of a zone identifier in `Address6`, so a long input string can no longer stall a process.
+- **zod 4.6.7 (MCP package)** (GHSA-mrhx-c7xc-m3w5): the `mcp` package moves its `zod` dependency from `^3.22.0` to `^4.6.7` (the lockfile resolves 4.6.7, no nested 3.x remains); the advisory's memory-exhaustion fix ships only in the v4 core, and `@modelcontextprotocol/sdk` is unchanged (it accepts `^3.25 || ^4.0`). The tool argument schemas keep their accept-set and produced values (the CI lookback `period` moves from a numeric literal union to `z.literal([1, 7, 30])`, which publishes the same JSON Schema `enum`), so the only change in the published `inputSchema` is that the v4 converter drops the `additionalProperties: false` the v3 one added on objects, which zod never enforced at runtime (unknown keys are still stripped, not rejected).
 
 ### Fixed
 

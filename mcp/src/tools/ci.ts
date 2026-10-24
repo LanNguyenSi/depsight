@@ -3,9 +3,7 @@ import { z } from "zod";
 import type { DepsightClient } from "../client.js";
 import { errResult, ok } from "./shared.js";
 
-export const ciPeriodSchema = z
-  .union([z.literal(1), z.literal(7), z.literal(30)])
-  .optional();
+export const ciPeriodSchema = z.literal([1, 7, 30]).optional();
 
 export function registerCiTools(
   server: McpServer,
