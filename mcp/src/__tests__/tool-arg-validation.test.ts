@@ -20,7 +20,7 @@ function inputShape(
 ): z.ZodObject<Shape> {
   let shape: Shape | undefined;
   const fakeServer = {
-    tool: (name: string, _desc: string, schema: Shape, _cb: unknown) => {
+    tool: (name: string, _desc: string, schema: Shape) => {
       if (name === toolName) shape = schema;
     },
   } as unknown as McpServer;
