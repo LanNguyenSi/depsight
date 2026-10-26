@@ -143,6 +143,17 @@ function checkOperations(file, cfg) {
       fail(file, 'app healthcheck has no start_period, so a cold start counts as failures');
     }
     if (!(Number(check.retries) >= 1)) fail(file, 'app healthcheck sets no retries');
+    // Behind Traefik the route is down until the first passing probe; start_interval keeps
+    // that gap at seconds after a recreate instead of a full interval.
+    if (!check.start_interval) fail(file, 'app healthcheck sets no start_interval');
+  }
+  // Node sizes its heap from the cgroup limit (about half of it) unless told otherwise, so
+  // the app's heap must be set explicitly and stay below its memory limit.
+  const heap = /--max-old-space-size=(\d+)/.exec(String(app.environment?.NODE_OPTIONS ?? ''));
+  if (!heap) {
+    fail(file, 'app sets no heap size (NODE_OPTIONS=--max-old-space-size=<MiB>)');
+  } else if (Number(heap[1]) * 1024 * 1024 >= memoryLimit(app)) {
+    fail(file, `app heap of ${heap[1]} MiB is not below its memory limit`);
   }
   if (app.depends_on?.db?.condition !== 'service_healthy') {
     fail(file, 'app does not wait for db with depends_on condition service_healthy');

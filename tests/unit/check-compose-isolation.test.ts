@@ -137,6 +137,21 @@ describeIfCompose('check-compose-isolation guard', () => {
       replaceFirst('      start_period: 40s\n', '      start_period: 0s\n'),
       ['app healthcheck has no start_period, so a cold start counts as failures'],
     ],
+    [
+      'a healthcheck without start_interval',
+      replaceFirst('      start_interval: 2s\n', ''),
+      ['app healthcheck sets no start_interval'],
+    ],
+    [
+      'an app without an explicit heap size',
+      replaceFirst('      - NODE_OPTIONS=--max-old-space-size=1024\n', ''),
+      ['app sets no heap size (NODE_OPTIONS=--max-old-space-size=<MiB>)'],
+    ],
+    [
+      'an app heap at its memory limit',
+      replaceFirst('--max-old-space-size=1024', '--max-old-space-size=1536'),
+      ['app heap of 1536 MiB is not below its memory limit'],
+    ],
   ];
 
   // The combined case runs on both production files, the single-line cases on the hosted
