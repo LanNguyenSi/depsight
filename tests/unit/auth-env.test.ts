@@ -49,6 +49,25 @@ describe('checkAuthEnv in production: NEXTAUTH_URL', () => {
     ['absent', URLS.absent],
     ['empty', URLS.empty],
     ['whitespace only', URLS.whitespace],
+  ])('names a missing value when the URL is %s', (_label, url) => {
+    const report = checkAuthEnv(env('production', SECRET, url));
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toContain('not set or empty');
+  });
+
+  it.each([
+    ['a relative path', URLS.relative],
+    ['a bare host name', URLS.bareHost],
+  ])('names a non-absolute value when the URL is %s', (_label, url) => {
+    const report = checkAuthEnv(env('production', SECRET, url));
+    expect(report.errors[0]).toContain('not an absolute');
+    expect(report.errors[0]).not.toContain('not set or empty');
+  });
+
+  it.each([
+    ['absent', URLS.absent],
+    ['empty', URLS.empty],
+    ['whitespace only', URLS.whitespace],
     ['a relative path', URLS.relative],
     ['a bare host name', URLS.bareHost],
     ['host:port without a scheme', URLS.hostPort],
