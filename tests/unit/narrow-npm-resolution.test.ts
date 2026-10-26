@@ -451,7 +451,7 @@ describe('optional, peer and bundled declarations are declarations of the name',
       expect(droppable(m, l)).toBe(false);
     });
 
-    it(`${field} with a lockfile that satisfies the range does not block, and adds nothing`, () => {
+    it(`${field} with a lockfile that satisfies the range does not block (its version is already added by frontend)`, () => {
       const { m, l } = withThird({ [field]: { vite: '>=7 <9' } }, v3({ 'node_modules/vite': '7.3.7' }));
       const r = resolve(m, l);
       expect(r.dropSafe('vite', '7.3.5')).toBe(true);
@@ -480,9 +480,71 @@ describe('optional, peer and bundled declarations are declarations of the name',
       expect(droppable(m, l)).toBe(false);
     });
 
-    it(`${field} alone adds nothing, even with a matching lockfile`, () => {
+    it(`${field} alone adds the version its matching lockfile installs`, () => {
       const m = { 'plugin/package.json': pkg({ name: 'plugin', [field]: { vite: '>=7' } }) };
       const l = { 'plugin/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }) };
+      expect(versions(resolve(m, l))).toEqual(['vite@7.3.7']);
+    });
+
+    it(`${field} adds a version that no other project installs, and the drop answer is unchanged`, () => {
+      const { m, l } = withThird({ [field]: { vite: '^7.3.6' } }, v3({ 'node_modules/vite': '7.3.6' }));
+      const r = resolve(m, l);
+      expect(versions(r)).toEqual(['vite@7.3.6', 'vite@7.3.7', 'vite@8.3.5']);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(true);
+      // the declaration still blocks the drop of the version it installs
+      expect(r.dropSafe('vite', '7.3.6')).toBe(false);
+    });
+
+    it(`${field} adds once when the same manifest also declares it as a dependency`, () => {
+      const { m, l } = withThird(
+        { dependencies: { vite: '^7.3.6' }, [field]: { vite: '^7.3.6' } },
+        v3({ 'node_modules/vite': '7.3.6' }),
+      );
+      expect(versions(resolve(m, l))).toEqual(['vite@7.3.6', 'vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} adds nothing when the lockfile installs a version outside the range`, () => {
+      const { m, l } = withThird({ [field]: { vite: '^7.3.6' } }, v3({ 'node_modules/vite': '7.1.0' }));
+      expect(versions(resolve(m, l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} adds nothing for an alias, a non-range spec or a lockfile without the entry`, () => {
+      for (const spec of ['npm:vite@^7.3.6', 'github:vitejs/vite#v7.3.6', 'latest']) {
+        const { m, l } = withThird({ [field]: { vite: spec } }, v3({ 'node_modules/vite': '7.3.6' }));
+        expect(versions(resolve(m, l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+      }
+      const { m, l } = withThird({ [field]: { vite: '^7.3.6' } }, v3({ 'node_modules/x/node_modules/vite': '7.3.6' }));
+      expect(versions(resolve(m, l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} adds nothing in a project that has a workspaces key`, () => {
+      const { m, l } = withThird({ [field]: { vite: '^7.3.6' }, workspaces: ['x'] }, v3({ 'node_modules/vite': '7.3.6' }));
+      expect(versions(resolve(m, l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} adds nothing next to another package manager's lockfile`, () => {
+      const { m, l } = withThird({ [field]: { vite: '^7.3.6' } }, v3({ 'node_modules/vite': '7.3.6' }));
+      const r = resolve(m, l, {
+        observedTreeFacts: {
+          foreignLockfilePaths: ['yarn.lock'],
+          manifestsCapped: false,
+          npmrcPaths: [],
+          packageManagerConfigPaths: [],
+        },
+      });
+      expect(versions(r)).toEqual([]);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    });
+
+    it(`${field} on the name of another project of the repository adds nothing`, () => {
+      const m = {
+        'lib/package.json': pkg({ name: 'host-lib', version: '1.0.0' }),
+        'plugin/package.json': pkg({ name: 'plugin', [field]: { 'host-lib': '^1.0.0' } }),
+      };
+      const l = {
+        'lib/package-lock.json': v3({}),
+        'plugin/package-lock.json': v3({ 'node_modules/host-lib': '1.0.0' }),
+      };
       expect(versions(resolve(m, l))).toEqual([]);
     });
 
@@ -492,7 +554,33 @@ describe('optional, peer and bundled declarations are declarations of the name',
     });
   }
 
+  it('a peer that peerDependenciesMeta marks optional adds the version its lockfile lists, and adds nothing when it does not list it', () => {
+    const body = { peerDependencies: { vite: '^7.3.6' }, peerDependenciesMeta: { vite: { optional: true } } };
+    const listed = withThird(body, v3({ 'node_modules/vite': '7.3.6' }));
+    expect(versions(resolve(listed.m, listed.l))).toEqual(['vite@7.3.6', 'vite@7.3.7', 'vite@8.3.5']);
+    const unlisted = withThird(body, v3({}));
+    expect(versions(resolve(unlisted.m, unlisted.l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    // not listed: not provably narrow, so the floor stays
+    expect(droppable(unlisted.m, unlisted.l)).toBe(false);
+  });
+
+  it('a peer marked optional for another name does not make this one optional', () => {
+    const { m, l } = withThird(
+      { peerDependencies: { vite: '^7.3.6' }, peerDependenciesMeta: { other: { optional: true } } },
+      v3({}),
+    );
+    // vite is a required peer: the lockfile must list it, and does not
+    expect(droppable(m, l)).toBe(false);
+  });
+
   for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    it(`${field} never adds a version, even when the lockfile installs one no other project installs`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] }, v3({ 'node_modules/vite': '7.3.6' }));
+      const r = resolve(m, l);
+      expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(true);
+    });
+
     it(`${field} naming the package without a lockfile blocks the drop`, () => {
       const { m, l } = withThird({ [field]: ['vite'] });
       expect(droppable(m, l)).toBe(false);

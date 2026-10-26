@@ -334,7 +334,7 @@ const EXPECTED: Record<string, Expectation> = {
     base: ['vite@7.3.5'],
     dropped: [],
     added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'plugin/ has a lockfile that installs vite 7.3.5 (optional dependency): baseline stays; it adds nothing itself',
+    why: 'plugin/ has a lockfile that installs vite 7.3.5 (optional dependency): baseline stays; the 7.3.5 it adds is the kept baseline entry',
   }),
   negOverridesNoLock: narrow({
     base: ['vite@7.3.5', 'vitest@3.0.0'],
@@ -358,13 +358,13 @@ const EXPECTED: Record<string, Expectation> = {
     base: ['vite@7.3.5'],
     dropped: ['vite@7.3.5'],
     added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'plugin/ declares vite optionally (>=7 <9) and its own lockfile installs 7.3.7; it blocks nothing and adds nothing; floor 7.3.5 installed nowhere',
+    why: 'plugin/ declares vite optionally (>=7 <9) and its own lockfile installs 7.3.7; it blocks nothing, and the 7.3.7 it installs is also added by frontend/; floor 7.3.5 installed nowhere',
   }),
   peerSatisfiedWithLock: narrow({
     base: ['vite@7.3.5'],
     dropped: ['vite@7.3.5'],
     added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'plugin/ has a peer range ^7.0.0 || ^8.0.0 and its own lockfile installs 8.3.5; it blocks nothing and adds nothing; floor 7.3.5 installed nowhere',
+    why: 'plugin/ has a peer range ^7.0.0 || ^8.0.0 and its own lockfile installs 8.3.5; it blocks nothing, and the 8.3.5 it installs is also added by backend/; floor 7.3.5 installed nowhere',
   }),
   vendoredManifestNotRead: narrow({
     base: ['vite@7.3.5'],
@@ -512,8 +512,8 @@ const EXPECTED: Record<string, Expectation> = {
   peerListedInRange: narrow({
     base: ['vite@7.3.5'],
     dropped: ['vite@7.3.5'],
-    added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'positive control: extra/ lists its peer in range, so it is locked; floor 7.3.5 installed nowhere',
+    added: ['vite@7.3.7', 'vite@8.3.5', 'x@1.4.0'],
+    why: 'positive control: extra/ lists its peer in range, so it is locked; the peer x installs at 1.4.0 under npm ci and is queried; floor 7.3.5 installed nowhere',
   }),
   optionalPeerNotListed: narrow({
     base: ['vite@7.3.5'],
@@ -637,6 +637,78 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.7', 'vite@8.3.5'],
     why: 'frontend/package.json pins a package manager through devEngines: no drops',
   }),
+  // ---- peer and optional declarations (vite fixture `viteMidFiles`: a/ installs
+  // 7.3.7 through a dependency, b/ declares vite another way and installs
+  // 7.3.6). Before the peer/optional additions, only a/'s version was queried
+  // and the floor was dropped, so b/'s 7.3.6 was never queried. ----
+  midPeerDeclarer: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.6', 'vite@7.3.7'],
+    why: 'b/ has vite as a non-optional peer and installs 7.3.6 under npm ci: queried like a dependency; floor 7.3.5 installed nowhere',
+  }),
+  midOptionalDeclarer: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.6', 'vite@7.3.7'],
+    why: 'b/ has vite in optionalDependencies and installs 7.3.6: queried like a dependency; floor 7.3.5 installed nowhere',
+  }),
+  midBundledDeclarer: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7'],
+    why: 'a bundled name carries no range and never adds: only a/ adds 7.3.7, 7.3.6 is not queried; floor 7.3.5 installed nowhere',
+  }),
+  midOptionalPeerListed: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.6', 'vite@7.3.7'],
+    why: 'b/ has vite as an optional peer and its lockfile has the top-level entry 7.3.6, so npm installs it: queried; floor 7.3.5 installed nowhere',
+  }),
+  midOptionalPeerUnlisted: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'b/ has vite as an optional peer its lockfile does not list: not installed, nothing to add, and it cannot be proven narrow, so the floor stays',
+  }),
+  midPeerOutOfRange: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'b/ lockfile installs 7.1.0 outside the declared peer range ^7.3.6: stale, not narrow: nothing added, floor stays',
+  }),
+  midOptionalOutOfRange: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'the same for an optionalDependencies declaration: nothing added, floor stays',
+  }),
+  midPeerAlias: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'b/ declares the peer through an npm: alias: never narrow, nothing added, floor stays',
+  }),
+  midOptionalAlias: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'the same for an optionalDependencies alias: nothing added, floor stays',
+  }),
+  midPeerAndDevDeclarer: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.6', 'vite@7.3.7'],
+    why: 'b/ declares vite as peer and dev dependency (the usual plugin shape): 7.3.6 added once; floor 7.3.5 installed nowhere',
+  }),
+  midPeerOnLocalPackage: narrow({
+    base: ['vite@7.3.7'],
+    dropped: [],
+    added: [],
+    why: 'b/ has a peer on the repository\'s own package a, which is never queried (local name); nothing changes',
+  }),
+  midPeerForeignLockfile: same(['vite@7.3.5']),
+  midPeerInWorkspaceMember: same(['vite@7.3.5']),
   vendoredPackageManagerConfigNotRead: narrow({
     base: ['vite@7.3.5'],
     dropped: ['vite@7.3.5'],

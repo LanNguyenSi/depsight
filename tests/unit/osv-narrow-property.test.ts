@@ -50,11 +50,19 @@
  *   P2  every dropped (name, version) satisfies the oracle's drop rule
  *   P3  the oracle's drop rule is also sufficient: nothing it allows is kept
  *   P4  every added version is what a narrow manifest's own lockfile installs
+ *       (for a dependency, devDependency, optionalDependency or non-optional
+ *       or lockfile-listed optional peer dependency; never for a bundled name)
  *   P5  with a truncated tree, a capped manifest list or a foreign lockfile,
  *       head equals base
- *   P6  names other than vite are untouched
+ *   P6  nothing but vite is dropped, and the only other name that changes is
+ *       the further dependency `ms`, which is added when it is declared as an
+ *       optional or peer dependency and its own lockfile lists it in range
  *   P7  the head set of vite versions is exactly the baseline ones that were
- *       not dropped plus the versions installed for narrow dependencies
+ *       not dropped plus the versions installed for narrow declarations
+ *   P8  additions only: head holds every (name, version) the previous head
+ *       (the narrow override as it was before peer and optional declarations
+ *       added, modelled here as the same drop rule and the additions of
+ *       dependencies and devDependencies only) queried for the same input
  *
  * Non-vacuity: the generator reaches drops, kept floors and additions, and for
  * each varied dimension there are cases where only that dimension keeps the
@@ -603,6 +611,33 @@ function dropOracle(model: Model, baseVersion: string): boolean {
   return !index.versions.has(baseVersion);
 }
 
+// The vite versions the extra project adds: an optionalDependencies or
+// peerDependencies declaration (a bundled name carries no range and an
+// `overrides` entry is no declaration) whose own lockfile has a top-level semver
+// entry in the declared range, in a standalone project.
+function extraAdditions(model: Model): string[] {
+  const e = model.extra;
+  if (!e || (e.field !== 'optionalDependencies' && e.field !== 'peerDependencies')) return [];
+  if (model.truncated || model.capped || model.foreign.length > 0) return [];
+  return extraNarrowInModel(model, e) ? [e.lockVersion] : [];
+}
+
+// `ms` is added when a standalone manifest with an own lockfile of version 2 or
+// 3 declares it as an optional or peer dependency (an optional peer too) and the
+// lockfile lists it in range. Declared in `dependencies` or `devDependencies` it
+// is already in the baseline.
+function msAdditions(model: Model): string[] {
+  const hit = model.manifests.some(
+    (m) =>
+      m.ms !== undefined &&
+      (m.ms.field === 'optionalDependencies' || m.ms.field === 'peerDependencies') &&
+      m.ms.state === 'listed' &&
+      NARROW_SHAPES.includes(m.lock) &&
+      standaloneInModel(model, m.dir),
+  );
+  return hit ? ['ms@2.1.3'] : [];
+}
+
 // The same model with one dimension made harmless, to show that dimension alone
 // can be what keeps a floor (non-vacuity).
 type Blinder =
@@ -683,6 +718,11 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     let additionsSeen = 0;
     const soleBlocker = Object.fromEntries(BLINDERS.map((b) => [b, 0])) as Record<Blinder, number>;
     let optionalPeerDrops = 0;
+    let viteAddedOnlyByPeerOrOptional = 0;
+    let msAddedByPeerOrOptional = 0;
+    let optionalPeerAdded = 0;
+    let bundledNarrowNoAdd = 0;
+    let previousHeadEntries = 0;
     let reflectedOverrideDrops = 0;
     let exemptEdgeDrops = 0;
     const failures: string[] = [];
@@ -701,8 +741,14 @@ describe('narrow override properties (seeded, generated repositories)', () => {
       const dropped = base.filter((q) => !head.includes(q));
       const added = head.filter((q) => !base.includes(q));
 
-      // P6: names other than vite are untouched.
-      for (const q of [...dropped, ...added]) if (!q.startsWith('vite@')) fail(`P6 non-vite change ${q}`);
+      const incomplete = model.truncated || model.capped || model.foreign.length > 0;
+
+      // P6: only vite is dropped; the only other change is `ms` added through an
+      // optional or peer declaration its own lockfile lists in range.
+      const expectedMsAdds = incomplete ? [] : msAdditions(model);
+      for (const q of dropped) if (!q.startsWith('vite@')) fail(`P6 non-vite drop ${q}`);
+      for (const q of added) if (!q.startsWith('vite@') && !expectedMsAdds.includes(q)) fail(`P6 unexpected non-vite addition ${q}`);
+      for (const q of expectedMsAdds) if (!head.includes(q)) fail(`P6 ${q} is installed through an optional or peer declaration but not queried`);
 
       // P5: incomplete tree, capped list or foreign lockfile => head equals base.
       if (model.truncated || model.capped || model.foreign.length > 0) {
@@ -730,24 +776,58 @@ describe('narrow override properties (seeded, generated repositories)', () => {
         }
       }
 
-      // P4: an added version is installed by the own lockfile of a narrow manifest.
-      for (const q of added) {
+      // P4: an added version is installed by the own lockfile of a narrow
+      // declaration (a manifest's dependency, or the extra project's optional or
+      // peer declaration).
+      const extraAdds = extraAdditions(model);
+      for (const q of added.filter((x) => x.startsWith('vite@'))) {
         const v = q.slice(5);
-        const ok = model.manifests.some((m) => m.key === 'vite' && m.lockVersion === v && narrowInModel(model, m));
-        if (!ok) fail(`P4 added ${q} is not what a narrow manifest's own lockfile installs`);
+        const ok =
+          model.manifests.some((m) => m.key === 'vite' && m.lockVersion === v && narrowInModel(model, m)) ||
+          extraAdds.includes(v);
+        if (!ok) fail(`P4 added ${q} is not what a narrow declaration's own lockfile installs`);
         additionsSeen++;
       }
 
       // P7: the head set is the kept baseline entries plus the narrow additions, nothing else.
+      const keptVite = baseVite.filter((v) => !dropped.includes(`vite@${v}`));
+      const manifestAdds = incomplete
+        ? []
+        : model.manifests.filter((m) => m.key === 'vite' && narrowInModel(model, m)).map((m) => m.lockVersion);
       {
-        const incomplete = model.truncated || model.capped || model.foreign.length > 0;
-        const expectedAdds = incomplete
-          ? []
-          : model.manifests.filter((m) => m.key === 'vite' && narrowInModel(model, m)).map((m) => m.lockVersion);
-        const kept = baseVite.filter((v) => !dropped.includes(`vite@${v}`));
-        const expected = [...new Set([...kept, ...expectedAdds])].sort();
+        const expectedAdds = incomplete ? [] : [...manifestAdds, ...extraAdds];
+        const expected = [...new Set([...keptVite, ...expectedAdds])].sort();
         const actual = head.filter((q) => q.startsWith('vite@')).map((q) => q.slice(5)).sort();
         if (JSON.stringify(expected) !== JSON.stringify(actual)) fail(`P7 head vite set ${actual} != expected ${expected}`);
+      }
+
+      // P8: additions only. The previous head is the kept baseline plus the
+      // additions of dependency and devDependency declarations; the new head
+      // never lacks one of its entries.
+      {
+        const previousHead = [
+          ...base.filter((q) => !dropped.includes(q)),
+          ...manifestAdds.map((v) => `vite@${v}`),
+        ];
+        for (const q of previousHead) if (!head.includes(q)) fail(`P8 head lacks ${q} that the previous head queried`);
+        previousHeadEntries += previousHead.length;
+        // Positive controls: peer or optional declarations add what the previous
+        // head did not query; a narrow bundled name adds nothing.
+        if (extraAdds.some((v) => !previousHead.includes(`vite@${v}`))) viteAddedOnlyByPeerOrOptional++;
+        if (expectedMsAdds.length > 0) {
+          msAddedByPeerOrOptional++;
+          if (model.manifests.some((m) => m.ms?.peerOptional && m.ms.state === 'listed')) optionalPeerAdded++;
+        }
+        if (
+          !incomplete &&
+          model.extra?.field === 'bundleDependencies' &&
+          NARROW_SHAPES.includes(model.extra.lock) &&
+          model.extra.entry === 'semver' &&
+          extraNarrowInModel(model, model.extra) &&
+          !head.includes(`vite@${model.extra.lockVersion}`)
+        ) {
+          bundledNarrowNoAdd++;
+        }
       }
 
       // Determinism.
@@ -762,6 +842,11 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     expect(additionsSeen).toBeGreaterThan(500);
     for (const b of BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
     expect(optionalPeerDrops, 'an optional peer that is not listed never coexists with a drop').toBeGreaterThan(20);
+    expect(viteAddedOnlyByPeerOrOptional, 'no case adds vite through a peer or optional declaration alone').toBeGreaterThan(20);
+    expect(msAddedByPeerOrOptional, 'no case adds ms through a peer or optional declaration').toBeGreaterThan(20);
+    expect(optionalPeerAdded, 'no case adds a listed optional peer').toBeGreaterThan(20);
+    expect(bundledNarrowNoAdd, 'a narrow bundled name never coexists with a missing addition').toBeGreaterThan(20);
+    expect(previousHeadEntries).toBeGreaterThan(500);
     expect(reflectedOverrideDrops, 'a reflected string override never coexists with a drop').toBeGreaterThan(20);
     expect(exemptEdgeDrops, 'an exempt edge without an entry never coexists with a drop').toBeGreaterThan(20);
     expect(failures.slice(0, 3).join('\n\n')).toBe('');

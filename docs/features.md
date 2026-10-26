@@ -63,7 +63,11 @@ A complete list of what depsight does today, beyond the headline value props in 
     repository of separate projects that each carry their own
     `package-lock.json` is also queried at the version each manifest's own
     lockfile installs: a package installed at different versions in different
-    projects is queried at each installed version, and the repository-wide
+    projects is queried at each installed version (a project's `dependencies`,
+    `devDependencies`, `optionalDependencies` and `peerDependencies` all count,
+    since `npm ci` installs them; a peer marked optional in
+    `peerDependenciesMeta` counts when the lockfile lists it, a bundled name
+    carries no range and never adds a query), and the repository-wide
     entry for it (a manifest floor that no project installs) is removed only
     when everything the scan reads is positively accounted for and no
     `package-lock.json` the scan reads installs it (vendored, build and fixture
