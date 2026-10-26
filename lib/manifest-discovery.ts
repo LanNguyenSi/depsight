@@ -1362,7 +1362,7 @@ interface NarrowLockfile {
   data: JsonObject;
   /** lockfileVersion 2/3 with a `packages` map: the only shape narrow resolution reads. */
   packages: JsonObject | null;
-  /** lockfileVersion 1 with a `dependencies` map. */
+  /** The `dependencies` map: the whole tree of lockfileVersion 1, the legacy mirror in 2. */
   v1Dependencies: JsonObject | null;
   /**
    * A shape this scan understands: lockfileVersion 1 with a `dependencies`
@@ -1378,7 +1378,7 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
   if (!data) return null;
   const version = data.lockfileVersion;
   const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
-  const v1Dependencies = version === 1 && isPlainObject(data.dependencies) ? data.dependencies : null;
+  const v1Dependencies = isPlainObject(data.dependencies) ? data.dependencies : null;
   const known = version === 1 ? v1Dependencies !== null : packages !== null;
   return { data, packages, v1Dependencies, known };
 }
@@ -1585,11 +1585,8 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     manifests.map((m) => m.data.name).filter((n): n is string => typeof n === 'string' && n !== ''),
   );
 
-  // Every manifest the scan reads was read and parsed (an unread one could
-  // declare any name).
-  const everyManifestRead = manifestPaths.every((p) => manifestByPath.get(p) != null);
-
-  // Every manifest the scan reads is locked: its own-directory package-lock.json
+  // Every manifest the scan reads is locked. A manifest that was not read and
+  // parsed is not (it could declare any name). Its own-directory package-lock.json
   // was fetched and parsed, and lists every key of the manifest's
   // dependencies, devDependencies and optionalDependencies at the top level with a
   // version that satisfies the declared range (see `lockfileListsDeclaration`).
@@ -1679,7 +1676,6 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // Every manifest declaring the name (in any dependency field) is narrow for it.
   const declarersAllNarrow = (name: string): boolean => {
     if (localNames.has(name)) return false;
-    if (!everyManifestRead) return false;
     const list = declarers.get(name) ?? [];
     if (list.length === 0) return false; // nothing declares it: nothing to prove narrow
     return list.every(({ manifest, decl }) => narrowVersion(manifest, decl) !== null);

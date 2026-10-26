@@ -754,8 +754,10 @@ describe('every fetched lockfile has a known shape', () => {
 
   it('a packages value that is not an object', () => {
     expect(legacyDroppable({ lockfileVersion: 3, packages: [] })).toBe(false);
-    expect(legacyDroppable({ lockfileVersion: 1, dependencies: {}, packages: [] })).toBe(false);
-    expect(legacyDroppable({ lockfileVersion: 1, dependencies: {}, packages: 'x' })).toBe(false);
+    const listed = { left: { version: '1.0.0' } };
+    expect(legacyDroppable({ lockfileVersion: 1, dependencies: listed })).toBe(true);
+    expect(legacyDroppable({ lockfileVersion: 1, dependencies: listed, packages: [] })).toBe(false);
+    expect(legacyDroppable({ lockfileVersion: 1, dependencies: listed, packages: 'x' })).toBe(false);
   });
 
   it('a dependencies value that is not an object, next to a good packages map', () => {
@@ -944,6 +946,13 @@ describe('every lockfile entry that names a package carries a semver version', (
       });
     }
 
+    it('an alias version with a semver range installs the real name at that version', () => {
+      const alias = (version: string) =>
+        JSON.stringify({ lockfileVersion: 1, dependencies: { left: { version: '1.0.0' }, 'old-vite': { version: `npm:vite@${version}` } } });
+      expect(legacyDroppable(alias('6.0.0'))).toBe(true);
+      expect(legacyDroppable(alias('7.3.5'))).toBe(false);
+    });
+
     it('an alias version whose range is not semver makes the real name unknown', () => {
       const lock = JSON.stringify({ lockfileVersion: 1, dependencies: { left: { version: '1.0.0' }, 'old-vite': { version: 'npm:vite@github:x/y' } } });
       expect(legacyDroppable(lock)).toBe(false);
@@ -1117,7 +1126,10 @@ describe('install policy files: .npmrc and packageManager', () => {
 
   it('facts without an .npmrc list count as an .npmrc being present', () => {
     const noList = { foreignLockfilePaths: [], manifestsCapped: false } as unknown as NarrowNpmInputs['observedTreeFacts'];
-    expect(droppable(manifests(), locks(), { observedTreeFacts: noList })).toBe(false);
+    const r = resolve(manifests(), locks(), { observedTreeFacts: noList });
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    // Only the drops are blocked: the facts are otherwise usable, so the additions stay.
+    expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
   });
 
   for (const [label, where] of [
