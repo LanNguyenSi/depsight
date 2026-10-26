@@ -1688,6 +1688,9 @@ function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration)
 // readable version, or is not an object, fails. Entries are found by key name,
 // by `name` field (aliases) and, in a legacy `dependencies` tree, by key or
 // `npm:` target. `link` entries install no registry version and are skipped.
+// (A `name` of the wrong type and an `npm:` version that cannot be parsed are
+// not judged here: `buildInstalledIndex` refuses such a lockfile, which keeps
+// every baseline entry.)
 function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, string>): boolean {
   if (overrides.size === 0) return true;
   const check = (name: string | undefined, version: unknown): boolean => {
@@ -1705,9 +1708,7 @@ function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, s
         continue;
       }
       if (entry.link === true) continue;
-      const named = typeof entry.name === 'string' && entry.name !== '' ? entry.name : tail;
-      // A `name` field of the wrong type could rename the entry to anything.
-      if (entry.name !== undefined && named !== entry.name) return false;
+      const named = typeof entry.name === 'string' ? entry.name : tail;
       if (!check(named, entry.version)) return false;
     }
   }
@@ -1721,9 +1722,7 @@ function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, s
         }
         if (isPlainObject(entry.dependencies)) stack.push(entry.dependencies);
         const raw = typeof entry.version === 'string' ? entry.version : undefined;
-        const aliasForm = raw !== undefined && raw.trim().startsWith('npm:');
-        const alias = aliasForm ? parseNpmAlias(raw) : null;
-        if (aliasForm && alias === null) return false;
+        const alias = raw !== undefined && raw.trim().startsWith('npm:') ? parseNpmAlias(raw) : null;
         if (alias ? !check(alias.realName, alias.realSpec) : !check(key, raw)) return false;
       }
     }
@@ -1864,7 +1863,8 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     if (!isStandalone(m)) return null;
     if (decl.aliasForm) return null; // the lockfile key is the local alias, not the name
     const range = decl.spec.trim();
-    if (!isPlainSemverRange(range)) return null; // git, file:, tag, workspace:...
+    // A spec that is no semver range (git, file:, tag, workspace:...) is
+    // satisfied by nothing, so such a declaration is never narrow.
     const version = ownLockVersion(m, decl.key);
     if (version === null) return null;
     return satisfiesLikeNpm(version, range) ? version : null;

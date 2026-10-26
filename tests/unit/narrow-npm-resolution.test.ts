@@ -1241,6 +1241,14 @@ describe('overrides: a plain string override must be reflected in the own lockfi
     expect(ok({ 'node_modules/ms': { link: true, resolved: 'vendor/ms' } }, { ms: '2.1.3' })).toBe(true);
   });
 
+  it('the root entry names the project, not an install of the overridden name', () => {
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { '': { name: 'ms', version: '9.9.9' }, ...leftEntry },
+    });
+    expect(legacyDroppable(lock, withOverrides({ ms: '2.1.3' }))).toBe(true);
+  });
+
   it('an entry of another name is not checked, and a non-object entry of another name does not matter', () => {
     expect(ok({ 'node_modules/other': { version: '9.9.9' }, 'node_modules/odd': 'x' }, { ms: '2.1.3' })).toBe(true);
   });
@@ -1286,6 +1294,14 @@ describe('overrides: a plain string override must be reflected in the own lockfi
     ] as const) {
       it(label, () => {
         expect(ok(entries, overrides)).toBe(false);
+      });
+    }
+
+    // Without an entry of the overridden name nothing could contradict the
+    // override, yet a spec that is no plain string range still cannot be vouched for.
+    for (const spec of ['npm:other@2.1.3', 'github:o/ms#v2', 'latest']) {
+      it(`${spec}, even when the lockfile has no entry of that name`, () => {
+        expect(ok({}, { ms: spec })).toBe(false);
       });
     }
   });
@@ -1451,6 +1467,11 @@ describe('a lockfile entry with an edge to a name the same lockfile has no entry
 
     it('an alias edge without an entry makes the real package unknown', () => {
       expect(withEdge({}, { dependencies: { 'old-vite': 'npm:vite@^7.0.0' } })).toBe(false);
+    });
+
+    it('an edge whose spec is not a string marks only its own name unknown', () => {
+      expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } }, { dependencies: { ms: 7 } })).toBe(true);
+      expect(withEdge({}, { dependencies: { vite: 7 } })).toBe(false);
     });
 
     it('an alias edge that cannot be parsed could mean any package: nothing is provable', () => {
