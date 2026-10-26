@@ -789,6 +789,11 @@ describe('every fetched lockfile has a known shape', () => {
 
   it('a packages value that is not an object', () => {
     expect(legacyDroppable({ lockfileVersion: 3, packages: [] })).toBe(false);
+    // Also for a project that declares nothing, which a lockfile cannot contradict.
+    for (const packages of [[], 'x', 7, null, true]) {
+      expect(legacyDroppable({ lockfileVersion: 3, packages }, {})).toBe(false);
+    }
+    expect(legacyDroppable({ lockfileVersion: 3, packages: {} }, {})).toBe(true);
     const listed = { left: { version: '1.0.0' } };
     expect(legacyDroppable({ lockfileVersion: 1, dependencies: listed })).toBe(false);
     expect(legacyDroppable({ lockfileVersion: 1, dependencies: listed, packages: [] })).toBe(false);
@@ -1517,6 +1522,12 @@ describe('a lockfile entry with an edge to a name the same lockfile has no entry
         for (const meta of [{ vite: { optional: false } }, { vite: { optional: 'true' } }, { vite: {} }, { vite: true }, { other: { optional: true } }, [], 'vite', null]) {
           expect(peer(meta)).toBe(false);
         }
+      });
+
+      it('is not read by index when it is an array', () => {
+        const meta = [{ optional: true }];
+        expect(withEdge({}, { peerDependencies: { '0': '^1.0.0' }, peerDependenciesMeta: meta })).toBe(false);
+        expect(withEdge({ 'node_modules/0': { version: '1.0.0' } }, { peerDependencies: { '0': '^1.0.0' }, peerDependenciesMeta: meta })).toBe(true);
       });
 
       it('exempts only itself and only a peer, not a dependency of the same name', () => {

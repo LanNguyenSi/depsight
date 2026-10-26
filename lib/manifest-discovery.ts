@@ -1509,20 +1509,21 @@ function pinsPackageManager(data: JsonObject): boolean {
 
 interface NarrowLockfile {
   data: JsonObject;
-  /**
-   * lockfileVersion 2 or 3 with a `packages` map: the only shape this scan can
-   * prove things from; null for anything else. That includes lockfileVersion 1:
-   * npm does not install from a v1 lockfile's `requires` edges but re-resolves
-   * from the registry, so a v1 lockfile does not say what is installed.
-   */
-  packages: JsonObject | null;
+  /** The `packages` map of a lockfileVersion 2 or 3 lockfile. */
+  packages: JsonObject;
 }
 
+// A lockfile this scan can prove things from: lockfileVersion 2 or 3 with a
+// `packages` object. Anything else is null and proves nothing about what
+// installs. That includes lockfileVersion 1: npm does not install from a v1
+// lockfile's `requires` but re-resolves from the registry, so a v1 lockfile does
+// not say what is installed.
 function readNarrowLockfile(content: string): NarrowLockfile | null {
   const data = parseJsonObject(content);
   if (!data) return null;
   const version = data.lockfileVersion;
-  const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
+  const packages = data.packages;
+  if ((version !== 2 && version !== 3) || !isPlainObject(packages)) return null;
   return { data, packages };
 }
 
@@ -1547,13 +1548,14 @@ const NODE_MODULES = 'node_modules/';
 const EDGE_FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
 
 // The names an entry lists in its own `bundleDependencies` / `bundledDependencies`
-// (an array of names; any other shape lists none).
-function bundledNamesOf(entry: JsonObject): Set<string> {
-  const names = new Set<string>();
+// (an array of names; any other shape lists none). An item that is not a string
+// never equals an edge key, so it needs no filtering.
+function bundledNamesOf(entry: JsonObject): Set<unknown> {
+  const names = new Set<unknown>();
   for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
     const list = entry[field];
     if (!Array.isArray(list)) continue;
-    for (const name of list) if (typeof name === 'string') names.add(name);
+    for (const name of list) names.add(name);
   }
   return names;
 }
@@ -1592,7 +1594,7 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
     if (normalised !== null) set.add(normalised);
   };
   for (const lock of locks) {
-    if (lock === null || lock.packages === null) return null;
+    if (lock === null) return null;
     const { packages } = lock;
     const { dependencies } = lock.data;
     // Names this lockfile has an entry for (by key), and the edges its entries
@@ -1711,7 +1713,7 @@ function indexHas(index: InstalledIndex, name: string, version: string): boolean
 // link, no alias under another name) that satisfies it; any other spec (git,
 // `file:`, tag, alias) only needs the entry to exist.
 function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration): boolean {
-  const entry = lock.packages ? ownValue(lock.packages, `node_modules/${decl.key}`) : undefined;
+  const entry = ownValue(lock.packages, `node_modules/${decl.key}`);
   if (!isPlainObject(entry)) return false;
   if (!isPlainSemverRange(decl.spec)) return true;
   if (entry.link === true) return false;
@@ -1736,18 +1738,16 @@ function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, s
     if (range === undefined) return true;
     return typeof version === 'string' && satisfiesLikeNpm(version, range);
   };
-  if (lock.packages) {
-    for (const [key, entry] of Object.entries(lock.packages)) {
-      if (key === '') continue;
-      const tail = nameFromPackagesKey(key);
-      if (!isPlainObject(entry)) {
-        if (tail !== undefined && overrides.has(tail)) return false;
-        continue;
-      }
-      if (entry.link === true) continue;
-      const named = typeof entry.name === 'string' ? entry.name : tail;
-      if (!check(named, entry.version)) return false;
+  for (const [key, entry] of Object.entries(lock.packages)) {
+    if (key === '') continue;
+    const tail = nameFromPackagesKey(key);
+    if (!isPlainObject(entry)) {
+      if (tail !== undefined && overrides.has(tail)) return false;
+      continue;
     }
+    if (entry.link === true) continue;
+    const named = typeof entry.name === 'string' ? entry.name : tail;
+    if (!check(named, entry.version)) return false;
   }
   return true;
 }
@@ -1866,7 +1866,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // top-level key, or null.
   const ownLockVersion = (m: NarrowManifest, name: string): string | null => {
     const lock = lockByPath.get(ownLockfilePath(m.dir));
-    if (!lock?.packages) return null;
+    if (!lock) return null;
     const entry = ownValue(lock.packages, `node_modules/${name}`);
     if (!isPlainObject(entry)) return null;
     // A real semver version: the loose range check below also accepts forms
