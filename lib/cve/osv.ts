@@ -1,11 +1,17 @@
 import semver from 'semver';
 import { createGitHubClient } from '@/lib/github';
 import {
+  type FetchedManifest,
+  type LockfileResolutions,
+  type NarrowNpmResolution,
+  type ObservedTreeFacts,
+  type ParsedNpmManifest,
   detectEcosystem,
   fetchNpmLockfileResolutions,
   fetchNpmManifests,
   fetchYarnLockfileResolutions,
   mergeLockfileResolutions,
+  resolveNarrowNpm,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
 import {
@@ -352,6 +358,80 @@ interface DepEntry {
 }
 
 /**
+ * The repo-wide npm chain: the entries `collectDeps` produced for npm before
+ * the narrow override existed, moved here unchanged. One entry per declared
+ * dependency name (`unionNpmDeps` dedupes by name); resolution order per
+ * D-006: merged lockfile `resolved` > usable manifest floor (exact or
+ * range-derived) > `ambiguous` > dropped. See the `collectDeps` doc comment
+ * for the rationale of each step.
+ */
+function repoWideNpmEntries(
+  manifests: ParsedNpmManifest[],
+  npmLockfileResolutions: LockfileResolutions,
+  yarnLockfileResolutions: LockfileResolutions,
+): DepEntry[] {
+  const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
+    mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
+  return unionNpmDeps(manifests)
+    .map(({ name, versionSpec }) => {
+      // Prefer the lockfile-resolved version (exact installed version) to
+      // avoid false positives from the manifest floor. Fall back to the
+      // floor-strip when neither lockfile is present or lists this dep;
+      // full rationale for what counts as a "usable" floor (exact vs.
+      // range-derived), the ambiguous last-resort, and the one documented
+      // drop case is in the doc comment above `collectDeps`. Mechanics:
+      // `floor` is usable as-is when it parses as an exact semver version
+      // (fast path); otherwise `rangeFloor()` tries the RAW `versionSpec`
+      // as a semver RANGE (`floor !== ''` excludes the digit-free
+      // wildcard class — `*`/`latest`/`workspace:*` — which
+      // `semver.validRange` would otherwise accept as `*` and
+      // `minVersion` would wrongly resolve to `0.0.0`) and returns its
+      // `minVersion`; only when neither yields anything does the
+      // `ambiguous` map (or, failing that, an empty string that drops the
+      // dep) apply. D-006 ordering is unchanged: resolved > usable floor
+      // (exact or range-derived) > ambiguous.
+      const floor = versionSpec.replace(/^[^0-9]*/, '');
+      const rangeFloor = (): string | null => {
+        if (floor === '' || semver.validRange(versionSpec) === null) return null;
+        return semver.minVersion(versionSpec)?.version ?? null;
+      };
+      const version =
+        lockfileResolutions.get(name) ??
+        (semver.valid(floor) !== null
+          ? floor
+          : (rangeFloor() ?? ambiguousLockfileResolutions.get(name) ?? ''));
+      return { name, version };
+    })
+    .filter(({ version }) => /\d/.test(version));
+}
+
+/**
+ * The narrow override on top of `repoWideNpmEntries` (see the banner above
+ * `resolveNarrowNpm` in manifest-discovery.ts): every narrow-resolved
+ * (name, version) is added, and a baseline entry is removed only when
+ * `narrowDropSafe` (`narrow.dropSafe`) proves its version is installed
+ * nowhere. Nothing else removes or replaces an entry, so the result is the
+ * baseline plus additions, minus the provably safe drops. May hold several
+ * entries for one name (one per installed version); consumers key by
+ * (name, version) pair, not by name.
+ */
+function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolution): DepEntry[] {
+  const out: DepEntry[] = [];
+  const seen = new Set<string>();
+  const push = (entry: DepEntry) => {
+    const id = `${entry.name}\u0000${entry.version}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(entry);
+  };
+  for (const entry of baseEntries) {
+    if (!narrow.dropSafe(entry.name, entry.version)) push(entry);
+  }
+  for (const addition of narrow.additions) push(addition);
+  return out;
+}
+
+/**
  * Collect the raw dep list for the given ecosystem. Returns name/version
  * pairs suitable for OSV querybatch. Deps with no usable concrete version
  * (no digit) are skipped.
@@ -404,6 +484,18 @@ interface DepEntry {
  * `discoverYarnLockfilePaths` in manifest-discovery.ts) so pnpm repos still
  * get the manifest floor (or the `ambiguous` fallback, if even that is
  * unusable).
+ *
+ * Narrow override (npm only): the chain above is computed first and unchanged
+ * (`repoWideNpmEntries`, one entry per name). `applyNarrowOverride` then
+ * adds, for repos of separate projects each with its own package-lock.json,
+ * the version each manifest's own lockfile installs, and removes a chain
+ * entry only when `resolveNarrowNpm` proves its version is installed in no
+ * fetched lockfile (every declaring manifest narrow, complete tree, no other
+ * package manager's lockfile; conditions in manifest-discovery.ts). The result
+ * can therefore hold several entries for one name, one per installed version.
+ * Npm workspaces (any `workspaces` key), repos with a yarn.lock, pnpm-lock.yaml,
+ * bun lockfile or npm-shrinkwrap.json, and trees or manifest lists that could
+ * not be read completely keep the chain result as it was.
  */
 async function collectDeps(
   eco: string,
@@ -418,21 +510,28 @@ async function collectDeps(
   // (e.g. when the tree walk fell back to a root-only probe) preserves the
   // pre-task blind-probe behaviour.
   observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
+  // Further facts of the same tree walk (foreign lockfile kinds, manifest cap),
+  // used only by the narrow npm override. `undefined`/null means the walk was
+  // incomplete: the narrow override then does nothing.
+  observedTreeFacts?: ObservedTreeFacts | null,
 ): Promise<DepEntry[]> {
   switch (eco) {
     case 'npm': {
       const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
+      // The raw files the two fetchers below read, for the narrow override.
+      const manifestFiles: FetchedManifest[] = [];
+      const lockfileFiles: FetchedManifest[] = [];
       const emptyLockfileResolutions = () => ({
         resolved: new Map<string, string>(),
         ambiguous: new Map<string, string>(),
       });
       const [manifests, npmLockfileResolutions, yarnLockfileResolutions] = await Promise.all([
-        fetchNpmManifests(octokit, owner, repo, paths),
+        fetchNpmManifests(octokit, owner, repo, paths, manifestFiles),
         // Best-effort: a lockfile-resolution failure must only ever degrade to
         // the manifest floor (per-dep fallback below), never reject and abort the
         // whole npm scan, which would return zero advisories and hide every
         // vuln for the repo.
-        fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null)
+        fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null, lockfileFiles)
           .catch((err) => {
             noteDegraded('npm lockfile resolution', err);
             return emptyLockfileResolutions();
@@ -443,39 +542,21 @@ async function collectDeps(
             return emptyLockfileResolutions();
           }),
       ]);
-      const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
-        mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
-      return unionNpmDeps(manifests)
-        .map(({ name, versionSpec }) => {
-          // Prefer the lockfile-resolved version (exact installed version) to
-          // avoid false positives from the manifest floor. Fall back to the
-          // floor-strip when neither lockfile is present or lists this dep;
-          // full rationale for what counts as a "usable" floor (exact vs.
-          // range-derived), the ambiguous last-resort, and the one documented
-          // drop case is in the doc comment above this function. Mechanics:
-          // `floor` is usable as-is when it parses as an exact semver version
-          // (fast path); otherwise `rangeFloor()` tries the RAW `versionSpec`
-          // as a semver RANGE (`floor !== ''` excludes the digit-free
-          // wildcard class — `*`/`latest`/`workspace:*` — which
-          // `semver.validRange` would otherwise accept as `*` and
-          // `minVersion` would wrongly resolve to `0.0.0`) and returns its
-          // `minVersion`; only when neither yields anything does the
-          // `ambiguous` map (or, failing that, an empty string that drops the
-          // dep) apply. D-006 ordering is unchanged: resolved > usable floor
-          // (exact or range-derived) > ambiguous.
-          const floor = versionSpec.replace(/^[^0-9]*/, '');
-          const rangeFloor = (): string | null => {
-            if (floor === '' || semver.validRange(versionSpec) === null) return null;
-            return semver.minVersion(versionSpec)?.version ?? null;
-          };
-          const version =
-            lockfileResolutions.get(name) ??
-            (semver.valid(floor) !== null
-              ? floor
-              : (rangeFloor() ?? ambiguousLockfileResolutions.get(name) ?? ''));
-          return { name, version };
-        })
-        .filter(({ version }) => /\d/.test(version));
+      const baseEntries = repoWideNpmEntries(
+        manifests,
+        npmLockfileResolutions,
+        yarnLockfileResolutions,
+      );
+      return applyNarrowOverride(
+        baseEntries,
+        resolveNarrowNpm({
+          manifestPaths: paths,
+          manifestFiles,
+          lockfileFiles,
+          observedLockfilePaths,
+          observedTreeFacts,
+        }),
+      );
     }
 
     case 'python': {
@@ -570,6 +651,7 @@ export async function fetchOsvAdvisories(
         repo,
         ecosystemInfo.manifestPaths,
         ecosystemInfo.observedLockfilePaths,
+        ecosystemInfo.observedTreeFacts,
       );
     } catch (err) {
       console.warn('[osv] dep collection failed:', err);

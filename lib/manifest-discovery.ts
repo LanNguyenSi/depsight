@@ -41,6 +41,13 @@ function depth(path: string): number {
  * paths first) so the repo-level manifest wins ties.
  */
 export function selectManifestPaths(entries: TreeEntry[]): ManifestRef[] {
+  return collectManifestRefs(entries).slice(0, MAX_MANIFESTS);
+}
+
+// Every manifest of the tree, root-first, BEFORE the MAX_MANIFESTS cut.
+// `selectManifestPaths` slices it; `detectEcosystem` also reads its length to
+// record whether the cut dropped anything (`ObservedTreeFacts.manifestsCapped`).
+function collectManifestRefs(entries: TreeEntry[]): ManifestRef[] {
   const refs: ManifestRef[] = [];
   for (const entry of entries) {
     if (entry.type !== 'blob' || !entry.path) continue;
@@ -50,7 +57,7 @@ export function selectManifestPaths(entries: TreeEntry[]): ManifestRef[] {
     refs.push({ path: entry.path, ecosystem });
   }
   refs.sort((a, b) => depth(a.path) - depth(b.path) || a.path.localeCompare(b.path));
-  return refs.slice(0, MAX_MANIFESTS);
+  return refs;
 }
 
 /**
@@ -77,6 +84,49 @@ export function selectLockfilePaths(entries: TreeEntry[]): { npm: string[]; yarn
     else if (base === 'yarn.lock') yarn.push(entry.path);
   }
   return { npm, yarn };
+}
+
+// Lockfile kinds the npm resolver in this file does not read. A repo that
+// carries any of them has a package manager whose installs the
+// `package-lock.json` files cannot vouch for (`npm-shrinkwrap.json` even takes
+// precedence over `package-lock.json` for npm itself).
+const FOREIGN_LOCKFILE_NAMES = new Set([
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lock',
+  'bun.lockb',
+  'npm-shrinkwrap.json',
+]);
+
+/**
+ * Facts about the git-tree walk that `observedLockfilePaths` does not carry,
+ * recorded in the same single walk. They exist for the narrow override in
+ * `resolveNarrowNpm`; nothing that decides what the fetchers fetch reads them.
+ */
+export interface ObservedTreeFacts {
+  /**
+   * Paths of every `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb` and
+   * `npm-shrinkwrap.json` in the (non-excluded) tree.
+   */
+  foreignLockfilePaths: string[];
+  /** The manifest list hit MAX_MANIFESTS, so manifests beyond the cut are unknown. */
+  manifestsCapped: boolean;
+}
+
+/**
+ * Pure: the lockfiles of other package managers in a flat git tree (see
+ * `FOREIGN_LOCKFILE_NAMES`), with the same vendored/build/fixture exclusion as
+ * `selectLockfilePaths`.
+ */
+export function selectForeignLockfilePaths(entries: TreeEntry[]): string[] {
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== 'blob' || !entry.path) continue;
+    if (EXCLUDED_DIR.test('/' + entry.path)) continue;
+    const base = entry.path.split('/').pop();
+    if (base && FOREIGN_LOCKFILE_NAMES.has(base.toLowerCase())) out.push(entry.path);
+  }
+  return out;
 }
 
 /**
@@ -251,7 +301,7 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
  * Mirrors the scoped-name-aware `@`-search in `yarnDescriptorName` (a scoped
  * real name's own leading `@` is not the name/range separator).
  */
-function parseNpmAlias(spec: string): { realName: string; realSpec: string } | null {
+export function parseNpmAlias(spec: string): { realName: string; realSpec: string } | null {
   const trimmed = spec.trim();
   if (!trimmed.startsWith('npm:')) return null;
   const aliased = trimmed.slice(4);
@@ -275,11 +325,12 @@ export async function detectEcosystem(
   owner: string,
   repo: string,
   branch?: string,
-): Promise<EcosystemInfo> {
+): Promise<EcosystemInfo & { observedTreeFacts?: ObservedTreeFacts | null }> {
   const octokit = createGitHubClient(accessToken);
 
   let refs: ManifestRef[] = [];
   let observedLockfilePaths: { npm: string[]; yarn: string[] } | null = null;
+  let observedTreeFacts: ObservedTreeFacts | null = null;
   let needFallback = false;
   try {
     const ref = branch ?? (await resolveDefaultBranch(octokit, owner, repo));
@@ -290,7 +341,8 @@ export async function detectEcosystem(
       recursive: 'true',
     });
     const tree = (data.tree ?? []) as TreeEntry[];
-    refs = selectManifestPaths(tree);
+    const allRefs = collectManifestRefs(tree);
+    refs = allRefs.slice(0, MAX_MANIFESTS);
     if (data.truncated) {
       // GitHub truncates trees above ~100k entries; the manifest set may be
       // incomplete. Rare, but log so an under-count isn't silent.
@@ -303,6 +355,10 @@ export async function detectEcosystem(
       // downstream fetchers fall back to blind-probing every candidate, same
       // as before this task.
       observedLockfilePaths = selectLockfilePaths(tree);
+      observedTreeFacts = {
+        foreignLockfilePaths: selectForeignLockfilePaths(tree),
+        manifestsCapped: allRefs.length > MAX_MANIFESTS,
+      };
     }
     if (data.truncated || refs.length === 0) needFallback = true;
   } catch (err) {
@@ -322,6 +378,7 @@ export async function detectEcosystem(
     // observed set does not describe the tree the fetched manifests came
     // from - it must not be used to filter candidates (Finding 1, R1).
     observedLockfilePaths = null;
+    observedTreeFacts = null;
     const rootRefs = await probeRootManifests(octokit, owner, repo);
     const seen = new Set(refs.map((r) => r.path));
     for (const r of rootRefs) if (!seen.has(r.path)) refs.push(r);
@@ -337,6 +394,7 @@ export async function detectEcosystem(
     supported: SUPPORTED_ECOSYSTEMS.has(primary),
     manifestPaths,
     observedLockfilePaths,
+    observedTreeFacts,
   };
 }
 
@@ -453,6 +511,19 @@ export async function fetchManifestContents(
 // alias parsing changes here) and is pinned by a test as a known limitation.
 // D-006's ordering is unchanged either way: resolved > usable floor (exact or
 // range-derived) > ambiguous.
+//
+// Narrow override (on top of D-006, which stays the baseline): for repos made of
+// separate projects that each carry their own package-lock.json, a name that
+// resolves to different versions in different projects is ambiguous repo-wide
+// and used to fall to a manifest floor that no project installs. The scan now
+// also queries what each manifest's own lockfile installs, and removes the
+// baseline entry only when it is provably installed nowhere; see
+// `resolveNarrowNpm` for the exact rule. The baseline alone remains the
+// behaviour for npm workspaces (any `workspaces` key), for repos with a
+// yarn.lock, pnpm-lock.yaml, bun lockfile or npm-shrinkwrap.json, for repos
+// whose git tree or manifest list could not be read completely, and for every
+// dependency whose manifest, lockfile or declaration does not meet the narrow
+// conditions.
 
 export interface LockfileResolutions {
   /** name -> single unambiguous resolved version (D-006 semantics, unchanged). */
@@ -628,6 +699,10 @@ export function discoverLockfilePaths(manifestPaths: string[]): string[] {
  *
  * Malformed JSON entries are skipped gracefully.
  *
+ * This merged, name-keyed map is the repo-wide baseline. The narrow override
+ * (`resolveNarrowNpm`) adds per-manifest answers on top of it for the
+ * separate-projects shape and leaves this map's semantics untouched.
+ *
  * Pure function — exported for testing.
  */
 export function parseNpmLockfileContentsList(contents: string[]): LockfileResolutions {
@@ -680,6 +755,23 @@ export function parseNpmLockfileContentsList(contents: string[]): LockfileResolu
 }
 
 /**
+ * The `package-lock.json` paths `fetchNpmLockfileResolutions` reads: the
+ * candidates from `discoverLockfilePaths`, narrowed to the observed set when
+ * one is known (case-insensitive, like the fetcher always did).
+ *
+ * Pure function — exported for testing.
+ */
+export function npmLockfileFetchPaths(
+  manifestPaths: string[],
+  observedLockfilePaths?: string[] | null,
+): string[] {
+  const candidatePaths = discoverLockfilePaths(manifestPaths);
+  const observedSet =
+    observedLockfilePaths == null ? null : new Set(observedLockfilePaths.map((p) => p.toLowerCase()));
+  return observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p.toLowerCase()));
+}
+
+/**
  * Given a list of package.json manifest paths, discover and fetch the
  * co-located `package-lock.json` files plus the repo root lockfile. Parse
  * them and return a flat `packageName → resolvedVersion` map.
@@ -706,12 +798,13 @@ export async function fetchNpmLockfileResolutions(
   repo: string,
   manifestPaths: string[],
   observedLockfilePaths?: string[] | null,
+  fetchedSink?: FetchedManifest[],
 ): Promise<LockfileResolutions> {
-  const candidatePaths = discoverLockfilePaths(manifestPaths);
-  const observedSet =
-    observedLockfilePaths == null ? null : new Set(observedLockfilePaths.map((p) => p.toLowerCase()));
-  const lockPaths = observedSet == null ? candidatePaths : candidatePaths.filter((p) => observedSet.has(p.toLowerCase()));
+  const lockPaths = npmLockfileFetchPaths(manifestPaths, observedLockfilePaths);
   const fetched = await fetchManifestContents(octokit, owner, repo, lockPaths);
+  // The raw files, for the narrow override (`resolveNarrowNpm`); same reads,
+  // no extra request.
+  fetchedSink?.push(...fetched);
   if (fetched.length === 0) return { resolved: new Map(), ambiguous: new Map() };
   return parseNpmLockfileContentsList(fetched.map((f) => f.content));
 }
@@ -1031,9 +1124,14 @@ export async function fetchNpmManifests(
   owner: string,
   repo: string,
   paths: string[],
+  fetchedSink?: FetchedManifest[],
 ): Promise<ParsedNpmManifest[]> {
   const out: ParsedNpmManifest[] = [];
-  for (const { content } of await fetchManifestContents(octokit, owner, repo, paths)) {
+  const fetched = await fetchManifestContents(octokit, owner, repo, paths);
+  // The raw files with their paths, for the narrow override
+  // (`resolveNarrowNpm`); same reads, no extra request.
+  fetchedSink?.push(...fetched);
+  for (const { content } of fetched) {
     try {
       out.push(JSON.parse(content) as ParsedNpmManifest);
     } catch {
@@ -1041,6 +1139,351 @@ export async function fetchNpmManifests(
     }
   }
   return out;
+}
+
+// ---- narrow lockfile override (refines D-006) --------------------------------
+//
+// The repo-wide chain (`mergeLockfileResolutions`, then the manifest floor,
+// then `ambiguous`) stays the baseline for every dependency. On top of it, for
+// one well-understood repo shape, the scan also asks what a manifest's OWN
+// lockfile installs. The shape: several separate projects, each with its own
+// package.json and package-lock.json (`frontend/` and `backend/`). When a name
+// resolves to different versions in different projects it drops out of
+// `resolved` and is queried at a manifest floor that no project installs.
+//
+//   - ADDITIONS. A (manifest, dependency) pair is narrow-resolved when
+//     `narrowVersion` finds the dependency in the manifest's own-directory
+//     `package-lock.json` (lockfileVersion 2/3, top-level key
+//     `node_modules/<name>` only, never an ancestor's lockfile) and the manifest
+//     is narrow for it (condition 4c below). Every narrow-resolved
+//     (name, version) is queried in addition to the baseline.
+//   - REMOVAL. The baseline entry of a name is removed only when
+//     `narrowDropSafe` holds: 4a the tree was read completely, 4b no other
+//     package manager's lockfile exists, 4c every manifest declaring the name
+//     is narrow for it, 4d the baseline version is installed by no fetched
+//     lockfile at any install path.
+//
+// 4a and 4b gate the whole override, additions included: without them there is
+// no narrow resolution and the result is the baseline. Nothing else removes or
+// replaces a baseline entry. No pattern is built from repository content, and
+// `workspaces` is only tested for presence. Whatever a check cannot establish
+// (a read or parse error, an unknown shape) keeps the baseline entry:
+// under-reporting is worse than over-reporting. Npm workspaces, repos with
+// another package manager's lockfile and repos whose tree could not be read
+// completely therefore keep the baseline result.
+
+/** What `resolveNarrowNpm` reads. The raw files are the ones the fetchers read anyway. */
+export interface NarrowNpmInputs {
+  /** The package.json paths the scan reads (`fetchNpmManifests`' `paths`). */
+  manifestPaths: string[];
+  /** The package.json files that were read (path + raw content). */
+  manifestFiles: FetchedManifest[];
+  /** The package-lock.json files that were read (path + raw content). */
+  lockfileFiles: FetchedManifest[];
+  /** `EcosystemInfo.observedLockfilePaths`; null when the tree walk was incomplete. */
+  observedLockfilePaths: { npm: string[]; yarn: string[] } | null | undefined;
+  /** `detectEcosystem`'s `observedTreeFacts`; null/undefined when the tree walk was incomplete. */
+  observedTreeFacts: ObservedTreeFacts | null | undefined;
+}
+
+export interface NarrowNpmResolution {
+  /** Every narrow-resolved (name, version), deduped by (name, version). */
+  additions: Array<{ name: string; version: string }>;
+  /** `narrowDropSafe`: may the baseline entry (name, baseVersion) be removed? */
+  dropSafe: (name: string, baseVersion: string) => boolean;
+}
+
+const NO_NARROW_RESOLUTION: NarrowNpmResolution = { additions: [], dropSafe: () => false };
+
+type JsonObject = Record<string, unknown>;
+
+function isPlainObject(v: unknown): v is JsonObject {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function parseJsonObject(content: string): JsonObject | null {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function dirOf(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? '' : path.slice(0, i);
+}
+
+// Is `ancestor` the directory `dir` itself or one of its parents? '' is the repo root.
+function isSelfOrAncestorDir(ancestor: string, dir: string): boolean {
+  return ancestor === '' || dir === ancestor || dir.startsWith(ancestor + '/');
+}
+
+// Same version for "is the baseline version installed here": string equality,
+// or semver equality (which ignores build metadata) when both parse. Unequal
+// strings that are semver-equal count as the same, so the answer errs towards
+// keeping the baseline entry.
+function sameVersion(a: string, b: string): boolean {
+  if (a === b) return true;
+  const va = semver.valid(a);
+  const vb = semver.valid(b);
+  return va !== null && vb !== null && semver.eq(va, vb);
+}
+
+interface NarrowDeclaration {
+  /** The key the manifest declares the dependency under. */
+  key: string;
+  spec: string;
+  /** The spec starts with `npm:` (an alias form, parseable or not). */
+  aliasForm: boolean;
+  /** The name `unionNpmDeps` queries it under: the alias target, else the key. */
+  realName: string;
+}
+
+interface NarrowManifest {
+  path: string;
+  dir: string;
+  data: JsonObject;
+  declarations: NarrowDeclaration[];
+}
+
+// A manifest whose dependency maps have an unexpected shape counts as unread:
+// it could declare anything.
+function readNarrowManifest(path: string, content: string): NarrowManifest | null {
+  const data = parseJsonObject(content);
+  if (!data) return null;
+  const declarations: NarrowDeclaration[] = [];
+  for (const field of ['dependencies', 'devDependencies'] as const) {
+    const map = data[field];
+    if (map === undefined) continue;
+    if (!isPlainObject(map)) return null;
+    for (const [key, rawSpec] of Object.entries(map)) {
+      const spec = String(rawSpec);
+      const alias = parseNpmAlias(spec);
+      declarations.push({
+        key,
+        spec,
+        aliasForm: spec.trim().startsWith('npm:'),
+        realName: alias ? alias.realName : key,
+      });
+    }
+  }
+  return { path, dir: dirOf(path), data, declarations };
+}
+
+interface NarrowLockfile {
+  data: JsonObject;
+  /** lockfileVersion 2/3 with a `packages` map: the only shape narrow resolution reads. */
+  packages: JsonObject | null;
+}
+
+function readNarrowLockfile(content: string): NarrowLockfile | null {
+  const data = parseJsonObject(content);
+  if (!data) return null;
+  const version = data.lockfileVersion;
+  const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
+  return { data, packages };
+}
+
+type LockScan = 'found' | 'absent' | 'unknown';
+
+// Bound for the lockfile walk below; a lockfile this large is not trusted to
+// have been scanned completely.
+const MAX_LOCK_SCAN_NODES = 200_000;
+
+/**
+ * Does `lock` install `name` at `version` anywhere: top level, nested under
+ * another package, an aliased install, a v1 `dependencies` tree? 'unknown'
+ * when the lockfile has a shape this scan does not understand.
+ */
+function scanLockfileFor(lock: NarrowLockfile, name: string, version: string): LockScan {
+  let visited = 0;
+  const { packages, dependencies } = lock.data;
+  if (packages !== undefined) {
+    if (!isPlainObject(packages)) return 'unknown';
+    for (const [key, entry] of Object.entries(packages)) {
+      if (++visited > MAX_LOCK_SCAN_NODES) return 'unknown';
+      if (!isPlainObject(entry)) continue;
+      const tail = key.includes('node_modules/') ? key.split('node_modules/').pop() : undefined;
+      const entryName = typeof entry.name === 'string' && entry.name ? entry.name : tail;
+      if (entryName !== name) continue;
+      if (typeof entry.version === 'string' && sameVersion(entry.version, version)) return 'found';
+    }
+  }
+  if (dependencies !== undefined) {
+    if (!isPlainObject(dependencies)) return 'unknown';
+    // lockfileVersion 1 (and the legacy mirror in v2): nested `dependencies`.
+    const stack: JsonObject[] = [dependencies];
+    while (stack.length > 0) {
+      const map = stack.pop()!;
+      for (const [key, entry] of Object.entries(map)) {
+        if (++visited > MAX_LOCK_SCAN_NODES) return 'unknown';
+        if (!isPlainObject(entry)) continue;
+        if (typeof entry.version === 'string') {
+          const alias = parseNpmAlias(entry.version);
+          const installedName = alias ? alias.realName : key;
+          const installedVersion = alias ? alias.realSpec : entry.version;
+          if (installedName === name && sameVersion(installedVersion, version)) return 'found';
+        }
+        if (isPlainObject(entry.dependencies)) stack.push(entry.dependencies);
+      }
+    }
+  }
+  return 'absent';
+}
+
+/**
+ * Compute the narrow override (see the banner above) from the files the
+ * fetchers read. Pure; never throws: an internal error yields "no additions,
+ * nothing removable", i.e. the baseline.
+ */
+export function resolveNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
+  try {
+    return computeNarrowNpm(inputs);
+  } catch {
+    return NO_NARROW_RESOLUTION;
+  }
+}
+
+function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
+  const { manifestPaths, observedLockfilePaths, observedTreeFacts } = inputs;
+
+  // 4a treeWalkComplete: lockfile paths observed (the walk was not truncated
+  // and did not fall back to a root probe), facts recorded, manifest list not
+  // cut at its cap. Anything less and "no other manifest or lockfile exists"
+  // cannot be proven, so there is no narrow resolution at all.
+  const treeWalkComplete =
+    observedLockfilePaths != null && observedTreeFacts != null && !observedTreeFacts.manifestsCapped;
+  if (!treeWalkComplete) return NO_NARROW_RESOLUTION;
+
+  const rawManifests = new Map(inputs.manifestFiles.map((f) => [f.path, f.content]));
+  const manifestByPath = new Map<string, NarrowManifest | null>();
+  for (const path of manifestPaths) {
+    const raw = rawManifests.get(path);
+    manifestByPath.set(path, raw === undefined ? null : readNarrowManifest(path, raw));
+  }
+  const manifests = [...manifestByPath.values()].filter((m): m is NarrowManifest => m !== null);
+
+  const rawLocks = new Map(inputs.lockfileFiles.map((f) => [f.path, f.content]));
+  const lockByPath = new Map<string, NarrowLockfile | null>();
+  for (const path of npmLockfileFetchPaths(manifestPaths, observedLockfilePaths.npm)) {
+    const raw = rawLocks.get(path);
+    lockByPath.set(path, raw === undefined ? null : readNarrowLockfile(raw));
+  }
+
+  // 4b noForeignLockfiles: no yarn.lock, pnpm-lock.yaml, bun.lock, bun.lockb or
+  // npm-shrinkwrap.json anywhere in the observed tree. With another package
+  // manager's lockfile around, the package-lock.json files do not necessarily
+  // describe what is installed, so there is no narrow resolution at all (no
+  // additions below, and `dropSafe` is false).
+  const noForeignLockfiles =
+    observedTreeFacts.foreignLockfilePaths.length === 0 && observedLockfilePaths.yarn.length === 0;
+
+  // Names the baseline never queries: another local package of the repo.
+  const localNames = new Set(
+    manifests.map((m) => m.data.name).filter((n): n is string => typeof n === 'string' && n !== ''),
+  );
+
+  // 4c, manifest part (standalone): the manifest and every package.json in a
+  // directory above it were read and parsed, and none has a `workspaces` key
+  // (any value). The ancestors come from the manifest list, which is the whole
+  // tree here (4a: not capped).
+  const standaloneByPath = new Map<string, boolean>();
+  const isStandalone = (m: NarrowManifest): boolean => {
+    const cached = standaloneByPath.get(m.path);
+    if (cached !== undefined) return cached;
+    const standalone = manifestPaths.every((path) => {
+      if (!isSelfOrAncestorDir(dirOf(path), m.dir)) return true;
+      const ancestor = manifestByPath.get(path);
+      return ancestor != null && !Object.prototype.hasOwnProperty.call(ancestor.data, 'workspaces');
+    });
+    standaloneByPath.set(m.path, standalone);
+    return standalone;
+  };
+
+  // The version M's own-directory lockfile installs for `name` at the
+  // top-level key, or null.
+  const ownLockVersion = (m: NarrowManifest, name: string): string | null => {
+    const lock = lockByPath.get(m.dir ? `${m.dir}/package-lock.json` : 'package-lock.json');
+    if (!lock?.packages) return null;
+    const entry = lock.packages[`node_modules/${name}`];
+    if (!isPlainObject(entry)) return null;
+    if (typeof entry.version !== 'string' || !/\d/.test(entry.version)) return null;
+    if (entry.link === true) return null;
+    if (entry.name !== undefined && entry.name !== name) return null;
+    return entry.version;
+  };
+
+  // 4c, declaration part: the version M installs for the dependency it declares
+  // as `decl` when M is narrow for it, else null. Narrow means standalone
+  // (above), a non-alias declaration with a plain semver range, an own lockfile
+  // entry (above), and an installed version that satisfies the declared range.
+  const narrowVersion = (m: NarrowManifest, decl: NarrowDeclaration): string | null => {
+    if (!isStandalone(m)) return null;
+    if (decl.aliasForm) return null; // the lockfile key is the local alias, not the name
+    const range = decl.spec.trim();
+    if (semver.validRange(range) === null) return null; // git, file:, tag, workspace:...
+    const version = ownLockVersion(m, decl.key);
+    if (version === null) return null;
+    return semver.satisfies(version, range, { includePrerelease: true }) ? version : null;
+  };
+
+  const additions: Array<{ name: string; version: string }> = [];
+  const seenAddition = new Set<string>();
+  const declarers = new Map<string, Array<{ manifest: NarrowManifest; decl: NarrowDeclaration }>>();
+  for (const manifest of manifests) {
+    for (const decl of manifest.declarations) {
+      const list = declarers.get(decl.realName) ?? [];
+      list.push({ manifest, decl });
+      declarers.set(decl.realName, list);
+      if (!noForeignLockfiles) continue; // 4b
+      if (decl.realName !== decl.key || localNames.has(decl.key)) continue;
+      const version = narrowVersion(manifest, decl);
+      if (version === null) continue;
+      const id = `${decl.key}\u0000${version}`;
+      if (seenAddition.has(id)) continue;
+      seenAddition.add(id);
+      additions.push({ name: decl.key, version });
+    }
+  }
+
+  // 4c, completeness part: every manifest of the tree was read and parsed (an
+  // unread one could declare the name), and every declaring manifest is narrow.
+  const declarersAllNarrow = (name: string): boolean => {
+    if (localNames.has(name)) return false;
+    if (!manifestPaths.every((p) => manifestByPath.get(p) != null)) return false;
+    const list = declarers.get(name) ?? [];
+    if (list.length === 0) return false; // nothing declares it: nothing to prove narrow
+    return list.every(({ manifest, decl }) => narrowVersion(manifest, decl) !== null);
+  };
+
+  // 4d baseVersionInstalledNowhere: every lockfile the scan reads was fetched
+  // and parsed (an unread one could install anything) and none installs
+  // `baseVersion` for `name` at any path, nested copies and aliases included.
+  const baseVersionInstalledNowhere = (name: string, baseVersion: string): boolean => {
+    for (const lock of lockByPath.values()) {
+      if (lock === null) return false;
+      if (scanLockfileFor(lock, name, baseVersion) !== 'absent') return false;
+    }
+    return true;
+  };
+
+  // narrowDropSafe
+  const dropSafe = (name: string, baseVersion: string): boolean => {
+    try {
+      // 4a holds here: without it computeNarrowNpm returned before building this.
+      return (
+        noForeignLockfiles && // 4b
+        declarersAllNarrow(name) && // 4c
+        baseVersionInstalledNowhere(name, baseVersion) // 4d
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  return { additions, dropSafe };
 }
 
 async function resolveDefaultBranch(

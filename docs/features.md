@@ -59,7 +59,18 @@ A complete list of what depsight does today, beyond the headline value props in 
     default, not a difference in actual exposure.
   - depsight's independent OSV channel queries the UNION of DIRECT manifest
     dependencies (`dependencies` + `devDependencies`) on lockfile-resolved
-    versions, dev and prod alike (`lib/manifest-discovery.ts`). It is not a
+    versions, dev and prod alike (`lib/manifest-discovery.ts`). For npm, a
+    repository of separate projects that each carry their own
+    `package-lock.json` is also queried at the version each manifest's own
+    lockfile installs: a package installed at different versions in different
+    projects is queried at each installed version, and the repository-wide
+    entry for it (a manifest floor that no project installs) is removed only
+    when it is provably installed nowhere (complete git tree, no `yarn.lock`,
+    `pnpm-lock.yaml`, `bun.lock`, `bun.lockb` or `npm-shrinkwrap.json`, no
+    `workspaces` key in or above any declaring manifest, every declaring
+    manifest with a readable lockfile that satisfies its declared range). Npm
+    workspace monorepos, repositories with another package manager's lockfile
+    and truncated trees keep the repository-wide result. It is not a
     backstop for a TRANSITIVE-only package (outside that query set, e.g. a
     dependency pulled in only via another devDependency) — that gap is
     structural, not a bug. For a DIRECT dependency, OSV remains in scope and
