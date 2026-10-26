@@ -34,9 +34,9 @@ const SENTINEL = 'sentinel-pw-0f3a';
 const failures = [];
 const fail = (file, message) => failures.push(`${file}: ${message}`);
 
-// An empty env file for every `docker compose config` call: compose reads the project's
-// .env for interpolation and COMPOSE_* settings, and a local one must not change the
-// result.
+// An empty env file for every `docker compose config` call, so the project's .env does
+// not feed interpolation or the COMPOSE_* settings; the app's env_file still reads it (a
+// malformed one ends the check with exit 2).
 const emptyEnvDir = mkdtempSync(join(tmpdir(), 'compose-isolation-'));
 const emptyEnvFile = join(emptyEnvDir, 'empty.env');
 writeFileSync(emptyEnvFile, '');
