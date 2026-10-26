@@ -51,9 +51,11 @@ function fixture(file: string | null, mutate?: Mutation): string {
   return dir;
 }
 
-// The guard in its own process group's child with a hard timeout; stdin closed.
+// The guard as a child with a hard timeout and stdin closed. It runs at a low priority
+// (nice): its many docker CLI launches would otherwise starve the timing-sensitive
+// process-spawning tests that run in parallel with this file.
 function runGuard(dir: string) {
-  const result = spawnSync('node', [GUARD, dir], {
+  const result = spawnSync('nice', ['-n', '15', 'node', GUARD, dir], {
     encoding: 'utf8',
     timeout: 60_000,
     killSignal: 'SIGKILL',
@@ -137,18 +139,27 @@ describeIfCompose('check-compose-isolation guard', () => {
     ],
   ];
 
+  // The combined case runs on both production files, the single-line cases on the hosted
+  // one: both files carry the same lines, and every guard run costs five docker CLI calls.
+  const [combined, ...single] = cases;
   for (const file of PROD_FILES) {
-    describe(file, () => {
-      it.each(cases)('fails on %s', (_name, mutate, messages) => {
-        const result = runGuard(fixture(file, mutate));
-        for (const message of messages) expect(result.stderr).toContain(`${file}: ${message}`);
-        expect(result.status).toBe(1);
-        // A failure of this file is not reported under the other file's name.
-        const other = PROD_FILES.find((name) => name !== file) as string;
-        expect(result.stderr).not.toContain(`${other}: `);
-      });
+    it(`fails on ${combined[0]} in ${file}`, () => {
+      const result = runGuard(fixture(file, combined[1]));
+      for (const message of combined[2]) expect(result.stderr).toContain(`${file}: ${message}`);
+      expect(result.status).toBe(1);
+      // A failure of this file is not reported under the other file's name.
+      const other = PROD_FILES.find((name) => name !== file) as string;
+      expect(result.stderr).not.toContain(`${other}: `);
     });
   }
+
+  it.each(single)('fails on %s in the hosted file', (_name, mutate, messages) => {
+    const result = runGuard(fixture('docker-compose.traefik.yml', mutate));
+    for (const message of messages) {
+      expect(result.stderr).toContain(`docker-compose.traefik.yml: ${message}`);
+    }
+    expect(result.status).toBe(1);
+  });
 
   // The probe must fail on the answer's status. The mutations all rewrite one line of the
   // hosted file, the same line in the other file is identical.
