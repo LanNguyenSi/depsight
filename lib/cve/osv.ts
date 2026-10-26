@@ -501,8 +501,9 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * every plain string `overrides` entry); every declaring manifest narrow; and
  * every lockfile entry that names a package readable as a semver version (an
  * unreadable one makes the name unknown, so it is never removed). A
- * lockfileVersion 1 lockfile anywhere keeps every entry (npm re-resolves from
- * the registry instead of installing from it). So does an edge of a `packages`
+ * lockfileVersion 1 lockfile anywhere keeps every entry (npm takes each
+ * package's dependency edges from the registry, not from the lockfile, so the
+ * lockfile does not show everything that is installed). So does an edge of a `packages`
  * entry (`dependencies`, `optionalDependencies`, and `peerDependencies` unless
  * the entry marks the peer optional) to a name the same lockfile has no entry
  * for, since `npm install` resolves it from the registry; entries marked
@@ -513,8 +514,10 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * the lockfiles, that is `npm ci`, or `npm install` on a lockfile with no
  * missing or invalid edge. Not covered: `npm install` on a lockfile whose
  * transitive edges are inconsistent, a git or `file:` dependency changed
- * without updating the lockfile, command line flags, a user or global npmrc,
- * the environment and the state of the registry.
+ * without updating the lockfile, the contents of a bundling optional package
+ * that the lockfile was written without unpacking (on another platform),
+ * command line flags, a user or global npmrc, the environment and the state of
+ * the registry.
  *
  * Vendored, build and fixture directories are not read. The result can
  * therefore hold several entries for one name, one per installed version.

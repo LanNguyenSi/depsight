@@ -83,8 +83,9 @@ A complete list of what depsight does today, beyond the headline value props in 
     every declaring manifest's lockfile satisfying its declared range; and every
     lockfile entry that names a package carrying a semver version (a git,
     tarball or `file:` version makes the name unknown, and an unknown name is
-    kept); no lockfileVersion 1 lockfile anywhere (npm re-resolves from the
-    registry instead of installing from it, so it proves nothing); and no
+    kept); no lockfileVersion 1 lockfile anywhere (npm takes each package's
+    dependency edges from the registry, not from the lockfile, so it proves
+    nothing); and no
     lockfile entry with a `dependencies`, `optionalDependencies` or
     `peerDependencies` edge (a peer the entry marks optional in
     `peerDependenciesMeta` excepted) to a name the same lockfile has no entry
@@ -95,8 +96,10 @@ A complete list of what depsight does today, beyond the headline value props in 
     lockfiles: `npm ci`, or `npm install` on a lockfile with no missing or
     invalid edge. Outside that guarantee are `npm install` on a lockfile whose
     transitive edges are inconsistent, a git or `file:` dependency changed
-    without updating the lockfile, command line flags, a user or global npmrc,
-    the environment and the state of the registry. Npm workspace
+    without updating the lockfile, the contents of a bundling optional package
+    that the lockfile was written without unpacking (on another platform),
+    command line flags, a user or global npmrc, the environment and the state
+    of the registry. Npm workspace
     monorepos, repositories with another package manager's lockfile and
     truncated trees keep the
     repository-wide result. It is not a

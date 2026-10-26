@@ -1210,10 +1210,14 @@ export async function fetchNpmManifests(
 // from the ideal tree, so the lockfile is the install. Out of that guarantee,
 // and so residuals that can still install a removed floor: `npm install` on a
 // lockfile whose transitive edges are inconsistent (npm re-resolves them from
-// the registry; this scan notices an edge to a name without an entry, not an
-// edge whose range the held version does not satisfy), a git or `file:`
-// dependency changed without updating the lockfile, command line flags, a user
-// or global npmrc, the environment and the state of the registry.
+// the registry; this scan notices an edge to a name without any entry, not an
+// edge the lockfile does not satisfy at the location npm resolves it from: out
+// of range, or present only on another branch), a git or `file:` dependency
+// changed without updating the lockfile, the contents of a bundling optional
+// package that the lockfile was written without unpacking (on another
+// platform: its bundled dependencies' own dependencies are not in the
+// lockfile), command line flags, a user or global npmrc, the environment and
+// the state of the registry.
 //
 //   - ADDITIONS. A (manifest, dependency) pair is narrow-resolved when
 //     `narrowVersion` finds the dependency in the manifest's own-directory
@@ -1255,9 +1259,9 @@ export async function fetchNpmManifests(
 //       * the baseline version is installed by no fetched lockfile at any
 //         install path. This is answered from an index built once over all
 //         fetched lockfiles, under one node budget. Every lockfile must have a
-//         known shape (a lockfileVersion 1 lockfile has none: npm does not
-//         install from its `requires` but re-resolves from the registry, so
-//         one anywhere makes every name unprovable) and every entry that names
+//         known shape (a lockfileVersion 1 lockfile has none: npm takes each
+//         package's dependency edges from the registry, not from the
+//         lockfile, so one anywhere makes every name unprovable) and every entry that names
 //         a package must carry a semver version (an `npm:` alias is resolved
 //         first); an entry that does not (a git or tarball version, a `file:`
 //         version, no version, not an object) makes its name "unknown", and an
@@ -1515,9 +1519,9 @@ interface NarrowLockfile {
 
 // A lockfile this scan can prove things from: lockfileVersion 2 or 3 with a
 // `packages` object. Anything else is null and proves nothing about what
-// installs. That includes lockfileVersion 1: npm does not install from a v1
-// lockfile's `requires` but re-resolves from the registry, so a v1 lockfile does
-// not say what is installed.
+// installs. That includes lockfileVersion 1: npm takes each package's
+// dependency edges from the registry, not from a v1 lockfile, so a v1 lockfile
+// does not show everything that is installed.
 function readNarrowLockfile(content: string): NarrowLockfile | null {
   const data = parseJsonObject(content);
   if (!data) return null;
