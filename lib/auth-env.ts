@@ -4,6 +4,10 @@
  * health check and then fails every login, so the process refuses to start instead
  * (the same exit-1 path as an invalid SCAN_INTERVAL_MINUTES).
  *
+ * Names: this checks NEXTAUTH_SECRET and NEXTAUTH_URL, the names depsight reads (webhook
+ * sealing reads NEXTAUTH_SECRET only). next-auth v5's AUTH_SECRET and AUTH_URL are not
+ * looked at.
+ *
  * Only NODE_ENV=production is checked: development and test runs have their own
  * defaults (docker-compose.dev.yml sets both) and the Docker image build sets no
  * runtime variables at all.
@@ -55,7 +59,7 @@ export function checkAuthEnv(env: Record<string, string | undefined>): AuthEnvRe
     } catch {
       url = null;
     }
-    if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:') || !url.hostname) {
+    if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
       report.errors.push(
         'NEXTAUTH_URL is not an absolute http(s) URL: it must be the public base URL of the app, for example https://depsight.example.com',
       );
