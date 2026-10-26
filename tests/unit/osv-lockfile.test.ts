@@ -255,7 +255,7 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
   });
 
   // --------------------------------------------------------------------------
-  // Fix-round 2 (task 18f6c239, review findings on commit 87ed8d9):
+  // Follow-up fixes (task 18f6c239):
   //
   // Finding 1 (HIGH, correctness): collectDeps's floor-strip
   // (`versionSpec.replace(/^[^0-9]*/, '')`) yields '' for a manifest spec
@@ -442,7 +442,7 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
   });
 
   // --------------------------------------------------------------------------
-  // Fix-round 2 review (task 7fc55e6f, R2 finding on 18f6c239): collectDeps
+  // Floor usability (task 7fc55e6f): collectDeps
   // gated the floor's usability on `floor !== ''`. A non-semver spec whose
   // text happens to contain a digit (e.g. a git spec
   // `github:acme/widget2#main`) strips to a non-empty but meaningless floor
@@ -558,7 +558,7 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
   });
 
   // --------------------------------------------------------------------------
-  // Fix-round 2 (task 7fc55e6f, R2 review on this branch's own guard fix
+  // Range floors (task 7fc55e6f, follow-up to the guard fix
   // above): raising the guard all the way to plain `semver.valid(floor) !==
   // null` was TOO STRICT — it also rejects a floor derived from an ordinary
   // RANGE spec (`^19`, `~1.2`, `2.x`, `>=1.2`, ...), which is common and
@@ -569,7 +569,7 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
   // spec) + `semver.minVersion` before falling back further.
   // --------------------------------------------------------------------------
 
-  it('(j) RANGE FLOOR (task 7fc55e6f fix-round-2, F1): a `^19`-shaped range spec with no lockfile match anywhere queries the range minVersion, not a raw floor or a drop', async () => {
+  it('(j) RANGE FLOOR (task 7fc55e6f): a `^19`-shaped range spec with no lockfile match anywhere queries the range minVersion, not a raw floor or a drop', async () => {
     // `^19` strips to floor '19', which fails `semver.valid` (not a full
     // x.y.z) — but the SPEC is a perfectly ordinary semver range. Both
     // `resolved` and `ambiguous` are empty here (no lockfile at all), so the
@@ -802,7 +802,7 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
   });
 
   it('(i) CROSS-FORMAT AMBIGUOUS UNION MERGE (task 7fc55e6f): a no-digit spec plus disagreeing npm/yarn resolutions queries the cross-format ambiguous lowest', async () => {
-    // NOTE on naming (task 7fc55e6f fix-round-2, F6): this composes the REAL
+    // NOTE on naming (task 7fc55e6f): this composes the REAL
     // `mergeLockfileResolutions` with the real `collectDeps`, but the two
     // per-format resolution maps below are synthesized directly via `lr(...)`
     // rather than produced by feeding real package-lock.json/yarn.lock text

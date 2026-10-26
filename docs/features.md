@@ -106,7 +106,18 @@ A complete list of what depsight does today, beyond the headline value props in 
     of the registry. Npm workspace
     monorepos, repositories with another package manager's lockfile and
     truncated trees keep the
-    repository-wide result. It is not a
+    repository-wide result. The repository-wide query for a name is one
+    version, so it is widened for declarations it may not stand for (nothing
+    already queried is removed): a `dependencies` or `devDependencies`
+    declaration with a plain semver range that the merged lockfile version
+    does not satisfy (root `^8.3.0` locked at 8.3.5, `docs/` `^6.0.0` without
+    a lockfile) is also queried at its range's lowest version, and a
+    declaration with no range to compare (`latest` or another tag, a git or
+    `file:` spec, `*`) has every version any lockfile records for the name
+    queried, nested copies included. A project that declares a range the
+    resolved version satisfies but installs another version, and a name
+    declared only in `optionalDependencies`, `peerDependencies` or
+    `bundleDependencies` without a lockfile, are not covered. It is not a
     backstop for a TRANSITIVE-only package (outside that query set, e.g. a
     dependency pulled in only via another devDependency) — that gap is
     structural, not a bug. For a DIRECT dependency, OSV remains in scope and

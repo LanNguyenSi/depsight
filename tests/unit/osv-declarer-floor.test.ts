@@ -91,13 +91,20 @@ describe('range branch: a declared plain range the resolved version does not sat
   });
 
   it('counts a prerelease resolution as not satisfying a stable range', () => {
-    const out = repoWideNpmEntries([deps({ vite: '^8.0.0' })], npmLock({ vite: ['8.0.0-rc.1'] }), EMPTY);
-    expect(asPairs(out)).toEqual(['vite@8.0.0', 'vite@8.0.0-rc.1']);
+    // 8.1.0-rc.1 lies inside ^8.0.0 numerically, but a prerelease only satisfies a
+    // range that names a prerelease of the same version: query the floor too.
+    const out = repoWideNpmEntries([deps({ vite: '^8.0.0' })], npmLock({ vite: ['8.1.0-rc.1'] }), EMPTY);
+    expect(asPairs(out)).toEqual(['vite@8.0.0', 'vite@8.1.0-rc.1']);
   });
 
   it('treats a resolution that is not a semver version as not satisfying', () => {
     const out = repoWideNpmEntries([deps({ vite: '^6.0.0' })], npmLock({ vite: ['1.2.3.4'] }), EMPTY);
     expect(asPairs(out)).toEqual(['vite@1.2.3.4', 'vite@6.0.0']);
+  });
+
+  it('adds nothing for a range that admits no version at all (no floor to query)', () => {
+    const out = repoWideNpmEntries([deps({ vite: '>2 <1' })], npmLock({ vite: ['8.3.5'] }), EMPTY);
+    expect(asPairs(out)).toEqual(['vite@8.3.5']);
   });
 
   it('reads devDependencies and an npm: alias as declarations of the real name', () => {

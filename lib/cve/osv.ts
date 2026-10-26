@@ -713,8 +713,16 @@ function raisedNpmVersion(
  * get the manifest floor (or the `ambiguous` fallback, if even that is
  * unusable).
  *
+ * Declarer floors (npm only): the chain above gives one version per name for the
+ * repository as a whole, so `repoWideNpmEntries` adds, without removing
+ * anything, the floor of a declared plain range that the merged lockfile
+ * version does not satisfy, and every lockfile version of a name that a
+ * declaration with no range to compare (`latest`, a tag, a git or `file:` spec,
+ * `*`) declares; see its doc comment.
+ *
  * Narrow override (npm only): the chain above is computed first and unchanged
- * (`repoWideNpmEntries`, one entry per name). `applyNarrowOverride` then
+ * (`repoWideNpmEntries`, one chain entry per name plus those additions).
+ * `applyNarrowOverride` then
  * adds, for repos of separate projects each with its own package-lock.json,
  * the version each manifest's own lockfile installs (for a dependency, dev, optional or
  * peer declaration; a bundled name never adds), and removes a chain
