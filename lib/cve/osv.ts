@@ -10,7 +10,9 @@ import {
   fetchNpmLockfileResolutions,
   fetchNpmManifests,
   fetchYarnLockfileResolutions,
+  lockfileVersionsOf,
   mergeLockfileResolutions,
+  npmDeclarations,
   parseNpmAlias,
   resolveNarrowNpm,
   unionNpmDeps,
@@ -375,20 +377,43 @@ function manifestFloor(versionSpec: string): string | null {
 
 /**
  * The repo-wide npm chain: the entries `collectDeps` produced for npm before
- * the narrow override existed, moved here unchanged. One entry per declared
- * dependency name (`unionNpmDeps` dedupes by name); resolution order:
- * merged lockfile `resolved` > usable manifest floor (exact or
+ * the narrow override existed, plus the declarer floors below. One chain entry
+ * per declared dependency name (`unionNpmDeps` dedupes by name); resolution
+ * order: merged lockfile `resolved` > usable manifest floor (exact or
  * range-derived) > `ambiguous` > dropped. See the `collectDeps` doc comment
  * for the rationale of each step.
+ *
+ * The chain answers with one version per name, taken for the repo as a whole,
+ * so it can stand in for a declarer that installs something else. Two kinds of
+ * declarer are covered by additional entries (nothing the chain returns is
+ * ever removed; the result is the chain plus these):
+ *
+ * - A declarer with a plain semver range that the merged `resolved` version
+ *   does not satisfy (a root `^8.3.0` locked at 8.3.5 beside a `docs/` project
+ *   with `^6.0.0` and no lockfile): that project installs a version inside its
+ *   own range, so the range's floor is queried as well.
+ * - A declarer with no range to compare (`latest`, another tag, a git or
+ *   `file:` spec, or the wildcard `*`): it installs whatever its lockfile
+ *   holds, which the merged map cannot attribute to it, so every version any
+ *   lockfile records for the name is queried.
+ *
+ * Not covered: a name the lockfiles resolve ambiguously, or that no lockfile
+ * resolves. The range branch only acts on a single merged `resolved` version,
+ * so for such a name only the chain answer, the floor of the lowest declared
+ * range, is queried: a declarer of a higher range and the lockfile copies of
+ * that name are not queried (a yarn.lock with vite 8.3.5 and 7.3.7, root
+ * `^8.3.0`, `docs/` `^6.0.0` queries only vite@6.0.0). Also not covered:
+ * declarations outside `dependencies` and `devDependencies` (see
+ * `declaredOutsideDeps`; the narrow override handles those per project).
  */
-function repoWideNpmEntries(
+export function repoWideNpmEntries(
   manifests: ParsedNpmManifest[],
   npmLockfileResolutions: LockfileResolutions,
   yarnLockfileResolutions: LockfileResolutions,
 ): DepEntry[] {
-  const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } =
-    mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
-  return unionNpmDeps(manifests)
+  const merged = mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
+  const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } = merged;
+  const chain = unionNpmDeps(manifests)
     .map(({ name, versionSpec }) => {
       // Prefer the lockfile-resolved version (exact installed version) to
       // avoid false positives from the manifest floor. Fall back to the
@@ -408,6 +433,31 @@ function repoWideNpmEntries(
       return { name, version };
     })
     .filter(({ version }) => /\d/.test(version));
+
+  const out: DepEntry[] = [];
+  const seen = new Set<string>();
+  const push = (entry: DepEntry) => {
+    const id = `${entry.name}\u0000${entry.version}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(entry);
+  };
+  for (const entry of chain) push(entry);
+
+  for (const { name, versionSpec } of npmDeclarations(manifests)) {
+    const range = semver.validRange(versionSpec);
+    if (range !== null && range !== '*') {
+      // A plain range: it only needs its own floor when the one resolution the
+      // chain queried for the name is not a version this range accepts.
+      const resolvedVersion = lockfileResolutions.get(name);
+      if (resolvedVersion === undefined || semver.satisfies(resolvedVersion, versionSpec)) continue;
+      const floor = manifestFloor(versionSpec);
+      if (floor !== null) push({ name, version: floor });
+      continue;
+    }
+    for (const version of lockfileVersionsOf(merged, name)) push({ name, version });
+  }
+  return out;
 }
 
 /**
@@ -628,7 +678,7 @@ function raisedNpmVersion(
  * manifest spec (the previous floor behaviour) when no lockfile entry is
  * found, so existing repos without lockfiles do not regress. That floor is
  * usable as an exact version only when it parses as a real semver version
- * (`semver.valid(floor) !== null`, task 7fc55e6f — R2 finding on 18f6c239):
+ * (`semver.valid(floor) !== null`, task 7fc55e6f):
  * a non-semver spec whose text happens to contain a digit (e.g. a git spec
  * `github:acme/widget2#main`) strips down to a non-empty but meaningless
  * value (`2#main`) that must NOT count as a usable exact version. Measured
@@ -667,8 +717,16 @@ function raisedNpmVersion(
  * get the manifest floor (or the `ambiguous` fallback, if even that is
  * unusable).
  *
+ * Declarer floors (npm only): the chain above gives one version per name for the
+ * repository as a whole, so `repoWideNpmEntries` adds, without removing
+ * anything, the floor of a declared plain range that the merged lockfile
+ * version does not satisfy, and every lockfile version of a name that a
+ * declaration with no range to compare (`latest`, a tag, a git or `file:` spec,
+ * `*`) declares; see its doc comment.
+ *
  * Narrow override (npm only): the chain above is computed first and unchanged
- * (`repoWideNpmEntries`, one entry per name). `applyNarrowOverride` then
+ * (`repoWideNpmEntries`, one chain entry per name plus those additions).
+ * `applyNarrowOverride` then
  * adds, for repos of separate projects each with its own package-lock.json,
  * the version each manifest's own lockfile installs (for a dependency, dev, optional or
  * peer declaration; a bundled name never adds), and removes a chain

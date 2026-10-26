@@ -1497,4 +1497,125 @@ export const SCENARIOS: Record<string, Scenario> = {
       'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
     },
   },
+
+  // ---- declarer floors and non-range declarers beside a repo-wide resolution ----
+  // Root vite ^8.3.0 locked 8.3.5; docs/ declares ^6.0.0 and has no lockfile, so it
+  // installs a 6.x the repo-wide resolution 8.3.5 does not satisfy.
+  declarerRangeBelowRootLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+    },
+  },
+  // The same in devDependencies and through an npm: alias.
+  declarerDevRangeBelowRootLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', devDependencies: { vite: '^6.0.0' } }),
+    },
+  },
+  declarerAliasBelowRootLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { bundler: 'npm:vite@^6.0.0' } }),
+    },
+  },
+  // The resolution satisfies the second declarer's range too: nothing to add.
+  declarerRangeSatisfiedByRootLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^8.0.0' } }),
+    },
+  },
+  // Two declarers below the resolution: each floor is queried.
+  declarerTwoRangesBelowRootLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+      'tools/package.json': pkg({ name: 'tools', dependencies: { vite: '~5.4.2' } }),
+    },
+  },
+  // No lockfile resolution for the name: nothing for the declarer floor to add.
+  declarerRangesWithoutAnyLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+    },
+  },
+  // Documented residual: yarn.lock records vite 8.3.5 and 7.3.7 (ambiguous), root
+  // declares ^8.3.0 and docs/ ^6.0.0. Only the lowest range's floor is queried.
+  declarerRangesBesideAmbiguousYarnLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'yarn.lock': yarn([
+        ['vite@^8.3.0', '8.3.5'],
+        ['vite@^7.0.0', '7.3.7'],
+      ]),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+    },
+  },
+  // a/ declares `latest` and installs 7.3.7, b/ declares ^8.3.0 and installs 8.3.5.
+  latestDeclarerBesideLockedRange: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { vite: 'latest' } }),
+      'a/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+      'b/package.json': pkg({ name: 'b', dependencies: { vite: '^8.3.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  // A dist-tag other than latest, and a wildcard, behave like `latest`.
+  tagDeclarerBesideLockedRange: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { vite: 'beta' } }),
+      'a/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+      'b/package.json': pkg({ name: 'b', dependencies: { vite: '^8.3.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  wildcardDeclarerBesideLockedRange: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { vite: '*' } }),
+      'a/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+      'b/package.json': pkg({ name: 'b', dependencies: { vite: '^8.3.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  // The `latest` declarer beside a name every lockfile resolves to one version:
+  // that version is already the baseline entry.
+  latestDeclarerSingleResolution: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { vite: 'latest' } }),
+      'a/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'b/package.json': pkg({ name: 'b', dependencies: { vite: '^8.3.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  // Both at once: a range below the resolution and a `latest` declarer that has
+  // its own lockfile with a different version.
+  rangeBelowAndLatestDeclarer: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { vite: 'latest' } }),
+      'a/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+      'b/package.json': pkg({ name: 'b', dependencies: { vite: '^8.3.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+    },
+  },
+  // `latest` declarer with a lockfile that holds a nested second copy; no other
+  // declarer: every copy of the name in the lockfile is queried.
+  latestDeclarerNestedCopy: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: 'latest', plug: '1.0.0' } }),
+      'package-lock.json': v3({
+        'node_modules/vite': '8.3.5',
+        'node_modules/plug': '1.0.0',
+        'node_modules/plug/node_modules/vite': '7.3.6',
+      }),
+    },
+  },
 };
