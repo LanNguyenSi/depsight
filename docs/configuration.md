@@ -121,6 +121,7 @@ Postgres reads `POSTGRES_PASSWORD` only when it creates an empty data directory,
   #    trailing newline intact. POSIX tools only, the same on BSD and GNU.
   umask 077
   touch .env
+  rm -f .env.tmp
   grep -v '^POSTGRES_PASSWORD=' .env > .env.tmp || [ $? -eq 1 ]
   cat .env.tmp > .env
   rm .env.tmp
@@ -131,7 +132,7 @@ Postgres reads `POSTGRES_PASSWORD` only when it creates an empty data directory,
 )
 ```
 
-The block is one `set -e` subshell rather than an `&&` chain: every step stays a plain line, the first command that fails ends the block, and `set -e`, the `umask` and `NEW` stay inside the subshell, so they cannot change your shell or close it on an error. A failed `ALTER` therefore stops the block before `.env` is touched: `ON_ERROR_STOP=1` makes psql exit non-zero, and psql is the last command of its pipeline, whose status `set -e` sees. Paste it as it is: `set -e` does not apply to a command on the left of `||` or `&&`, which is why the `grep` line ends in `|| [ $? -eq 1 ]` (a plain `|| true` would also hide a read error and then empty `.env`), and a `|| ...` after the closing parenthesis would switch it off for the whole block. If it stops in step 2, the database already has the new password while `.env` still holds the old one: run the `ALTER USER` again with the value from `.env` (and delete a leftover `.env.tmp`). If it stops in step 3, both hold the new password and step 3 can run again.
+The block is one `set -e` subshell rather than an `&&` chain: every step stays a plain line, the first command that fails ends the block, and `set -e`, the `umask` and `NEW` stay inside the subshell, so they cannot change your shell or close it on an error. A failed `ALTER` therefore stops the block before `.env` is touched: `ON_ERROR_STOP=1` makes psql exit non-zero, and psql is the last command of its pipeline, whose status `set -e` sees. Paste it into `bash` or `sh` (in zsh run `setopt interactive_comments` first, or zsh runs the comment lines as commands and the block stops at the first one, before the `ALTER`). Paste it as it is: `set -e` does not apply to a command on the left of `||` or `&&`, which is why the `grep` line ends in `|| [ $? -eq 1 ]` (a plain `|| true` would also hide a read error and then empty `.env`), and a `|| ...` after the closing parenthesis would switch it off for the whole block. If it stops in step 2, the database already has the new password while `.env` still holds the old one: run the `ALTER USER` again with the value from `.env` (and delete a leftover `.env.tmp`); if `.env` has lost its `POSTGRES_PASSWORD` line (a failure after the `cat` line, for example a full disk), write a new value into `.env` and run the `ALTER USER` with that value. If it stops in step 3, both hold the new password and step 3 can run again.
 
 Between steps 1 and 3 new connections from the old app container fail, so do it in a quiet moment. To go back, run the `ALTER USER` again with the old value and restore the `.env` line. There is no other place to edit: the app, the `db` service, the `migrate` service and the deploy hook all read `POSTGRES_PASSWORD`. The hosted database still has the original password `depsight` until someone rotates it this way.
 
