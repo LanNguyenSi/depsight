@@ -59,7 +59,50 @@ A complete list of what depsight does today, beyond the headline value props in 
     default, not a difference in actual exposure.
   - depsight's independent OSV channel queries the UNION of DIRECT manifest
     dependencies (`dependencies` + `devDependencies`) on lockfile-resolved
-    versions, dev and prod alike (`lib/manifest-discovery.ts`). It is not a
+    versions, dev and prod alike (`lib/manifest-discovery.ts`). For npm, a
+    repository of separate projects that each carry their own
+    `package-lock.json` is also queried at the version each manifest's own
+    lockfile installs: a package installed at different versions in different
+    projects is queried at each installed version, and the repository-wide
+    entry for it (a manifest floor that no project installs) is removed only
+    when everything the scan reads is positively accounted for and no
+    `package-lock.json` the scan reads installs it (vendored, build and fixture
+    directories are not read); anything that cannot be read or checked keeps the
+    entry. That needs a complete git tree; none of the files `yarn.lock`,
+    `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `npm-shrinkwrap.json`,
+    `deno.lock`, `.npmrc`, `pnpm-workspace.yaml`, `.yarnrc.yml` and
+    `.pnpmfile.cjs`; no `packageManager` or `devEngines.packageManager` field in
+    a manifest the scan reads; every `package.json` the scan reads locked (a
+    `package-lock.json` of its own, lockfileVersion 2 or 3, that lists each of its
+    dependencies, dev, optional and non-optional peer dependencies in the
+    declared range, judged as npm judges a lockfile, and in which every entry of
+    an overridden name satisfies a plain string override; a project with a
+    stale or missing lockfile, or an override that is not a plain string,
+    installs something the lockfile does not show); no `workspaces` key in or
+    above any declaring manifest (dependencies, dev, optional, peer or bundled);
+    every declaring manifest's lockfile satisfying its declared range; and every
+    lockfile entry that names a package carrying a semver version (a git,
+    tarball or `file:` version makes the name unknown, and an unknown name is
+    kept); no lockfileVersion 1 lockfile anywhere (npm takes each package's
+    dependency edges from the registry, not from the lockfile, so it proves
+    nothing); and no
+    lockfile entry with a `dependencies`, `optionalDependencies` or
+    `peerDependencies` edge (a peer the entry marks optional in
+    `peerDependenciesMeta` excepted) to a name the same lockfile has no entry
+    for, since `npm install` resolves such an edge from the registry (entries
+    marked `inBundle` and names the entry lists in `bundleDependencies` are
+    exempt; an edge's range is not compared with the held version). The
+    removal guarantees no under-reporting for an install that honours the
+    lockfiles: `npm ci`, or `npm install` on a lockfile with no missing or
+    invalid edge. Outside that guarantee are `npm install` on a lockfile whose
+    transitive edges are inconsistent, a git or `file:` dependency changed
+    without updating the lockfile, the contents of a bundling optional package
+    that the lockfile was written without unpacking (on another platform),
+    command line flags, a user or global npmrc, the environment and the state
+    of the registry. Npm workspace
+    monorepos, repositories with another package manager's lockfile and
+    truncated trees keep the
+    repository-wide result. It is not a
     backstop for a TRANSITIVE-only package (outside that query set, e.g. a
     dependency pulled in only via another devDependency) — that gap is
     structural, not a bug. For a DIRECT dependency, OSV remains in scope and
