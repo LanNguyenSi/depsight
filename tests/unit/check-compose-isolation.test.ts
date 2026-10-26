@@ -78,115 +78,101 @@ describeIfCompose('check-compose-isolation guard', () => {
     expect(result.stdout).toContain('compose isolation check passed');
   });
 
-  // [name, mutation, the failure message expected for the app or db service]
-  const cases: Array<[string, Mutation, string]> = [
+  // Each guard run resolves five compose files through `docker compose config`, so mutations
+  // on different lines of the same file share one run (the guard reports every failure),
+  // while mutations of one line or one shared anchor get a run of their own.
+  // [name, mutation, every failure message expected from the app or db service]
+  const cases: Array<[string, Mutation, string[]]> = [
     [
-      'a service without a logging block',
-      replaceFirst('    mem_limit: 512m\n    logging: *default-logging\n', '    mem_limit: 512m\n'),
-      'db has no json-file logging block (driver is unset)',
+      'several independent breakages at once',
+      (text) =>
+        [
+          replaceFirst('    mem_limit: 512m\n    logging: *default-logging\n', '    mem_limit: 512m\n'),
+          replaceFirst('    mem_limit: 1536m\n', ''),
+          replaceFirst('127.0.0.1:3000/api/health', '127.0.0.1:3000/'),
+          replaceFirst('r.ok ? 0 : 1', 'r.status < 600 ? 0 : 1'),
+          replaceFirst('      start_period: 40s\n', ''),
+          replaceFirst('      retries: 5\n', ''),
+          replaceFirst('condition: service_healthy', 'condition: service_started'),
+        ].reduce((acc, mutate) => mutate(acc), text),
+      [
+        'db has no json-file logging block (driver is unset)',
+        'app has no memory limit (mem_limit)',
+        'app healthcheck does not probe /api/health',
+        'app healthcheck does not fail on a non-2xx answer',
+        'app healthcheck has no start_period, so a cold start counts as failures',
+        'app healthcheck sets no retries',
+        'app does not wait for db with depends_on condition service_healthy',
+      ],
     ],
     [
       'a logging block with another driver',
       replaceFirst('  driver: json-file\n', '  driver: local\n'),
-      'app has no json-file logging block (driver is local)',
+      ['app has no json-file logging block (driver is local)'],
     ],
     [
       'a logging block without max-file',
       replaceFirst('    max-file: "3"\n', ''),
-      'app logging has no max-size and max-file, so its log is never rotated',
+      ['app logging has no max-size and max-file, so its log is never rotated'],
     ],
     [
       'a logging block without max-size',
       replaceFirst('    max-size: "10m"\n', ''),
-      'app logging has no max-size and max-file, so its log is never rotated',
-    ],
-    [
-      'an app without mem_limit',
-      replaceFirst('    mem_limit: 1536m\n', ''),
-      'app has no memory limit (mem_limit)',
+      ['app logging has no max-size and max-file, so its log is never rotated'],
     ],
     [
       'a db without mem_limit',
       replaceFirst('    mem_limit: 512m\n', ''),
-      'db has no memory limit (mem_limit)',
+      ['db has no memory limit (mem_limit)'],
     ],
     [
       'a disabled app healthcheck',
       replaceFirst('      start_interval: 2s\n', '      start_interval: 2s\n      disable: true\n'),
-      'app has no healthcheck',
-    ],
-    [
-      'a probe of another path',
-      replaceFirst('127.0.0.1:3000/api/health', '127.0.0.1:3000/'),
-      'app healthcheck does not probe /api/health',
-    ],
-    [
-      'a probe that accepts any answer below 600',
-      replaceFirst('r.ok ? 0 : 1', 'r.status < 600 ? 0 : 1'),
-      'app healthcheck does not fail on a non-2xx answer',
-    ],
-    [
-      'a probe that never fails on the answer',
-      replaceFirst('r.ok ? 0 : 1', '0'),
-      'app healthcheck does not fail on a non-2xx answer',
-    ],
-    [
-      'a healthcheck without start_period',
-      replaceFirst('      start_period: 40s\n', ''),
-      'app healthcheck has no start_period, so a cold start counts as failures',
+      ['app has no healthcheck'],
     ],
     [
       'a healthcheck with a zero start_period',
       replaceFirst('      start_period: 40s\n', '      start_period: 0s\n'),
-      'app healthcheck has no start_period, so a cold start counts as failures',
-    ],
-    [
-      'a healthcheck without retries',
-      replaceFirst('      retries: 5\n', ''),
-      'app healthcheck sets no retries',
-    ],
-    [
-      'an app that no longer waits for a healthy db',
-      replaceFirst('condition: service_healthy', 'condition: service_started'),
-      'app does not wait for db with depends_on condition service_healthy',
+      ['app healthcheck has no start_period, so a cold start counts as failures'],
     ],
   ];
 
   for (const file of PROD_FILES) {
     describe(file, () => {
-      it.each(cases)('fails on %s', (_name, mutate, message) => {
+      it.each(cases)('fails on %s', (_name, mutate, messages) => {
         const result = runGuard(fixture(file, mutate));
-        expect(result.stderr).toContain(`${file}: ${message}`);
+        for (const message of messages) expect(result.stderr).toContain(`${file}: ${message}`);
         expect(result.status).toBe(1);
-      });
-
-      it.each([
-        'r.status >= 200 && r.status < 300 ? 0 : 1',
-        'r.status >= 200 && r.status <= 299 ? 0 : 1',
-      ])('accepts the explicit 2xx test %s instead of r.ok', (test) => {
-        const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', `${test}`)));
-        expect(result.stderr).toBe('');
-        expect(result.status).toBe(0);
-      });
-
-      it.each([
-        'r.status >= 200 ? 0 : 1',
-        'r.status >= 200 && r.status < 600 ? 0 : 1',
-        'r.status >= 200 && r.status <= 300 ? 0 : 1',
-      ])('rejects the range test %s that does not stop at 299', (test) => {
-        const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', test)));
-        expect(result.stderr).toContain(`${file}: app healthcheck does not fail on a non-2xx answer`);
-        expect(result.status).toBe(1);
+        // A failure of this file is not reported under the other file's name.
+        const other = PROD_FILES.find((name) => name !== file) as string;
+        expect(result.stderr).not.toContain(`${other}: `);
       });
     });
   }
 
-  it('fails only the mutated file: a bad hosted file leaves docker-compose.yml unreported', () => {
-    const result = runGuard(
-      fixture('docker-compose.traefik.yml', replaceFirst('    mem_limit: 1536m\n', '')),
-    );
-    expect(result.stderr).toContain('docker-compose.traefik.yml: app has no memory limit');
-    expect(result.stderr).not.toContain('docker-compose.yml: app has no memory limit');
-    expect(result.status).toBe(1);
+  // The probe must fail on the answer's status. The mutations all rewrite one line of the
+  // hosted file, the same line in the other file is identical.
+  describe('the healthcheck verdict', () => {
+    const file = 'docker-compose.traefik.yml';
+
+    it.each([
+      'r.status >= 200 && r.status < 300 ? 0 : 1',
+      'r.status >= 200 && r.status <= 299 ? 0 : 1',
+    ])('accepts the explicit 2xx test %s instead of r.ok', (test) => {
+      const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', test)));
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+    });
+
+    it.each([
+      'r.status >= 200 ? 0 : 1',
+      'r.status >= 200 && r.status < 600 ? 0 : 1',
+      'r.status >= 200 && r.status <= 300 ? 0 : 1',
+      '0',
+    ])('rejects the test %s that does not stop at 299', (test) => {
+      const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', test)));
+      expect(result.stderr).toContain(`${file}: app healthcheck does not fail on a non-2xx answer`);
+      expect(result.status).toBe(1);
+    });
   });
 });

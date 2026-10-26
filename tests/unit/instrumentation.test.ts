@@ -8,10 +8,17 @@ describe('instrumentation register()', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
+  // What the auto-scan module's factory returns or throws on import. A test changes this
+  // instead of calling vi.doMock again: a second doMock for the same path in one test
+  // races the one from beforeEach (vitest resolves them asynchronously), and under load
+  // the older factory could win.
+  let autoScanModule: () => unknown;
+
   beforeEach(() => {
     vi.resetModules();
-    // A vi.doMock in one test outlives resetModules; restore the shared mock.
-    vi.doMock('@/lib/cron/auto-scan', () => ({ startAutoScan }));
+    autoScanModule = () => ({ startAutoScan });
+    // A vi.doMock outlives resetModules, so every test starts from this one registration.
+    vi.doMock('@/lib/cron/auto-scan', () => autoScanModule());
     startAutoScan.mockReset();
     vi.stubEnv('NEXT_RUNTIME', 'nodejs');
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -44,9 +51,9 @@ describe('instrumentation register()', () => {
   });
 
   it('exits non-zero when importing the module throws (the real invalid-env path)', async () => {
-    vi.doMock('@/lib/cron/auto-scan', () => {
+    autoScanModule = () => {
       throw new Error('Invalid SCAN_INTERVAL_MINUTES="0"');
-    });
+    };
     const { register } = await import('@/instrumentation');
     await register();
     expect(exitSpy).toHaveBeenCalledWith(1);
