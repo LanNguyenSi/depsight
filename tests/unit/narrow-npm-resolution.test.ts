@@ -771,6 +771,14 @@ describe('every fetched lockfile has a known shape', () => {
     expect(legacyDroppable({ lockfileVersion: 3 })).toBe(false);
   });
 
+  it('lockfileVersion 1 stays unprovable even when the lockfile carries a packages map', () => {
+    const packages = { '': {}, 'node_modules/left': { version: '1.0.0' } };
+    expect(legacyDroppable({ lockfileVersion: 1, packages })).toBe(false);
+    expect(legacyDroppable({ lockfileVersion: 1, packages, dependencies: { left: { version: '1.0.0' } } })).toBe(false);
+    // Control: the same packages map under lockfileVersion 3.
+    expect(legacyDroppable({ lockfileVersion: 3, packages })).toBe(true);
+  });
+
   it('lockfileVersion 2 with only the legacy dependencies mirror', () => {
     expect(legacyDroppable({ lockfileVersion: 2, dependencies: { left: { version: '1.0.0' } } })).toBe(false);
   });
@@ -1488,7 +1496,9 @@ describe('a lockfile entry with an edge to a name the same lockfile has no entry
     it('control: the same entry without the bundled flag, or with a flag that is not true', () => {
       const entry = { version: '1.0.0', dependencies: { vite: '^7.0.0' } };
       expect(withEdge({ 'node_modules/left/node_modules/gone': entry }, {})).toBe(false);
-      expect(withEdge({ 'node_modules/left/node_modules/gone': { ...entry, inBundle: false } }, {})).toBe(false);
+      for (const inBundle of [false, 1, 'true', null]) {
+        expect(withEdge({ 'node_modules/left/node_modules/gone': { ...entry, inBundle } }, {})).toBe(false);
+      }
     });
 
     it('the peer edges of an entry listed as bundled need no entry either', () => {
@@ -1549,6 +1559,19 @@ describe('a lockfile entry with an edge to a name the same lockfile has no entry
         for (const list of [true, 'gone', { gone: true }, [7], [null]]) {
           expect(bundled({ dependencies: { gone: '^1.0.0' }, bundleDependencies: list })).toBe(false);
         }
+      });
+
+      it('a list that is not an array of names does no harm to an entry without a missing edge', () => {
+        const entries = { 'node_modules/vite': { version: '6.0.0' } };
+        for (const list of [true, 'vite', { vite: true }, [7], [null]]) {
+          expect(bundled({ dependencies: { vite: '^6.0.0' }, bundleDependencies: list }, entries)).toBe(true);
+          expect(bundled({ dependencies: { vite: '^6.0.0' }, bundledDependencies: list }, entries)).toBe(true);
+        }
+      });
+
+      it('a bundled edge whose spec is not a string only makes its own name unknown', () => {
+        expect(bundled({ dependencies: { gone: 7 }, bundleDependencies: ['gone'] })).toBe(true);
+        expect(bundled({ dependencies: { vite: 7 }, bundleDependencies: ['vite'] })).toBe(false);
       });
 
       it('the list of another entry does not exempt this edge', () => {
