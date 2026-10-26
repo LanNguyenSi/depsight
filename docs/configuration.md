@@ -100,28 +100,38 @@ The compose file pins the project name `depsight`, so the database lives in the 
 
 `docker-compose.dev.yml` is the development stack (project `depsight-dev`, its own database volume `depsight-dev_postgres_data`); `docker-compose.yml` and `docker-compose.traefik.yml` are production (project `depsight`, volume `depsight_postgres_data`). The `make dev*`, `make test` and `make dev-clean` targets pin `-p depsight-dev`, so they cannot start, replace or delete the production stack or its volume. Still, run the dev stack on a development machine and the production stack on the server, never both from one checkout: a `COMPOSE_PROJECT_NAME` in `.env` overrides the `name:` in the files (only the `-p` flag in the Makefile beats it), so a bare `docker compose -f docker-compose.dev.yml ...` in a production checkout that sets it would use the production project. The dev database from earlier checkouts lives in `depsight_postgres_data`; the dev stack now starts with an empty `depsight-dev_postgres_data`, and the old volume is yours to keep or remove by hand (on a production host it is the production data: leave it).
 
-`node scripts/check-compose-isolation.mjs` (run by CI) fails when a production file puts `db` on `traefik-public` or publishes it on all interfaces, when `db` sets a `network_mode` or (in the hosted file) sits on a network that is not `internal: true`, when a Traefik-routed service on several networks has no `traefik.docker.network` label naming the external edge network, when a database password stops coming from `POSTGRES_PASSWORD`, when the project names or volumes of the stacks collide, or when a `Makefile` dev target loses its `-p` pin. It resolves the files with `docker compose config` and an empty `--env-file`, so a local `.env` cannot change the verdict.
+`node scripts/check-compose-isolation.mjs` (run by CI) fails when a production file puts `db` on `traefik-public` or publishes it on all interfaces, when `db` sets a `network_mode` or (in the hosted file) sits on a network that is not `internal: true`, when a service that Traefik routes (`traefik.enable` true in any spelling Traefik accepts, or any `traefik.http.`, `traefik.tcp.` or `traefik.udp.` label) sits on several networks without the label `traefik.docker.network=traefik-public` or without being on the external `traefik-public` network, when the app (or, in the hosted file, the `migrate` service) sets no `DATABASE_URL`, when a database password stops coming from `POSTGRES_PASSWORD`, when the project names or volumes of the stacks collide, or when a `Makefile` dev target loses its `-p` pin. It resolves the files with `docker compose config` and an empty `--env-file`, so a local `.env` does not feed the interpolation or the `COMPOSE_*` settings. Compose still reads `.env` as the app's `env_file`, though: its variables reach the resolved app environment where the file sets none, and a malformed `.env` makes the check exit 2 (cannot resolve).
 
 ### Rotating the database password
 
 Postgres reads `POSTGRES_PASSWORD` only when it creates an empty data directory, so changing the variable alone makes the app fail to log in. Rotate in this order, on the host, in the checkout (the commands below are for the hosted `docker-compose.traefik.yml`; for the self-hosting `docker-compose.yml` drop the `-f docker-compose.traefik.yml` part and finish with step 3 of [Self-hosting](#self-hosting) instead of the last `migrate` line, which only the hosted file defines):
 
 ```bash
-NEW=$(openssl rand -hex 24)
-# 1. change it inside the running database (the password goes in over stdin, not the command line)
-printf "ALTER USER depsight WITH PASSWORD '%s';\n" "$NEW" \
-  | docker compose -f docker-compose.traefik.yml exec -T db psql -U depsight -d depsight
-# 2. record it where compose reads it: drop any old POSTGRES_PASSWORD line, then append
-#    (the leading newline keeps a .env without a trailing newline intact; POSIX tools only,
-#    the same on BSD and GNU; cat > keeps the file's mode)
-touch .env
-grep -v '^POSTGRES_PASSWORD=' .env > .env.tmp || true
-cat .env.tmp > .env && rm .env.tmp
-printf '\nPOSTGRES_PASSWORD=%s\n' "$NEW" >> .env
-# 3. recreate the app (and db) with the new value, then check the schema step and health
-docker compose -f docker-compose.traefik.yml up -d
-docker compose -f docker-compose.traefik.yml run --rm -T migrate
+(
+  set -e
+  NEW=$(openssl rand -hex 24)
+  # 1. change it inside the running database (the password goes in over stdin, not the
+  #    command line); ON_ERROR_STOP=1 makes psql exit non-zero when the ALTER fails
+  printf "ALTER USER depsight WITH PASSWORD '%s';\n" "$NEW" \
+    | docker compose -f docker-compose.traefik.yml exec -T db psql -v ON_ERROR_STOP=1 -U depsight -d depsight
+  # 2. record it where compose reads it: drop any old POSTGRES_PASSWORD line, then append.
+  #    umask 077 keeps the temporary copy (and a .env this creates) readable by you only;
+  #    grep exits 1 when it keeps no line (fine) and 2 on an error (stops here); cat >
+  #    keeps the mode of an existing .env; the leading newline keeps a .env without a
+  #    trailing newline intact. POSIX tools only, the same on BSD and GNU.
+  umask 077
+  touch .env
+  grep -v '^POSTGRES_PASSWORD=' .env > .env.tmp || [ $? -eq 1 ]
+  cat .env.tmp > .env
+  rm .env.tmp
+  printf '\nPOSTGRES_PASSWORD=%s\n' "$NEW" >> .env
+  # 3. recreate the app (and db) with the new value, then check the schema step and health
+  docker compose -f docker-compose.traefik.yml up -d
+  docker compose -f docker-compose.traefik.yml run --rm -T migrate
+)
 ```
+
+The block is one `set -e` subshell rather than an `&&` chain: every step stays a plain line, the first command that fails ends the block, and `set -e`, the `umask` and `NEW` stay inside the subshell, so they cannot change your shell or close it on an error. A failed `ALTER` therefore stops the block before `.env` is touched: `ON_ERROR_STOP=1` makes psql exit non-zero, and psql is the last command of its pipeline, whose status `set -e` sees. Paste it as it is: `set -e` does not apply to a command on the left of `||` or `&&`, which is why the `grep` line ends in `|| [ $? -eq 1 ]` (a plain `|| true` would also hide a read error and then empty `.env`), and a `|| ...` after the closing parenthesis would switch it off for the whole block.
 
 Between steps 1 and 3 new connections from the old app container fail, so do it in a quiet moment. To go back, run the `ALTER USER` again with the old value and restore the `.env` line. There is no other place to edit: the app, the `db` service, the `migrate` service and the deploy hook all read `POSTGRES_PASSWORD`. The hosted database still has the original password `depsight` until someone rotates it this way.
 

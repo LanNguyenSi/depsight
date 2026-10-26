@@ -79,6 +79,20 @@ function resolveCompose(file, password = SENTINEL) {
 const networkNames = (cfg, service) =>
   Object.keys(service.networks ?? { default: null }).map((key) => cfg.networks?.[key]?.name ?? key);
 
+// A service counts as routed by Traefik when traefik.enable is true or when it has
+// router labels (Traefik follows those without traefik.enable while its exposedByDefault
+// option is on, the default). Traefik decodes the value with Go's strconv.ParseBool and
+// matches the label keys after the `traefik.` root regardless of case, so these are the
+// spellings it reads as true.
+const TRAEFIK_TRUE = new Set(['1', 't', 'T', 'true', 'TRUE', 'True']);
+const ROUTER_LABEL = /^traefik\.(http|tcp|udp)\./i;
+const routedByTraefik = (labels) =>
+  Object.entries(labels ?? {}).some(
+    ([key, value]) =>
+      (key.toLowerCase() === 'traefik.enable' && TRAEFIK_TRUE.has(String(value))) ||
+      ROUTER_LABEL.test(key),
+  );
+
 function checkProd(file) {
   const cfg = resolveCompose(file);
   if (cfg.name !== PROD_PROJECT) {
@@ -118,21 +132,37 @@ function checkProd(file) {
     }
   }
 
-  // A routed service on several networks must tell Traefik which one to use, or it
-  // may pick the private db network at random.
+  // A routed service on several networks must tell Traefik to use the edge network, or
+  // it may pick another one (the private db network) at random. The label names a Docker
+  // network, so the edge network must be external to keep its name unprefixed.
   for (const [name, service] of Object.entries(cfg.services)) {
-    if (service.labels?.['traefik.enable'] !== 'true') continue;
+    if (!routedByTraefik(service.labels)) continue;
     const nets = Object.keys(service.networks ?? { default: null });
     if (nets.length < 2) continue;
     const chosen = service.labels['traefik.docker.network'];
-    const edge = nets
-      .map((key) => cfg.networks?.[key])
-      .some((net) => net?.external && net.name === chosen);
-    if (!edge) {
+    if (chosen !== EDGE_NETWORK) {
       fail(
         file,
-        `${name} is routed by Traefik on ${nets.length} networks without a traefik.docker.network label naming the external edge network`,
+        `${name} is routed by Traefik on ${nets.length} networks and its traefik.docker.network label is ${chosen === undefined ? 'missing' : `"${chosen}"`}, expected "${EDGE_NETWORK}"`,
       );
+    }
+    const onEdge = nets.some(
+      (key) => cfg.networks?.[key]?.external === true && cfg.networks[key].name === EDGE_NETWORK,
+    );
+    if (!onEdge) {
+      fail(
+        file,
+        `${name} is routed by Traefik on ${nets.length} networks but is not on the external network ${EDGE_NETWORK}`,
+      );
+    }
+  }
+
+  // The app, and in the hosted file the migrate service, set DATABASE_URL here: without
+  // it the app takes one from .env (env_file), which the password check below never sees.
+  for (const name of file === HOSTED_FILE ? ['app', 'migrate'] : ['app']) {
+    if (!cfg.services[name]) fail(file, `needs a ${name} service`);
+    else if (cfg.services[name].environment?.DATABASE_URL === undefined) {
+      fail(file, `${name} sets no DATABASE_URL`);
     }
   }
 
