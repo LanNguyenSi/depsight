@@ -1366,8 +1366,9 @@ interface NarrowLockfile {
   v1Dependencies: JsonObject | null;
   /**
    * A shape this scan understands: lockfileVersion 1 with a `dependencies`
-   * object, or 2/3 with a `packages` object, and no `packages` / `dependencies`
-   * key that is not an object. Anything else proves nothing about what installs.
+   * object, or 2/3 with a `packages` object. Anything else proves nothing about
+   * what installs. (`buildInstalledIndex` also refuses a `packages` or
+   * `dependencies` key that is present and not an object.)
    */
   known: boolean;
 }
@@ -1378,8 +1379,7 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
   const version = data.lockfileVersion;
   const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
   const v1Dependencies = version === 1 && isPlainObject(data.dependencies) ? data.dependencies : null;
-  const mapsWellFormed = [data.packages, data.dependencies].every((m) => m === undefined || isPlainObject(m));
-  const known = mapsWellFormed && (version === 1 ? v1Dependencies !== null : packages !== null);
+  const known = version === 1 ? v1Dependencies !== null : packages !== null;
   return { data, packages, v1Dependencies, known };
 }
 
@@ -1452,10 +1452,9 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
         // A workspace package folder entry without a version names nothing installed.
         if (tail === undefined && entry.version === undefined) continue;
         const name = declared ?? tail ?? key.split('/').pop()!;
-        const version = entry.version;
-        if (typeof version !== 'string' || semver.valid(version) === null) {
+        const version = String(entry.version);
+        if (semver.valid(version) === null) {
           unknown.add(name);
-          if (tail !== undefined) unknown.add(tail);
           continue;
         }
         record(name, version);
@@ -1477,11 +1476,7 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
             if (!isPlainObject(entry.dependencies)) return null;
             stack.push(entry.dependencies);
           }
-          const raw = entry.version;
-          if (typeof raw !== 'string') {
-            unknown.add(key);
-            continue;
-          }
+          const raw = String(entry.version);
           const aliasForm = raw.trim().startsWith('npm:');
           const alias = aliasForm ? parseNpmAlias(raw) : null;
           // An `npm:` version that does not parse still installs some real
@@ -1491,7 +1486,6 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
           const version = alias ? alias.realSpec : raw;
           if (semver.valid(version) === null) {
             unknown.add(name);
-            unknown.add(key);
             continue;
           }
           record(name, version);
@@ -1524,13 +1518,10 @@ function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration)
       ? ownValue(lock.v1Dependencies, decl.key)
       : undefined;
   if (!isPlainObject(entry)) return false;
-  const range = decl.spec.trim();
-  if (semver.validRange(range) === null) return true;
+  if (semver.validRange(decl.spec) === null) return true;
   if (entry.link === true) return false;
   if (lock.packages && entry.name !== undefined && entry.name !== decl.key) return false;
-  const version = entry.version;
-  if (typeof version !== 'string' || semver.valid(version) === null) return false;
-  return semver.satisfies(version, range, { includePrerelease: true });
+  return semver.satisfies(String(entry.version), decl.spec, { includePrerelease: true });
 }
 
 /**
@@ -1599,13 +1590,15 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   const everyManifestRead = manifestPaths.every((p) => manifestByPath.get(p) != null);
 
   // Every manifest the scan reads is locked: its own-directory package-lock.json
-  // was fetched, parsed, has a known shape, and lists every key of the manifest's
+  // was fetched and parsed, and lists every key of the manifest's
   // dependencies, devDependencies and optionalDependencies at the top level with a
   // version that satisfies the declared range (see `lockfileListsDeclaration`).
   // A project without such a lockfile installs fresh, transitively or through
   // `overrides`, and nothing here can see what. With a single manifest that is
   // not locked no baseline entry is removed. (Additions are not gated by this:
-  // they never remove anything.) Computed on first use.
+  // they never remove anything. The known-shape requirement is enforced for every
+  // fetched lockfile, this one included, by `buildInstalledIndex`.) Computed on
+  // first use.
   let everyManifestLockedMemo: boolean | undefined;
   const everyManifestLocked = (): boolean => {
     if (everyManifestLockedMemo === undefined) {
@@ -1613,7 +1606,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
         const m = manifestByPath.get(path);
         if (!m) return false;
         const lock = lockByPath.get(ownLockfilePath(m.dir));
-        if (!lock || !lock.known) return false;
+        if (!lock) return false;
         return m.declarations.every((d) => !LOCKED_DEP_FIELDS.has(d.field) || lockfileListsDeclaration(lock, d));
       });
     }

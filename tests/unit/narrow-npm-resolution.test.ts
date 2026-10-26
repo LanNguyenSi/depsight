@@ -754,6 +754,8 @@ describe('every fetched lockfile has a known shape', () => {
 
   it('a packages value that is not an object', () => {
     expect(legacyDroppable({ lockfileVersion: 3, packages: [] })).toBe(false);
+    expect(legacyDroppable({ lockfileVersion: 1, dependencies: {}, packages: [] })).toBe(false);
+    expect(legacyDroppable({ lockfileVersion: 1, dependencies: {}, packages: 'x' })).toBe(false);
   });
 
   it('a dependencies value that is not an object, next to a good packages map', () => {
@@ -829,13 +831,12 @@ describe('every lockfile entry that names a package carries a semver version', (
     expect(legacyDroppable(lock)).toBe(false);
   });
 
-  it('an alias entry with a git version makes the real name and the alias key unknown', () => {
+  it('an alias entry with a git version makes the real name unknown, not the alias key', () => {
     const lock = JSON.stringify({
       lockfileVersion: 3,
       packages: { '': {}, ...leftLockEntries, 'node_modules/old-vite': { name: 'vite', version: 'github:x/y' } },
     });
     expect(legacyDroppable(lock)).toBe(false);
-    expect(legacyDroppable(lock, undefined, 'old-vite', '1.0.0')).toBe(false);
   });
 
   it('a name field that is not a non-empty string makes the lockfile unattributable', () => {
@@ -861,6 +862,44 @@ describe('every lockfile entry that names a package carries a semver version', (
       },
     });
     expect(legacyDroppable(lock)).toBe(true);
+  });
+
+  // `left` is declared in range by legacy (narrow, floor 1.0.0 installed nowhere);
+  // the entries below sit in the lockfile of a project that does not declare it.
+  const leftNarrow = (otherLock: object) => {
+    const m = {
+      ...manifests(),
+      'legacy/package.json': pkg({ name: 'legacy', dependencies: { left: '^1.0.0' } }),
+      'other/package.json': pkg({ name: 'other', dependencies: { z: '^1.0.0' } }),
+    };
+    const l = {
+      ...locks(),
+      'legacy/package-lock.json': v3({ 'node_modules/left': '1.2.0' }),
+      'other/package-lock.json': JSON.stringify(otherLock),
+    };
+    return resolve(m, l).dropSafe('left', '1.0.0');
+  };
+  const zEntries = { 'node_modules/z': { version: '1.0.0' } };
+
+  it('control for the exemptions below: another lockfile without anything about left', () => {
+    expect(leftNarrow({ lockfileVersion: 3, packages: { '': {}, ...zEntries } })).toBe(true);
+  });
+
+  it('the root entry is exempt, even with an unreadable version under a dependency\'s name', () => {
+    expect(leftNarrow({ lockfileVersion: 3, packages: { '': { name: 'left', version: 'not-a-version' }, ...zEntries } })).toBe(true);
+  });
+
+  it('a link entry is exempt (its target folder entry is accounted for on its own)', () => {
+    const packages = { '': {}, ...zEntries, 'node_modules/left': { resolved: '../left', link: true } };
+    expect(leftNarrow({ lockfileVersion: 3, packages })).toBe(true);
+    // Without the link marker the same entry has no version: left is unknown.
+    expect(leftNarrow({ lockfileVersion: 3, packages: { ...packages, 'node_modules/left': { resolved: '../left' } } })).toBe(false);
+  });
+
+  it('a workspace folder entry without a version is exempt, even named like a dependency', () => {
+    const packages = { '': {}, ...zEntries, 'packages/left': { name: 'left' } };
+    expect(leftNarrow({ lockfileVersion: 3, packages })).toBe(true);
+    expect(leftNarrow({ lockfileVersion: 3, packages: { ...packages, 'packages/left': { name: 'left', version: 'x' } } })).toBe(false);
   });
 
   it('a workspace folder entry with a version names the package by its folder', () => {
@@ -905,10 +944,9 @@ describe('every lockfile entry that names a package carries a semver version', (
       });
     }
 
-    it('an alias version whose range is not semver makes the real name and the alias key unknown', () => {
+    it('an alias version whose range is not semver makes the real name unknown', () => {
       const lock = JSON.stringify({ lockfileVersion: 1, dependencies: { left: { version: '1.0.0' }, 'old-vite': { version: 'npm:vite@github:x/y' } } });
       expect(legacyDroppable(lock)).toBe(false);
-      expect(legacyDroppable(lock, undefined, 'old-vite', '1.0.0')).toBe(false);
     });
 
     it('an npm: version that does not parse makes the lockfile unattributable', () => {
@@ -965,8 +1003,13 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
     expect(legacyDroppable(lockOf({}), { peerDependencies: { a: '^1.0.0' } })).toBe(true);
   });
 
+  it('bundled names need not be listed either', () => {
+    expect(legacyDroppable(lockOf({}), { bundleDependencies: ['a'] })).toBe(true);
+  });
+
   it('a range check uses prereleases like the declaration does', () => {
     expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.0.0-beta.2' } }), { dependencies: { a: '^1.0.0-beta.1' } })).toBe(true);
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0-beta.1' } }), { dependencies: { a: '^1.0.0-beta.1' } })).toBe(true);
   });
 
   it('the wildcard and empty specs accept any listed version', () => {
@@ -988,10 +1031,12 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
     });
   });
 
-  it('a link entry satisfies a non-semver spec but never a plain range', () => {
+  it('a link entry satisfies a non-semver spec but never a plain range, even with a version', () => {
     const lock = lockOf({ 'node_modules/a': { resolved: 'packages/a', link: true }, 'packages/a': { name: 'a', version: '1.0.0' } });
     expect(legacyDroppable(lock, { dependencies: { a: 'file:../a' } })).toBe(true);
     expect(legacyDroppable(lock, { dependencies: { a: '^1.0.0' } })).toBe(false);
+    const versioned = lockOf({ 'node_modules/a': { resolved: 'packages/a', link: true, version: '1.0.0' }, 'packages/a': { name: 'a', version: '1.0.0' } });
+    expect(legacyDroppable(versioned, { dependencies: { a: '^1.0.0' } })).toBe(false);
   });
 
   it('an entry installed under another name (alias) does not satisfy a plain range', () => {
@@ -1030,7 +1075,7 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
     });
 
     it('a key called __proto__ is not found through the prototype chain', () => {
-      const body = '{"name":"legacy","dependencies":{"__proto__":"*"}}';
+      const body = '{"name":"legacy","dependencies":{"__proto__":"latest"}}';
       const { m, l } = withLegacy(v1Lock({}));
       expect(resolve({ ...m, 'legacy/package.json': body }, l).dropSafe('vite', '7.3.5')).toBe(false);
       const listed = withLegacy('{"lockfileVersion":1,"dependencies":{"__proto__":{"version":"1.0.0"}}}');
@@ -1041,7 +1086,10 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
   it('a manifest with a dependency spec that is not a string counts as unread', () => {
     const { m, l } = withLegacy(lockOf({ 'node_modules/a': { version: '1.0.0' } }));
     const broken = { ...m, 'legacy/package.json': '{"name":"legacy","dependencies":{"a":1}}' };
-    expect(resolve(broken, l).dropSafe('vite', '7.3.5')).toBe(false);
+    const r = resolve(broken, l);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    // Only that manifest is unread: the others still add their versions.
+    expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('does not stop the additions: the narrow versions are still added', () => {
