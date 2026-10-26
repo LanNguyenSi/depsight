@@ -102,7 +102,11 @@ const FOREIGN_LOCKFILE_NAMES = new Set([
 // Configuration files of other package managers. They change what an install
 // does (pnpm workspaces, yarn settings, pnpm hooks) without a lockfile saying
 // so, so their presence anywhere keeps every baseline entry.
-const PACKAGE_MANAGER_CONFIG_NAMES = new Set(['pnpm-workspace.yaml', '.yarnrc.yml', '.pnpmfile.cjs']);
+const PACKAGE_MANAGER_CONFIG_NAMES = new Set([
+  'pnpm-workspace.yaml',
+  '.yarnrc.yml',
+  '.pnpmfile.cjs',
+]);
 
 /**
  * Facts about the git-tree walk that `observedLockfilePaths` does not carry,
@@ -1358,10 +1362,12 @@ interface NarrowDeclaration {
    */
   addable: boolean;
   /**
-   * A peer dependency that `peerDependenciesMeta` marks `optional: true`: npm
-   * does not install it, so the own lockfile need not list it.
+   * Must the manifest's own lockfile list the key at the top level? Yes for
+   * `dependencies`, `devDependencies`, `optionalDependencies` and
+   * `peerDependencies`, except a peer that `peerDependenciesMeta` marks
+   * `optional: true` (npm does not install it); no for a bundled name.
    */
-  optionalPeer: boolean;
+  lockRequired: boolean;
 }
 
 interface NarrowManifest {
@@ -1386,14 +1392,6 @@ interface NarrowManifest {
 // Every field of a manifest that names a package it installs or expects.
 const ADDABLE_DEP_FIELDS = ['dependencies', 'devDependencies'] as const;
 const BLOCKING_DEP_FIELDS = ['optionalDependencies', 'peerDependencies'] as const;
-// The fields whose every key the manifest's own lockfile must list (peer
-// dependencies unless optional: npm 7 and later install them).
-const LOCKED_DEP_FIELDS = new Set<string>([
-  'dependencies',
-  'devDependencies',
-  'optionalDependencies',
-  'peerDependencies',
-]);
 
 // A manifest whose dependency maps have an unexpected shape (not an object, a
 // spec that is not a string) counts as unread: it could declare anything.
@@ -1423,7 +1421,8 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
         aliasForm: spec.trim().startsWith('npm:'),
         realName: alias ? alias.realName : key,
         addable,
-        optionalPeer: field === 'peerDependencies' && peerIsOptional(peerMeta, key),
+        // npm 7 and later install peers, unless they are marked optional.
+        lockRequired: !(field === 'peerDependencies' && peerIsOptional(peerMeta, key)),
       });
     }
   }
@@ -1445,7 +1444,7 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
         aliasForm: false,
         realName: name,
         addable: false,
-        optionalPeer: false,
+        lockRequired: false,
       });
     }
   }
@@ -1818,7 +1817,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
           m.overridesPlain &&
           lockfileHonoursOverrides(lock, m.overrides) &&
           m.declarations.every(
-            (d) => !LOCKED_DEP_FIELDS.has(d.field) || d.optionalPeer || lockfileListsDeclaration(lock, d),
+            (d) => !d.lockRequired || lockfileListsDeclaration(lock, d),
           )
         );
       });
