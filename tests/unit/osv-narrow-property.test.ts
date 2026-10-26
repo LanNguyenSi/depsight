@@ -22,7 +22,17 @@
  *     capped manifest list
  *   - an extra project that names vite in an optional, peer or bundled
  *     declaration or only in `overrides`, with a lockfile of any of the kinds
- *     above and a top-level vite entry of any entry kind
+ *     above and a top-level vite entry of any entry kind; for the `overrides`
+ *     project, a lockfile entry that depends on vite while the lockfile has no
+ *     vite entry at all
+ *   - a peer dependency (`ms`) that `peerDependenciesMeta` marks optional
+ *   - `overrides` of vite in a manifest: a plain string, a `$` reference, a
+ *     nested object, a number, a key with a version selector
+ *   - lockfile versions that are prereleases (also against a range that names a
+ *     prerelease), which npm does not accept for a stable range
+ *   - `deno.lock` among the foreign lockfiles; `pnpm-workspace.yaml`,
+ *     `.yarnrc.yml` and `.pnpmfile.cjs` anywhere (also in vendored and build
+ *     directories, where they are not read); `devEngines.packageManager`
  *
  * Every case runs the real pipeline twice: with the narrow override (head) and
  * with the tree facts withheld, which switches the override off and leaves the
@@ -79,6 +89,7 @@ function mulberry32(seed: number) {
 }
 
 type LockKind = 'none' | 'v1' | 'v2' | 'v3' | 'v4' | 'nover' | 'v3nopackages' | 'malformed' | 'error';
+type OverrideKind = 'string' | 'dollar' | 'nested' | 'number' | 'selector';
 type EntryKind = 'semver' | 'git' | 'tarball' | 'missing' | 'nonobject';
 type MsField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies';
 type MsState = 'listed' | 'missing' | 'outOfRange';
@@ -92,8 +103,10 @@ interface ModelManifest {
   lock: LockKind;
   lockVersion: string; // what the lockfile installs for the declared key
   nested?: { kind: EntryKind; version: string }; // a nested vite install in this lockfile
-  ms?: { field: MsField; state: MsState }; // a further dependency, `ms`
+  ms?: { field: MsField; state: MsState; peerOptional?: boolean }; // a further dependency, `ms`
+  overrides?: { kind: OverrideKind; spec: string }; // `overrides` of vite
   packageManager?: string;
+  devEngines?: boolean; // devEngines.packageManager
 }
 
 type ExtraField = 'optionalDependencies' | 'peerDependencies' | 'bundleDependencies' | 'overrides';
@@ -106,6 +119,7 @@ interface ModelExtra {
   lock: LockKind;
   lockVersion: string;
   entry: EntryKind; // the kind of its top-level vite entry
+  edge?: boolean; // lockfile (version 2/3) has an entry depending on vite and no vite entry
   packageManager?: string;
 }
 
@@ -115,6 +129,7 @@ interface Model {
   root: RootState; // package.json at '' when no manifest sits there
   foreign: string[]; // foreign lockfile paths
   npmrc: string[]; // .npmrc paths
+  pmConfig: string[]; // pnpm-workspace.yaml / .yarnrc.yml / .pnpmfile.cjs paths
   truncated: boolean;
   capped: boolean;
 }
@@ -127,11 +142,22 @@ const LAYOUTS: string[][] = [
   ['', 'a', 'a/sub'],
   ['a', 'b', 'b/sub'],
 ];
-const SPECS = ['^7.3.5', '^8.3.0', '^7.0.0', '~8.3.1', '^6.0.0'];
-const VERSIONS = ['5.4.0', '6.3.0', '7.3.5', '7.3.7', '8.3.0', '8.3.5', '8.3.6'];
-const FOREIGN = ['yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'npm-shrinkwrap.json'];
+const SPECS = ['^7.3.5', '^8.3.0', '^7.0.0', '~8.3.1', '^6.0.0', '^7.3.5-beta.1'];
+const VERSIONS = ['5.4.0', '6.3.0', '7.3.5', '7.3.5-beta.2', '7.3.7', '7.4.0-beta.1', '8.3.0', '8.3.5', '8.3.6'];
+const FOREIGN = ['yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'deno.lock', 'deno.lock'];
+const PM_CONFIG_PATHS = [
+  'pnpm-workspace.yaml',
+  'a/.yarnrc.yml',
+  'b/.pnpmfile.cjs',
+  'tools/.yarnrc.yml',
+  'x/pnpm-workspace.yaml',
+  'node_modules/z/.yarnrc.yml',
+  'dist/pnpm-workspace.yaml',
+];
+const OVERRIDE_KINDS: OverrideKind[] = ['string', 'string', 'string', 'dollar', 'nested', 'number', 'selector'];
 const NPMRC_PATHS = ['.npmrc', 'a/.npmrc', 'b/.npmrc', 'x/.npmrc', 'tools/.npmrc', 'node_modules/z/.npmrc', 'dist/.npmrc'];
-const MS_FIELDS: MsField[] = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+// peers twice: they are the newest locked field and need the most cases
+const MS_FIELDS: MsField[] = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependencies'];
 const GIT_VERSION = 'github:vitejs/vite#abc123';
 const TARBALL_VERSION = 'https://example.com/vite.tgz';
 
@@ -189,8 +215,8 @@ function generate(rand: () => number): Model {
     if (chance(0.2)) m.nested = { kind: entryKind(0.45), version: pick(VERSIONS) };
     return m;
   });
-  if (chance(0.3)) {
-    pick(manifests).ms = {
+  if (chance(0.4)) {
+    const ms = {
       field: pick(MS_FIELDS),
       state: weighted<MsState>([
         ['listed', 0.5],
@@ -198,8 +224,19 @@ function generate(rand: () => number): Model {
         ['outOfRange', 0.25],
       ]),
     };
+    pick(manifests).ms = ms.field === 'peerDependencies' && rand() < 0.4 ? { ...ms, peerOptional: true } : ms;
+  }
+  if (chance(0.2)) {
+    const target = pick(manifests);
+    // Half of the string overrides name the version the lockfile installs, so
+    // that a reflected override is reached as often as a stale one.
+    target.overrides = {
+      kind: pick(OVERRIDE_KINDS),
+      spec: rand() < 0.5 ? target.lockVersion : pick(VERSIONS),
+    };
   }
   if (chance(0.06)) pick(manifests).packageManager = pick(['yarn@4.1.0', 'pnpm@9.0.0', 'npm@10.8.0']);
+  if (chance(0.05)) pick(manifests).devEngines = true;
 
   const hasRootManifest = layout.includes('');
   const rr = chaos === 1 ? rand() : rand() * 0.2;
@@ -221,10 +258,12 @@ function generate(rand: () => number): Model {
   }
   const npmrc: string[] = [];
   if (chance(0.1)) npmrc.push(pick(NPMRC_PATHS));
+  const pmConfig: string[] = [];
+  if (chance(0.08)) pmConfig.push(pick(PM_CONFIG_PATHS));
   const extra: ModelExtra | undefined =
     rand() < 0.35
       ? {
-          field: pick<ExtraField>(['optionalDependencies', 'peerDependencies', 'bundleDependencies', 'overrides']),
+          field: pick<ExtraField>(['optionalDependencies', 'peerDependencies', 'bundleDependencies', 'overrides', 'overrides']),
           spec: pick(SPECS),
           lock: lockKind([
             ['none', 0.15],
@@ -242,7 +281,8 @@ function generate(rand: () => number): Model {
           packageManager: chance(0.04) ? 'yarn@4.1.0' : undefined,
         }
       : undefined;
-  return { manifests, extra, root, foreign, npmrc, truncated: chance(0.07), capped: chance(0.04) };
+  if (extra && extra.field === 'overrides' && chance(0.7)) extra.edge = true;
+  return { manifests, extra, root, foreign, npmrc, pmConfig, truncated: chance(0.07), capped: chance(0.04) };
 }
 
 // ---- model -> repository -----------------------------------------------------
@@ -270,6 +310,7 @@ interface LockSpec {
   version: string;
   nested?: { kind: EntryKind; version: string };
   ms?: MsState;
+  edge?: boolean; // version 2/3: no vite entry, but an entry that depends on vite
 }
 
 // The text of a lockfile of the given kind, or null when no file exists.
@@ -289,7 +330,9 @@ function lockText(s: LockSpec): string | null {
     }
     return JSON.stringify({ lockfileVersion: 1, dependencies });
   }
-  const packages: Record<string, unknown> = { '': {}, [`node_modules/${s.key}`]: entryJson(s.topKind, s.version, alias) };
+  const packages: Record<string, unknown> = { '': {} };
+  if (s.edge) packages['node_modules/depends-on-vite'] = { version: '1.0.0', dependencies: { vite: '^7.0.0' } };
+  else packages[`node_modules/${s.key}`] = entryJson(s.topKind, s.version, alias);
   if (msVersion) packages['node_modules/ms'] = { version: msVersion };
   if (s.nested) {
     packages['node_modules/other'] = { version: '1.0.0' };
@@ -299,6 +342,21 @@ function lockText(s: LockSpec): string | null {
   if (s.kind !== 'nover') body.lockfileVersion = s.kind === 'v4' ? 4 : s.kind === 'v2' ? 2 : 3;
   if (s.kind === 'v2') body.dependencies = {};
   return JSON.stringify(body);
+}
+
+function overridesJson(o: { kind: OverrideKind; spec: string }): unknown {
+  switch (o.kind) {
+    case 'string':
+      return { vite: o.spec };
+    case 'dollar':
+      return { vite: '$vite' };
+    case 'nested':
+      return { vite: { '.': o.spec } };
+    case 'number':
+      return { vite: 7 };
+    case 'selector':
+      return { 'vite@^7': o.spec };
+  }
 }
 
 function toScenario(model: Model): Scenario {
@@ -316,9 +374,12 @@ function toScenario(model: Model): Scenario {
       const target = (body[m.ms.field] as Record<string, string> | undefined) ?? {};
       target.ms = '^2.0.0';
       body[m.ms.field] = target;
+      if (m.ms.peerOptional) body.peerDependenciesMeta = { ms: { optional: true } };
     }
+    if (m.overrides) body.overrides = overridesJson(m.overrides);
     if (m.workspaces !== undefined) body.workspaces = m.workspaces;
     if (m.packageManager) body.packageManager = m.packageManager;
+    if (m.devEngines) body.devEngines = { packageManager: { name: 'yarn', version: '4.1.0' } };
     files[path(m.dir, 'package.json')] = pkg(body);
     putLock(m.dir, { kind: m.lock, key: m.key, topKind: 'semver', version: m.lockVersion, nested: m.nested, ms: m.ms?.state });
   }
@@ -330,7 +391,7 @@ function toScenario(model: Model): Scenario {
     else body[e.field] = { vite: e.spec };
     if (e.packageManager) body.packageManager = e.packageManager;
     files['x/package.json'] = pkg(body);
-    putLock('x', { kind: e.lock, key: 'vite', topKind: e.entry, version: e.lockVersion });
+    putLock('x', { kind: e.lock, key: 'vite', topKind: e.entry, version: e.lockVersion, edge: e.edge });
   }
   if (!model.manifests.some((m) => m.dir === '')) {
     if (model.root === 'plain') files['package.json'] = pkg({ name: 'root', private: true });
@@ -343,6 +404,7 @@ function toScenario(model: Model): Scenario {
   }
   for (const f of model.foreign) files[f] = f.endsWith('yarn.lock') ? yarn([['left-pad@^1.0.0', '1.0.0']]) : '{}';
   for (const f of model.npmrc) files[f] = 'package-lock=false\n';
+  for (const f of model.pmConfig) files[f] = 'packages: []\n';
   return { files, fail, truncated: model.truncated, extraManifests: model.capped ? 100 : 0 };
 }
 
@@ -350,11 +412,25 @@ function toScenario(model: Model): Scenario {
 
 const KNOWN_SHAPES: LockKind[] = ['v1', 'v2', 'v3'];
 const NARROW_SHAPES: LockKind[] = ['v2', 'v3'];
-const LOCKED_FIELDS: string[] = ['dependencies', 'devDependencies', 'optionalDependencies'];
-const plainRange = (spec: string) => semver.validRange(spec) !== null;
-const inRange = (version: string, spec: string) => semver.satisfies(version, spec, { includePrerelease: true });
+const LOCKED_FIELDS: string[] = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+// npm judges a lockfile against a declared range in loose mode and without
+// includePrerelease. (The blinder `prerelease` switches the second off.)
+let ORACLE_INCLUDE_PRERELEASE = false;
+const plainRange = (spec: string) => semver.validRange(spec, true) !== null;
+const inRange = (version: string, spec: string) =>
+  semver.satisfies(version, spec, { loose: true, includePrerelease: ORACLE_INCLUDE_PRERELEASE });
 const rootManifestInLayout = (model: Model) => model.manifests.some((x) => x.dir === '');
 const excludedDir = (p: string) => /(^|\/)(node_modules|dist)\//.test('/' + p);
+
+// Does the manifest's own lockfile violate the manifest's `overrides`? Only a
+// plain string override can be vouched for; then every vite entry in the
+// lockfile (top level, nested, aliased) must satisfy it and have a semver version.
+function overridesViolated(m: ModelManifest): boolean {
+  if (!m.overrides) return false;
+  if (m.overrides.kind !== 'string') return true;
+  if (!inRange(m.lockVersion, m.overrides.spec)) return true;
+  return m.nested !== undefined && !(m.nested.kind === 'semver' && inRange(m.nested.version, m.overrides.spec));
+}
 
 // No `workspaces` key in the manifest at `dir` or in any package.json above it,
 // and every package.json above it readable.
@@ -383,7 +459,9 @@ function extraNarrowInModel(model: Model, e: ModelExtra): boolean {
   if (e.field === 'overrides') return true;
   if (!NARROW_SHAPES.includes(e.lock) || e.entry !== 'semver') return false;
   if (!standaloneInModel(model, 'x')) return false;
-  if (e.field === 'bundleDependencies') return true;
+  // A bundled name carries no range: it is matched against `*`, which npm does
+  // not satisfy with a prerelease.
+  if (e.field === 'bundleDependencies') return inRange(e.lockVersion, '*');
   return plainRange(e.spec) && inRange(e.lockVersion, e.spec);
 }
 
@@ -393,13 +471,19 @@ function extraNarrowInModel(model: Model, e: ModelExtra): boolean {
 function manifestLocked(m: ModelManifest): boolean {
   if (!KNOWN_SHAPES.includes(m.lock)) return false;
   if (plainRange(m.spec) && !inRange(m.lockVersion, m.spec)) return false;
-  if (m.ms && LOCKED_FIELDS.includes(m.ms.field) && m.ms.state !== 'listed') return false;
+  if (m.ms && LOCKED_FIELDS.includes(m.ms.field) && !m.ms.peerOptional && m.ms.state !== 'listed') return false;
+  if (overridesViolated(m)) return false;
   return true;
 }
 
 function extraLocked(e: ModelExtra): boolean {
   if (!KNOWN_SHAPES.includes(e.lock)) return false;
-  if (e.field !== 'optionalDependencies') return true;
+  if (e.field === 'overrides') {
+    // The override is a plain range; the vite entry, if the lockfile has one, must satisfy it.
+    const hasEntry = !(e.edge && NARROW_SHAPES.includes(e.lock));
+    return !hasEntry || (e.entry === 'semver' && inRange(e.lockVersion, e.spec));
+  }
+  if (e.field !== 'optionalDependencies' && e.field !== 'peerDependencies') return true;
   if (e.entry === 'nonobject') return false;
   return !plainRange(e.spec) || (e.entry === 'semver' && inRange(e.lockVersion, e.spec));
 }
@@ -410,13 +494,27 @@ function extraLocked(e: ModelExtra): boolean {
 function installIndex(model: Model): { versions: Set<string>; unknownVite: boolean } | null {
   const versions = new Set<string>();
   let unknownVite = false;
-  const locks: Array<{ kind: LockKind; top: EntryKind; version: string; nested?: ModelManifest['nested'] }> = [
+  const locks: Array<{
+    kind: LockKind;
+    top: EntryKind;
+    version: string;
+    nested?: ModelManifest['nested'];
+    edge?: boolean;
+  }> = [
     ...model.manifests.map((m) => ({ kind: m.lock, top: 'semver' as EntryKind, version: m.lockVersion, nested: m.nested })),
-    ...(model.extra ? [{ kind: model.extra.lock, top: model.extra.entry, version: model.extra.lockVersion }] : []),
+    ...(model.extra
+      ? [{ kind: model.extra.lock, top: model.extra.entry, version: model.extra.lockVersion, edge: model.extra.edge }]
+      : []),
   ];
   for (const l of locks) {
     if (l.kind === 'none') continue;
     if (!KNOWN_SHAPES.includes(l.kind)) return null;
+    // An entry depends on vite and the lockfile has no vite entry: damaged, so
+    // some vite is installed that it does not show. (Only version 2/3 has edges.)
+    if (l.edge && NARROW_SHAPES.includes(l.kind)) {
+      unknownVite = true;
+      continue;
+    }
     if (l.top === 'semver') versions.add(l.version);
     else unknownVite = true;
     if (l.nested) {
@@ -430,7 +528,8 @@ function installIndex(model: Model): { versions: Set<string>; unknownVite: boole
 function dropOracle(model: Model, baseVersion: string): boolean {
   if (model.truncated || model.capped || model.foreign.length > 0) return false;
   if (model.npmrc.some((p) => !excludedDir(p))) return false;
-  if (model.manifests.some((m) => m.packageManager) || model.extra?.packageManager) return false;
+  if (model.pmConfig.some((p) => !excludedDir(p))) return false;
+  if (model.manifests.some((m) => m.packageManager || m.devEngines) || model.extra?.packageManager) return false;
   if (model.root === 'error' || model.root === 'unparsable') return false;
   // A root package.json with no lockfile of its own.
   if (!rootManifestInLayout(model) && model.root !== 'none') return false;
@@ -445,29 +544,71 @@ function dropOracle(model: Model, baseVersion: string): boolean {
 
 // The same model with one dimension made harmless, to show that dimension alone
 // can be what keeps a floor (non-vacuity).
-type Blinder = 'lockShape' | 'entryKind' | 'staleLock' | 'npmrc' | 'packageManager';
+type Blinder =
+  | 'lockShape'
+  | 'entryKind'
+  | 'staleLock'
+  | 'peer'
+  | 'overrides'
+  | 'edge'
+  | 'prerelease'
+  | 'npmrc'
+  | 'packageManager'
+  | 'devEngines'
+  | 'pmConfig'
+  | 'deno';
 function blind(model: Model, what: Blinder): Model {
   const m: Model = JSON.parse(JSON.stringify(model));
   const shape = (k: LockKind): LockKind => (k === 'v4' || k === 'nover' || k === 'v3nopackages' ? 'v3' : k);
   for (const mf of m.manifests) {
     if (what === 'lockShape') mf.lock = shape(mf.lock);
     if (what === 'entryKind' && mf.nested) mf.nested.kind = 'semver';
-    if (what === 'staleLock' && mf.ms) mf.ms.state = 'listed';
+    if (what === 'staleLock' && mf.ms && mf.ms.field !== 'peerDependencies') mf.ms.state = 'listed';
+    if (what === 'peer' && mf.ms && mf.ms.field === 'peerDependencies') mf.ms.state = 'listed';
+    if (what === 'overrides') delete mf.overrides;
     if (what === 'packageManager') delete mf.packageManager;
+    if (what === 'devEngines') delete mf.devEngines;
   }
   if (m.extra) {
     if (what === 'lockShape') m.extra.lock = shape(m.extra.lock);
     if (what === 'entryKind') m.extra.entry = 'semver';
+    if (what === 'edge') delete m.extra.edge;
     if (what === 'packageManager') delete m.extra.packageManager;
   }
   if (what === 'npmrc') m.npmrc = [];
+  if (what === 'pmConfig') m.pmConfig = [];
+  if (what === 'deno') m.foreign = m.foreign.filter((f) => !f.endsWith('deno.lock'));
   return m;
 }
-const BLINDERS: Blinder[] = ['lockShape', 'entryKind', 'staleLock', 'npmrc', 'packageManager'];
+const BLINDERS: Blinder[] = [
+  'lockShape',
+  'entryKind',
+  'staleLock',
+  'peer',
+  'overrides',
+  'edge',
+  'prerelease',
+  'npmrc',
+  'packageManager',
+  'devEngines',
+  'pmConfig',
+  'deno',
+];
+// The oracle with one dimension made harmless: `prerelease` accepts prereleases
+// for a stable range (includePrerelease) like the code before it followed npm.
+function droppableBlinded(model: Model, what: Blinder, version: string): boolean {
+  if (what !== 'prerelease') return dropOracle(blind(model, what), version);
+  ORACLE_INCLUDE_PRERELEASE = true;
+  try {
+    return dropOracle(model, version);
+  } finally {
+    ORACLE_INCLUDE_PRERELEASE = false;
+  }
+}
 
 // ---- the test ----------------------------------------------------------------
 
-const CASES = 12000;
+const CASES = 20000;
 
 describe('narrow override properties (seeded, generated repositories)', () => {
   it(`holds for ${CASES} generated repositories`, async () => {
@@ -475,7 +616,9 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     let narrowDrops = 0;
     let keptBase = 0;
     let additionsSeen = 0;
-    const soleBlocker: Record<Blinder, number> = { lockShape: 0, entryKind: 0, staleLock: 0, npmrc: 0, packageManager: 0 };
+    const soleBlocker = Object.fromEntries(BLINDERS.map((b) => [b, 0])) as Record<Blinder, number>;
+    let optionalPeerDrops = 0;
+    let reflectedOverrideDrops = 0;
     const failures: string[] = [];
 
     for (let i = 0; i < CASES; i++) {
@@ -507,10 +650,15 @@ describe('narrow override properties (seeded, generated repositories)', () => {
         const wasDropped = dropped.includes(`vite@${v}`);
         if (wasDropped && !oracle) fail(`P2 dropped vite@${v} but the oracle says it is not provably uninstalled`);
         if (!wasDropped && oracle) fail(`P3 kept vite@${v} although the oracle says it is droppable`);
-        if (wasDropped) narrowDrops++;
-        else keptBase++;
+        if (wasDropped) {
+          narrowDrops++;
+          // Positive controls: a drop with an unlisted optional peer, and a drop
+          // with a string override the lockfile reflects.
+          if (model.manifests.some((m) => m.ms?.peerOptional && m.ms.state !== 'listed')) optionalPeerDrops++;
+          if (model.manifests.some((m) => m.overrides?.kind === 'string')) reflectedOverrideDrops++;
+        } else keptBase++;
         if (!wasDropped && !oracle) {
-          for (const b of BLINDERS) if (dropOracle(blind(model, b), v)) soleBlocker[b]++;
+          for (const b of BLINDERS) if (droppableBlinded(model, b, v)) soleBlocker[b]++;
         }
       }
 
@@ -545,6 +693,8 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     expect(keptBase).toBeGreaterThan(500);
     expect(additionsSeen).toBeGreaterThan(500);
     for (const b of BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
+    expect(optionalPeerDrops, 'an optional peer that is not listed never coexists with a drop').toBeGreaterThan(20);
+    expect(reflectedOverrideDrops, 'a reflected string override never coexists with a drop').toBeGreaterThan(20);
     expect(failures.slice(0, 3).join('\n\n')).toBe('');
     expect(failures).toEqual([]);
   }, 180_000);

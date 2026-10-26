@@ -68,17 +68,23 @@ A complete list of what depsight does today, beyond the headline value props in 
     when everything the scan reads is positively accounted for and no
     `package-lock.json` the scan reads installs it (vendored, build and fixture
     directories are not read); anything that cannot be read or checked keeps the
-    entry. That needs a complete git tree, no `yarn.lock`, `pnpm-lock.yaml`,
-    `bun.lock`, `bun.lockb` or `npm-shrinkwrap.json`, no `.npmrc` and no
-    `packageManager` field in a manifest the scan reads, every `package.json`
-    the scan reads locked (a `package-lock.json` of its own with a known shape
-    that lists each of its dependencies, dev dependencies and optional
-    dependencies in the declared range; a project with a stale or missing
-    lockfile installs fresh), no `workspaces` key in or above any declaring
-    manifest (dependencies, dev, optional, peer or bundled), every declaring
-    manifest's lockfile satisfying its declared range, and every lockfile entry
-    that names a package carrying a semver version (a git, tarball or `file:`
-    version makes the name unknown, and an unknown name is kept). Npm workspace
+    entry. That needs a complete git tree; none of the files `yarn.lock`,
+    `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `npm-shrinkwrap.json`,
+    `deno.lock`, `.npmrc`, `pnpm-workspace.yaml`, `.yarnrc.yml` and
+    `.pnpmfile.cjs`; no `packageManager` or `devEngines.packageManager` field in
+    a manifest the scan reads; every `package.json` the scan reads locked (a
+    `package-lock.json` of its own with a known shape that lists each of its
+    dependencies, dev, optional and non-optional peer dependencies in the
+    declared range, judged as npm judges a lockfile, and in which every entry of
+    an overridden name satisfies a plain string override; a project with a
+    stale or missing lockfile, or an override that is not a plain string,
+    installs something the lockfile does not show); no `workspaces` key in or
+    above any declaring manifest (dependencies, dev, optional, peer or bundled);
+    every declaring manifest's lockfile satisfying its declared range; and every
+    lockfile entry that names a package carrying a semver version (a git,
+    tarball or `file:` version, or a `dependencies` edge to a name the same
+    lockfile has no entry for, makes the name unknown, and an unknown name is
+    kept). Npm workspace
     monorepos, repositories with another package manager's lockfile and
     truncated trees keep the
     repository-wide result. It is not a

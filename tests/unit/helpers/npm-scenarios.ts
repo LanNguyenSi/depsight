@@ -1153,4 +1153,129 @@ export const SCENARIOS: Record<string, Scenario> = {
   vendoredNpmrcNotRead: {
     files: { ...viteTwoProjectFiles(), 'node_modules/vite-fork/.npmrc': 'package-lock=false\n' },
   },
+
+  // ---- peer dependencies are installed by npm 7 and later: an extra project's
+  // lockfile must list them (optional peers excepted) ----
+  negPeerUnlistedTransitive: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', peerDependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({}),
+    },
+  },
+  negPeerUnlistedTransitiveV1: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { ms: '^2.0.0' }, peerDependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v1({ ms: '2.1.3' }),
+    },
+  },
+  negPeerOutOfRange: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', peerDependencies: { x: '^2.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.0.0' } }),
+    },
+  },
+  peerListedInRange: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', peerDependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.4.0' } }),
+    },
+  },
+  optionalPeerNotListed: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({
+        name: 'extra',
+        peerDependencies: { x: '^1.0.0' },
+        peerDependenciesMeta: { x: { optional: true } },
+      }),
+      'extra/package-lock.json': v3({}),
+    },
+  },
+  // ---- overrides: a plain string override must be reflected in the project's own lockfile ----
+  negOverridesStaleLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' }, overrides: { vite: '7.3.5' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': '1.0.0', 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  overridesReflectedInLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' }, overrides: { vite: '7.3.6' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': '1.0.0', 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  negOverridesNestedObject: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' }, overrides: { x: { vite: '7.3.6' } } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': '1.0.0' }),
+    },
+  },
+  negOverridesDollarReference: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { ms: '^2.0.0' }, overrides: { ms: '$ms' } }),
+      'extra/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+    },
+  },
+  // ---- npm judges a lockfile in loose mode and without includePrerelease ----
+  negPrereleaseStaleLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'frontend/package-lock.json': v3({ 'node_modules/vite': '7.4.0-beta.1' }),
+    },
+  },
+  // ---- a lockfile edge without an entry ----
+  negLockEdgeWithoutEntry: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.0.0', dependencies: { vite: '7.3.5' } } }),
+    },
+  },
+  // ---- link and renamed lockfile entries ----
+  negLinkEntryWithVersion: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'frontend/package-lock.json': v3({ 'node_modules/vite': { link: true, version: '7.3.7', resolved: '../vite-local' } }),
+    },
+  },
+  negEntryRenamedByNameField: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'frontend/package-lock.json': v3({ 'node_modules/vite': { name: 'vite-fork', version: '7.3.7' } }),
+    },
+  },
+  // ---- other package managers' files ----
+  negDenoLock: {
+    files: { ...viteTwoProjectFiles(), 'frontend/deno.lock': '{}' },
+  },
+  negPnpmWorkspaceWithoutPnpmLock: {
+    files: { ...viteTwoProjectFiles(), 'pnpm-workspace.yaml': 'packages:\n  - frontend\n  - backend\n' },
+  },
+  negYarnrcYmlAtRoot: {
+    files: { ...viteTwoProjectFiles(), '.yarnrc.yml': 'nodeLinker: node-modules\n' },
+  },
+  negPnpmfileInProject: {
+    files: { ...viteTwoProjectFiles(), 'backend/.pnpmfile.cjs': 'module.exports = {};\n' },
+  },
+  negDevEnginesPackageManager: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'frontend/package.json': pkg({
+        name: 'frontend',
+        devEngines: { packageManager: { name: 'yarn', version: '4.1.0' } },
+        dependencies: { vite: '^7.3.5' },
+      }),
+    },
+  },
+  vendoredPackageManagerConfigNotRead: {
+    files: { ...viteTwoProjectFiles(), 'node_modules/x/.yarnrc.yml': 'a: b\n', 'dist/pnpm-workspace.yaml': 'packages: []\n' },
+  },
 };

@@ -99,18 +99,26 @@ describe('drop rule: tree walk complete', () => {
   it('detectEcosystem records the cap and the foreign lockfiles, and nothing when the walk is incomplete', async () => {
     loadRepo({ ...SCENARIOS.negYarnLockElsewhere, extraManifests: 100 });
     const capped = await detectEcosystem('t', 'o', 'r', 'main');
-    expect(capped.observedTreeFacts).toEqual({ foreignLockfilePaths: ['tools/yarn.lock'], manifestsCapped: true, npmrcPaths: [] });
+    expect(capped.observedTreeFacts).toEqual({ foreignLockfilePaths: ['tools/yarn.lock'], manifestsCapped: true, npmrcPaths: [], packageManagerConfigPaths: [] });
     expect(capped.manifestPaths).toHaveLength(100);
 
     loadRepo(SCENARIOS.viteTwoProjects);
     const whole = await detectEcosystem('t', 'o', 'r', 'main');
-    expect(whole.observedTreeFacts).toEqual({ foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [] });
+    expect(whole.observedTreeFacts).toEqual({ foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [], packageManagerConfigPaths: [] });
 
     loadRepo(SCENARIOS.negNpmrcInProject);
     const withNpmrc = await detectEcosystem('t', 'o', 'r', 'main');
     expect(withNpmrc.observedTreeFacts?.npmrcPaths).toEqual(['frontend/.npmrc']);
     loadRepo(SCENARIOS.vendoredNpmrcNotRead);
     expect((await detectEcosystem('t', 'o', 'r', 'main')).observedTreeFacts?.npmrcPaths).toEqual([]);
+
+    loadRepo(SCENARIOS.negDenoLock);
+    expect((await detectEcosystem('t', 'o', 'r', 'main')).observedTreeFacts?.foreignLockfilePaths).toEqual(['frontend/deno.lock']);
+
+    loadRepo(SCENARIOS.negPnpmfileInProject);
+    expect((await detectEcosystem('t', 'o', 'r', 'main')).observedTreeFacts?.packageManagerConfigPaths).toEqual(['backend/.pnpmfile.cjs']);
+    loadRepo(SCENARIOS.vendoredPackageManagerConfigNotRead);
+    expect((await detectEcosystem('t', 'o', 'r', 'main')).observedTreeFacts?.packageManagerConfigPaths).toEqual([]);
 
     loadRepo(SCENARIOS.negTruncatedTree);
     const truncated = await detectEcosystem('t', 'o', 'r', 'main');

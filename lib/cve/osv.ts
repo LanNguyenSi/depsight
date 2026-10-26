@@ -492,16 +492,21 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * entry only when `resolveNarrowNpm` proves its version is installed by no
  * package-lock.json the scan reads. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
- * tree; no other package manager's lockfile, no `.npmrc`, no `packageManager`
- * field; every manifest locked (an own lockfile of a known shape that lists
- * each declared dependency in range); every declaring manifest narrow; and
+ * tree; no other package manager's lockfile (yarn.lock, pnpm-lock.yaml,
+ * bun.lock, bun.lockb, npm-shrinkwrap.json, deno.lock), no `.npmrc`, no
+ * pnpm-workspace.yaml, .yarnrc.yml or .pnpmfile.cjs, no `packageManager` or
+ * `devEngines.packageManager` field; every manifest locked (an own lockfile
+ * of a known shape that lists each declared dependency, dev, optional and
+ * non-optional peer dependency in range, judged as npm does, and reflects
+ * every plain string `overrides` entry); every declaring manifest narrow; and
  * every lockfile entry that names a package readable as a semver version (an
- * unreadable one makes the name unknown, so it is never removed). Vendored,
- * build and fixture directories are not read. The result can therefore hold
- * several entries for one name, one per installed version.
- * Npm workspaces (any `workspaces` key), repos with a yarn.lock, pnpm-lock.yaml,
- * bun lockfile or npm-shrinkwrap.json, and trees or manifest lists that could
- * not be read completely keep the chain result as it was.
+ * unreadable one, or an entry's edge to a name the same lockfile has no entry
+ * for, makes the name unknown, so it is never removed). Vendored, build and
+ * fixture directories are not read. The result can therefore hold several
+ * entries for one name, one per installed version.
+ * Npm workspaces (any `workspaces` key), repos with another package manager's
+ * lockfile, and trees or manifest lists that could not be read completely keep
+ * the chain result as it was.
  */
 async function collectDeps(
   eco: string,

@@ -19,6 +19,7 @@ import {
   resolveNarrowNpm,
   selectForeignLockfilePaths,
   selectNpmrcPaths,
+  selectPackageManagerConfigPaths,
   type NarrowNpmInputs,
 } from '@/lib/manifest-discovery';
 import { pkg, v1, v2, v3 } from './helpers/npm-repo-fixture';
@@ -35,7 +36,7 @@ function inputs(
     manifestFiles: Object.entries(manifests).map(([path, content]) => ({ path, content })),
     lockfileFiles: Object.entries(locks).map(([path, content]) => ({ path, content })),
     observedLockfilePaths: { npm: Object.keys(locks), yarn: [] },
-    observedTreeFacts: { foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [] },
+    observedTreeFacts: { foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [], packageManagerConfigPaths: [] },
     ...overrides,
   };
 }
@@ -126,7 +127,7 @@ describe('tree walk complete', () => {
 
   it('manifest list capped: no narrow resolution at all', () => {
     const r = resolve(manifests(), locks(), {
-      observedTreeFacts: { foreignLockfilePaths: [], manifestsCapped: true, npmrcPaths: [] },
+      observedTreeFacts: { foreignLockfilePaths: [], manifestsCapped: true, npmrcPaths: [], packageManagerConfigPaths: [] },
     });
     expect(r.additions).toEqual([]);
     expect(r.dropSafe('vite', '7.3.5')).toBe(false);
@@ -150,10 +151,12 @@ describe('no other package manager lockfile in the tree', () => {
     'bun.lockb',
     'npm-shrinkwrap.json',
     'deep/er/npm-shrinkwrap.json',
+    'deno.lock',
+    'tools/deno.lock',
   ]) {
     it(`${path} anywhere: no narrow resolution at all`, () => {
       const r = resolve(manifests(), locks(), {
-        observedTreeFacts: { foreignLockfilePaths: [path], manifestsCapped: false, npmrcPaths: [] },
+        observedTreeFacts: { foreignLockfilePaths: [path], manifestsCapped: false, npmrcPaths: [], packageManagerConfigPaths: [] },
       });
       expect(r.additions).toEqual([]);
       expect(r.dropSafe('vite', '7.3.5')).toBe(false);
@@ -365,10 +368,12 @@ describe('every manifest declaring the name is narrow for it', () => {
     expect(versions(resolve(m, l))).toEqual(['vite@7.0.0-beta.4', 'vite@8.3.5']);
   });
 
-  it('a prerelease of a later minor inside a prerelease-bounded caret range is narrow', () => {
+  it('a prerelease of a later minor inside a prerelease-bounded caret range is not narrow (npm does not accept it)', () => {
     const m = { ...manifests(), 'frontend/package.json': pkg({ dependencies: { vite: '^7.0.0-beta.1' } }) };
     const l = { ...locks(), 'frontend/package-lock.json': v3({ 'node_modules/vite': '7.1.0-beta.2' }) };
-    expect(versions(resolve(m, l))).toEqual(['vite@7.1.0-beta.2', 'vite@8.3.5']);
+    const r = resolve(m, l);
+    expect(versions(r)).toEqual(['vite@8.3.5']);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
   });
 
   it('a manifest that does not declare the name, with a lockfile of its own, does not block', () => {
@@ -1008,17 +1013,18 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
     });
   }
 
-  it('peerDependencies keys need not be listed (npm may skip optional peers)', () => {
-    expect(legacyDroppable(lockOf({}), { peerDependencies: { a: '^1.0.0' } })).toBe(true);
+  it('a peerDependencies key the lockfile does not list: the manifest is not locked (npm installs peers)', () => {
+    expect(legacyDroppable(lockOf({}), { peerDependencies: { a: '^1.0.0' } })).toBe(false);
   });
 
   it('bundled names need not be listed either', () => {
     expect(legacyDroppable(lockOf({}), { bundleDependencies: ['a'] })).toBe(true);
   });
 
-  it('a range check uses prereleases like the declaration does', () => {
+  it('a prerelease satisfies only a range that names a prerelease of the same release (as npm judges a lockfile)', () => {
     expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.0.0-beta.2' } }), { dependencies: { a: '^1.0.0-beta.1' } })).toBe(true);
-    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0-beta.1' } }), { dependencies: { a: '^1.0.0-beta.1' } })).toBe(true);
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0-beta.1' } }), { dependencies: { a: '^1.0.0-beta.1' } })).toBe(false);
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0-beta.1' } }), { dependencies: { a: '^1.0.0' } })).toBe(false);
   });
 
   it('the wildcard and empty specs accept any listed version', () => {
@@ -1109,8 +1115,443 @@ describe('every manifest the scan reads is locked: its own lockfile lists every 
   });
 });
 
+describe('peerDependencies are listed in range like dependencies, optional peers excepted', () => {
+  const lockOf = (entries: Record<string, unknown>) =>
+    JSON.stringify({ lockfileVersion: 3, packages: { '': {}, ...entries } });
+  const peerA = { peerDependencies: { a: '^1.0.0' } };
+
+  it('positive control: the peer is listed in range', () => {
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.4.0', peer: true } }), peerA)).toBe(true);
+  });
+
+  it('a peer the lockfile does not list at all', () => {
+    expect(legacyDroppable(lockOf({}), peerA)).toBe(false);
+  });
+
+  it('a peer the lockfile lists only nested', () => {
+    expect(legacyDroppable(lockOf({ 'node_modules/z/node_modules/a': { version: '1.4.0' } }), peerA)).toBe(false);
+  });
+
+  it('a peer listed outside its range', () => {
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '2.0.0', peer: true } }), peerA)).toBe(false);
+  });
+
+  it('a peer next to a listed dependency, the lockfile of lockfileVersion 1', () => {
+    const v1Lock = (deps: object) => JSON.stringify({ lockfileVersion: 1, dependencies: deps });
+    const body = { dependencies: { ms: '^2.0.0' }, peerDependencies: { a: '^1.0.0' } };
+    expect(legacyDroppable(v1Lock({ ms: { version: '2.1.3' } }), body)).toBe(false);
+    expect(legacyDroppable(v1Lock({ ms: { version: '2.1.3' }, a: { version: '1.4.0' } }), body)).toBe(true);
+  });
+
+  it('a peer marked optional in peerDependenciesMeta need not be listed (positive control)', () => {
+    const body = { ...peerA, peerDependenciesMeta: { a: { optional: true } } };
+    expect(legacyDroppable(lockOf({}), body)).toBe(true);
+  });
+
+  it('only optional: true exempts a peer', () => {
+    for (const meta of [{ a: { optional: false } }, { a: { optional: 'true' } }, { a: {} }, { a: true }, { a: null }, { other: { optional: true } }]) {
+      expect(legacyDroppable(lockOf({}), { ...peerA, peerDependenciesMeta: meta })).toBe(false);
+    }
+  });
+
+  it('an optional peer exempts only itself', () => {
+    const body = { peerDependencies: { a: '^1.0.0', b: '^1.0.0' }, peerDependenciesMeta: { a: { optional: true } } };
+    expect(legacyDroppable(lockOf({}), body)).toBe(false);
+    expect(legacyDroppable(lockOf({ 'node_modules/b': { version: '1.0.0' } }), body)).toBe(true);
+  });
+
+  it('peerDependenciesMeta exempts a peer only, not a dependency of the same name', () => {
+    const body = { dependencies: { a: '^1.0.0' }, peerDependenciesMeta: { a: { optional: true } } };
+    expect(legacyDroppable(lockOf({}), body)).toBe(false);
+  });
+
+  it('peerDependenciesMeta that is not an object makes the manifest unread and blocks the drop', () => {
+    for (const meta of [['a'], 'a', null, 1]) {
+      expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.0.0' } }), { ...peerA, peerDependenciesMeta: meta })).toBe(false);
+    }
+  });
+
+  it('the additions stay when a peer blocks the drop', () => {
+    const { m, l } = withLegacy(lockOf({}), peerA);
+    expect(versions(resolve(m, l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+});
+
+describe('overrides: a plain string override must be reflected in the own lockfile', () => {
+  const lockOf = (entries: Record<string, unknown>) =>
+    JSON.stringify({ lockfileVersion: 3, packages: { '': {}, ...entries } });
+  const leftEntry = { 'node_modules/left': { version: '1.0.0' } };
+  const withOverrides = (overrides: unknown) => ({ dependencies: { left: '^1.0.0' }, overrides });
+  const ok = (entries: Record<string, unknown>, overrides: unknown) =>
+    legacyDroppable(lockOf({ ...leftEntry, ...entries }), withOverrides(overrides));
+
+  it('positive control: every entry of the overridden name satisfies the override', () => {
+    expect(ok({ 'node_modules/ms': { version: '2.1.3' }, 'node_modules/left/node_modules/ms': { version: '2.1.3' } }, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('no overrides, an empty overrides object, and an override of a name the lockfile lacks', () => {
+    expect(legacyDroppable(lockOf(leftEntry), { dependencies: { left: '^1.0.0' } })).toBe(true);
+    expect(ok({}, {})).toBe(true);
+    expect(ok({}, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('a range override is satisfied by a version inside it', () => {
+    expect(ok({ 'node_modules/ms': { version: '2.1.3' } }, { ms: '^2.1.0' })).toBe(true);
+    expect(ok({ 'node_modules/ms': { version: '2.0.0' } }, { ms: '^2.1.0' })).toBe(false);
+  });
+
+  it('a top-level entry outside the override (stale lockfile)', () => {
+    expect(ok({ 'node_modules/ms': { version: '2.1.2' } }, { ms: '2.1.3' })).toBe(false);
+  });
+
+  it('a nested entry outside the override', () => {
+    expect(ok({ 'node_modules/ms': { version: '2.1.3' }, 'node_modules/left/node_modules/ms': { version: '2.0.0' } }, { ms: '2.1.3' })).toBe(false);
+  });
+
+  it('an entry installed under an alias key (name field) outside the override', () => {
+    expect(ok({ 'node_modules/old-ms': { name: 'ms', version: '2.0.0' } }, { ms: '2.1.3' })).toBe(false);
+    expect(ok({ 'node_modules/old-ms': { name: 'ms', version: '2.1.3' } }, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('a workspace folder entry that names the overridden package', () => {
+    expect(ok({ 'packages/ms': { name: 'ms', version: '2.0.0' } }, { ms: '2.1.3' })).toBe(false);
+  });
+
+  it('an entry named after another package is not an entry of the overridden name', () => {
+    expect(ok({ 'node_modules/ms': { name: 'other', version: '2.0.0' } }, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('a name field that is not a string could rename the entry: not locked', () => {
+    expect(ok({ 'node_modules/ms': { name: 5, version: '2.1.3' } }, { ms: '2.1.3' })).toBe(false);
+    expect(ok({ 'node_modules/ms': { name: '', version: '2.1.3' } }, { ms: '2.1.3' })).toBe(false);
+  });
+
+  it('an entry of the overridden name without a readable version', () => {
+    for (const entry of [{ resolved: 'git+ssh://x' }, {}, { version: 2 }, { version: null }, { version: 'github:o/ms#abc' }, { version: '2.1.3-beta.1' }]) {
+      expect(ok({ 'node_modules/ms': entry }, { ms: '2.1.3' })).toBe(false);
+    }
+  });
+
+  it('an entry of the overridden name that is not an object', () => {
+    expect(ok({ 'node_modules/ms': '2.1.3' }, { ms: '2.1.3' })).toBe(false);
+    expect(ok({ 'node_modules/ms': null }, { ms: '2.1.3' })).toBe(false);
+  });
+
+  it('a link entry installs no registry version and is skipped', () => {
+    expect(ok({ 'node_modules/ms': { link: true, resolved: 'vendor/ms' } }, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('an entry of another name is not checked, and a non-object entry of another name does not matter', () => {
+    expect(ok({ 'node_modules/other': { version: '9.9.9' }, 'node_modules/odd': 'x' }, { ms: '2.1.3' })).toBe(true);
+  });
+
+  it('every override is checked, not only the first', () => {
+    const entries = { 'node_modules/ms': { version: '2.1.3' }, 'node_modules/qs': { version: '6.0.0' } };
+    expect(ok(entries, { ms: '2.1.3', qs: '6.0.0' })).toBe(true);
+    expect(ok(entries, { ms: '2.1.3', qs: '6.1.0' })).toBe(false);
+    expect(ok(entries, { qs: '6.1.0', ms: '2.1.3' })).toBe(false);
+  });
+
+  it('a scoped name is an overridable name', () => {
+    expect(ok({ 'node_modules/@s/ms': { version: '2.1.3' } }, { '@s/ms': '2.1.3' })).toBe(true);
+    expect(ok({ 'node_modules/@s/ms': { version: '2.0.0' } }, { '@s/ms': '2.1.3' })).toBe(false);
+  });
+
+  describe('an override that is not a plain string spec: the manifest is not locked', () => {
+    const entries = { 'node_modules/ms': { version: '2.1.3' } };
+    for (const [label, overrides] of [
+      ['a nested object', { ms: { '.': '2.1.3' } }],
+      ['a nested object under another package', { left: { ms: '2.1.3' } }],
+      ['a number', { ms: 2 }],
+      ['a boolean', { ms: true }],
+      ['null', { ms: null }],
+      ['an array', { ms: ['2.1.3'] }],
+      ['a $ reference', { ms: '$ms' }],
+      ['an empty spec', { ms: '' }],
+      ['a blank spec', { ms: '  ' }],
+      ['an alias spec', { ms: 'npm:other@2.1.3' }],
+      ['a git spec', { ms: 'github:o/ms#v2' }],
+      ['a tag spec', { ms: 'latest' }],
+      ['a key with a version selector', { 'ms@^2': '2.1.3' }],
+      ['a scoped key with a version selector', { '@s/ms@^2': '2.1.3' }],
+      ['the self key', { '.': '2.1.3' }],
+      ['an overrides value that is a string', 'ms'],
+      ['an overrides value that is an array', ['ms']],
+      ['an overrides value that is null', null],
+      ['one plain and one nested entry', { qs: '6.0.0', ms: { '.': '2.1.3' } }],
+    ] as const) {
+      it(label, () => {
+        expect(ok(entries, overrides)).toBe(false);
+      });
+    }
+  });
+
+  describe('lockfileVersion 1 own lockfile', () => {
+    const v1Lock = (deps: Record<string, unknown>) => JSON.stringify({ lockfileVersion: 1, dependencies: deps });
+    const v1ok = (deps: Record<string, unknown>, overrides: unknown, leftExtra: object = {}) =>
+      legacyDroppable(v1Lock({ left: { version: '1.0.0', ...leftExtra }, ...deps }), withOverrides(overrides));
+
+    it('a top-level and a nested entry that satisfy the override', () => {
+      expect(v1ok({ ms: { version: '2.1.3' } }, { ms: '2.1.3' }, { dependencies: { ms: { version: '2.1.3' } } })).toBe(true);
+    });
+
+    it('a top-level entry outside the override', () => {
+      expect(v1ok({ ms: { version: '2.1.2' } }, { ms: '2.1.3' })).toBe(false);
+    });
+
+    it('a nested entry outside the override', () => {
+      expect(v1ok({ ms: { version: '2.1.3' } }, { ms: '2.1.3' }, { dependencies: { ms: { version: '2.0.0' } } })).toBe(false);
+    });
+
+    it('an entry reached through an npm: alias version is checked under its real name', () => {
+      expect(v1ok({ 'old-ms': { version: 'npm:ms@2.0.0' } }, { ms: '2.1.3' })).toBe(false);
+      expect(v1ok({ 'old-ms': { version: 'npm:ms@2.1.3' } }, { ms: '2.1.3' })).toBe(true);
+      expect(v1ok({ 'old-ms': { version: 'npm:other@2.0.0' } }, { ms: '2.1.3' })).toBe(true);
+    });
+
+    it('an alias version that cannot be parsed could install the overridden name: not locked', () => {
+      expect(v1ok({ 'old-ms': { version: 'npm:' } }, { ms: '2.1.3' })).toBe(false);
+    });
+
+    it('an entry of the overridden name that is not an object or has no semver version', () => {
+      expect(v1ok({ ms: 'x' }, { ms: '2.1.3' })).toBe(false);
+      expect(v1ok({ ms: { version: 'github:o/ms#abc' } }, { ms: '2.1.3' })).toBe(false);
+      expect(v1ok({ ms: {} }, { ms: '2.1.3' })).toBe(false);
+    });
+
+    it('an entry of another name that is not an object does not matter to the override check', () => {
+      expect(v1ok({ other: 'x' }, { ms: '2.1.3' })).toBe(true);
+    });
+  });
+
+  it('the legacy dependencies mirror of a v2 lockfile is checked too', () => {
+    const lock = (mirror: object) =>
+      JSON.stringify({ lockfileVersion: 2, packages: { '': {}, ...leftEntry, 'node_modules/ms': { version: '2.1.3' } }, dependencies: mirror });
+    const body = withOverrides({ ms: '2.1.3' });
+    expect(legacyDroppable(lock({ left: { version: '1.0.0' }, ms: { version: '2.1.3' } }), body)).toBe(true);
+    expect(legacyDroppable(lock({ left: { version: '1.0.0', dependencies: { ms: { version: '2.0.0' } } } }), body)).toBe(false);
+  });
+
+  it('overrides do not stop the additions', () => {
+    const { m, l } = withLegacy(lockOf({ ...leftEntry, 'node_modules/ms': { version: '2.0.0' } }), withOverrides({ ms: '2.1.3' }));
+    const r = resolve(m, l);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    expect(versions(r)).toEqual(['left@1.0.0', 'vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it('overrides of a manifest that has no lockfile of its own still block (the rule needs a lockfile)', () => {
+    const m = { ...manifests(), 'plug/package.json': pkg({ name: 'plug', overrides: { vite: '7.3.5' } }) };
+    expect(droppable(m)).toBe(false);
+  });
+});
+
+describe('npm lock-validity semantics: loose parsing, no includePrerelease', () => {
+  const lockOf = (entries: Record<string, unknown>) =>
+    JSON.stringify({ lockfileVersion: 3, packages: { '': {}, ...entries } });
+  const viteLockedAt = (lockVersion: string, spec: string) => {
+    const m = { ...manifests(), 'frontend/package.json': pkg({ dependencies: { vite: spec } }) };
+    const l = { ...locks(), 'frontend/package-lock.json': v3({ 'node_modules/vite': lockVersion }) };
+    return resolve(m, l);
+  };
+
+  it('a prerelease install of a stable-range declaration is not narrow and keeps the floor', () => {
+    const r = viteLockedAt('7.4.0-beta.1', '^7.3.5');
+    expect(versions(r)).toEqual(['vite@8.3.5']);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+  });
+
+  it('control: the stable version of the same range is narrow', () => {
+    const r = viteLockedAt('7.4.0', '^7.3.5');
+    expect(versions(r)).toEqual(['vite@7.4.0', 'vite@8.3.5']);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(true);
+  });
+
+  it('a prerelease of the release the range names is narrow', () => {
+    expect(versions(viteLockedAt('7.3.5-beta.2', '^7.3.5-beta.1'))).toEqual(['vite@7.3.5-beta.2', 'vite@8.3.5']);
+  });
+
+  it('a lockfile version a loose parse would accept but that is no semver version adds nothing', () => {
+    const r = viteLockedAt('07.3.7', '^7.3.5');
+    expect(versions(r)).toEqual(['vite@8.3.5']);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+  });
+
+  it('a range only a loose parse accepts counts as a plain range', () => {
+    const r = viteLockedAt('7.3.7', '>=7.3.5beta');
+    expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it('a listed dependency is judged loosely, without includePrerelease', () => {
+    const body = { dependencies: { a: '^1.0.0' } };
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0-rc.1' } }), body)).toBe(false);
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '1.2.0' } }), body)).toBe(true);
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '01.2.0' } }), body)).toBe(true);
+    // A range that only a loose parse reads is still checked, not waved through.
+    expect(legacyDroppable(lockOf({ 'node_modules/a': { version: '0.9.0' } }), { dependencies: { a: '>=1.0.0beta' } })).toBe(false);
+  });
+});
+
+describe('a lockfile entry with an edge to a name the same lockfile has no entry for', () => {
+  const lockOf = (entries: Record<string, unknown>) =>
+    JSON.stringify({ lockfileVersion: 3, packages: { '': {}, ...entries } });
+  // `legacy/` installs left, which depends on vite. The other two lockfiles
+  // always hold a vite entry, so an edge the legacy lockfile cannot resolve is
+  // not rescued by an entry in another lockfile.
+  const withEdge = (entries: Record<string, unknown>, left: object = { dependencies: { vite: '^7.0.0' } }) =>
+    legacyDroppable(lockOf({ 'node_modules/left': { version: '1.0.0', ...left }, ...entries }));
+
+  it('positive control: the edge target has a top-level entry', () => {
+    expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } })).toBe(true);
+  });
+
+  it('a dependencies edge without any entry of that name: the name is unknown, its floor stays', () => {
+    expect(withEdge({})).toBe(false);
+  });
+
+  it('an optionalDependencies edge without an entry', () => {
+    expect(withEdge({}, { optionalDependencies: { vite: '^7.0.0' } })).toBe(false);
+  });
+
+  it('the edge target installed only nested counts as having an entry', () => {
+    expect(withEdge({ 'node_modules/left/node_modules/vite': { version: '6.0.0' } })).toBe(true);
+  });
+
+  it('the name is unknown for every version, not only the one the edge asks for', () => {
+    const { m, l } = withLegacy(lockOf({ 'node_modules/left': { version: '1.0.0', dependencies: { vite: '^7.0.0' } } }));
+    const r = resolve(m, l);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    expect(r.dropSafe('vite', '1.2.3')).toBe(false);
+  });
+
+  it('only the missing name is unknown: another name does not lose its drop', () => {
+    expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } }, { dependencies: { ms: '^2.0.0' } })).toBe(true);
+  });
+
+  it('the edge of the root entry counts too', () => {
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: { '': { dependencies: { vite: '^7.0.0' } }, 'node_modules/left': { version: '1.0.0' } },
+    });
+    expect(legacyDroppable(lock)).toBe(false);
+  });
+
+  it('the edge of a workspace folder entry counts too', () => {
+    expect(withEdge({ 'packages/w': { name: 'w', version: '1.0.0', dependencies: { vite: '^7.0.0' } } }, {})).toBe(false);
+  });
+
+  describe('aliases resolve by key name', () => {
+    it('an alias edge whose alias key has an entry is accounted for', () => {
+      const entries = { 'node_modules/old-vite': { name: 'vite', version: '7.3.9' } };
+      expect(withEdge(entries, { dependencies: { 'old-vite': 'npm:vite@^7.0.0' } })).toBe(true);
+    });
+
+    it('an alias edge without an entry makes the real package unknown', () => {
+      expect(withEdge({}, { dependencies: { 'old-vite': 'npm:vite@^7.0.0' } })).toBe(false);
+    });
+
+    it('an alias edge that cannot be parsed could mean any package: nothing is provable', () => {
+      expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } }, { dependencies: { 'old-vite': 'npm:' } })).toBe(false);
+    });
+
+    it('an alias entry does not stand in for the real name an edge asks for', () => {
+      expect(withEdge({ 'node_modules/old-vite': { name: 'vite', version: '7.3.9' } })).toBe(false);
+    });
+  });
+
+  describe('edges that need no entry', () => {
+    it('an entry the lockfile lists as bundled', () => {
+      const bundled = { 'node_modules/left/node_modules/gone': { version: '1.0.0', inBundle: true, dependencies: { vite: '^7.0.0' } } };
+      expect(withEdge(bundled, {})).toBe(true);
+    });
+
+    it('control: the same entry without the bundled flag, or with a flag that is not true', () => {
+      const entry = { version: '1.0.0', dependencies: { vite: '^7.0.0' } };
+      expect(withEdge({ 'node_modules/left/node_modules/gone': entry }, {})).toBe(false);
+      expect(withEdge({ 'node_modules/left/node_modules/gone': { ...entry, inBundle: false } }, {})).toBe(false);
+    });
+
+    it('a peerDependencies edge (the lockfile may leave an optional peer out)', () => {
+      expect(withEdge({}, { peerDependencies: { vite: '^7.0.0' } })).toBe(true);
+    });
+
+    it('a lockfileVersion 1 lockfile has no edge map to read', () => {
+      const v1Lock = JSON.stringify({ lockfileVersion: 1, dependencies: { left: { version: '1.0.0', requires: { vite: '^7.0.0' } } } });
+      expect(legacyDroppable(v1Lock)).toBe(true);
+    });
+  });
+
+  it('an edge map that is not an object makes the lockfile unreadable: nothing is provable', () => {
+    expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } }, { dependencies: ['vite'] })).toBe(false);
+    expect(withEdge({ 'node_modules/vite': { version: '6.0.0' } }, { optionalDependencies: 'vite' })).toBe(false);
+  });
+
+  it('a missing edge target does not stop the additions', () => {
+    const { m, l } = withLegacy(lockOf({ 'node_modules/left': { version: '1.0.0', dependencies: { vite: '^7.0.0' } } }));
+    expect(versions(resolve(m, l))).toEqual(['left@1.0.0', 'vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  describe('the edges count toward the total node budget', () => {
+    // The hub entry has one edge to each of K entries (and K entries): the
+    // lockfile holds 2K + 2 nodes (root, hub, K entries, K edges), the two base
+    // lockfiles 4 more. K is chosen so the total is exactly the budget; a
+    // `selfEdge` adds one more edge (hub to itself, which has an entry).
+    const K = (MAX_LOCK_INDEX_NODES - 6) / 2;
+    const edgeHeavy = (selfEdge: boolean) => {
+      const edges: Record<string, string> = {};
+      const packages: Record<string, unknown> = { '': {} };
+      for (let j = 0; j < K; j++) {
+        edges[`p${j}`] = '*';
+        packages[`node_modules/p${j}`] = { version: '1.0.0' };
+      }
+      if (selfEdge) edges.hub = '*';
+      packages['node_modules/hub'] = { version: '1.0.0', dependencies: edges };
+      const m = { ...manifests(), 'big/package.json': pkg({ name: 'big' }) };
+      const l = { ...locks(), 'big/package-lock.json': JSON.stringify({ lockfileVersion: 3, packages }) };
+      return { m, l };
+    };
+
+    it('exactly at the budget the lockfile is indexed', () => {
+      const { m, l } = edgeHeavy(false);
+      expect(droppable(m, l)).toBe(true);
+    }, 30_000);
+
+    it('one edge more makes every name not provable', () => {
+      const { m, l } = edgeHeavy(true);
+      expect(droppable(m, l)).toBe(false);
+    }, 30_000);
+  });
+});
+
+describe('a link or renamed lockfile entry adds nothing', () => {
+  const additions = (frontendVite: object) => {
+    const l = { ...locks(), 'frontend/package-lock.json': v3({ 'node_modules/vite': frontendVite as never }) };
+    return versions(resolve(manifests(), l));
+  };
+
+  it('control: a plain entry adds its version', () => {
+    expect(additions({ version: '7.3.7' })).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it('a link entry that carries a version', () => {
+    expect(additions({ link: true, version: '7.3.7', resolved: '../vite-local' })).toEqual(['vite@8.3.5']);
+  });
+
+  it('an entry renamed by its name field', () => {
+    expect(additions({ name: 'vite-fork', version: '7.3.7' })).toEqual(['vite@8.3.5']);
+  });
+
+  it('an entry whose name field repeats its key still adds its version', () => {
+    expect(additions({ name: 'vite', version: '7.3.7' })).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+});
+
 describe('install policy files: .npmrc and packageManager', () => {
-  const facts = (npmrcPaths: string[]) => ({ foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths });
+  const facts = (npmrcPaths: string[], packageManagerConfigPaths: string[] = []) => ({
+    foreignLockfilePaths: [],
+    manifestsCapped: false,
+    npmrcPaths,
+    packageManagerConfigPaths,
+  });
 
   it('positive control: no .npmrc and no packageManager field', () => {
     expect(droppable(manifests(), locks(), { observedTreeFacts: facts([]) })).toBe(true);
@@ -1146,6 +1587,52 @@ describe('install policy files: .npmrc and packageManager', () => {
       expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
     });
   }
+
+  for (const path of ['pnpm-workspace.yaml', 'a/.yarnrc.yml', 'tools/deep/.pnpmfile.cjs']) {
+    it(`${path} anywhere in the tree: no drops, the additions stay`, () => {
+      const r = resolve(manifests(), locks(), { observedTreeFacts: facts([], [path]) });
+      expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+      expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+  }
+
+  it('facts without a package manager config list count as such a file being present', () => {
+    const noList = { foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [] } as unknown as NarrowNpmInputs['observedTreeFacts'];
+    const r = resolve(manifests(), locks(), { observedTreeFacts: noList });
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+    expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  describe('devEngines.packageManager pins a package manager like packageManager', () => {
+    const withDevEngines = (devEngines: unknown) => ({
+      ...manifests(),
+      'frontend/package.json': pkg({ name: 'frontend', devEngines, dependencies: { vite: '^7.3.5' } }),
+    });
+
+    it('a devEngines.packageManager entry: no drops, the additions stay', () => {
+      for (const devEngines of [{ packageManager: { name: 'yarn', version: '4.1.0' } }, { packageManager: [{ name: 'pnpm' }] }, { packageManager: null }]) {
+        const r = resolve(withDevEngines(devEngines));
+        expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+        expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+      }
+    });
+
+    it('devEngines without a packageManager entry (a runtime pin) does not block', () => {
+      expect(droppable(withDevEngines({ runtime: { name: 'node', version: '>=20' } }))).toBe(true);
+      expect(droppable(withDevEngines({}))).toBe(true);
+    });
+
+    it('a devEngines that is not an object cannot be read: no drops', () => {
+      for (const devEngines of ['yarn', ['packageManager'], null, 3]) {
+        expect(droppable(withDevEngines(devEngines))).toBe(false);
+      }
+    });
+
+    it('in a manifest that does not declare the name', () => {
+      const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools', devEngines: { packageManager: { name: 'bun' } } }) };
+      expect(droppable(m, { ...locks(), 'tools/package-lock.json': v3({}) })).toBe(false);
+    });
+  });
 
   it('any value of packageManager counts, even an npm one or null', () => {
     for (const value of ['npm@10.8.0', null, '']) {
@@ -1223,12 +1710,12 @@ describe('resolveNarrowNpm never throws', () => {
 describe('selectForeignLockfilePaths', () => {
   const blobs = (...paths: string[]) => paths.map((path) => ({ path, type: 'blob' }));
 
-  it('finds the five foreign lockfile kinds at any depth', () => {
+  it('finds the six foreign lockfile kinds at any depth', () => {
     expect(
       selectForeignLockfilePaths(
-        blobs('yarn.lock', 'a/pnpm-lock.yaml', 'b/c/bun.lock', 'bun.lockb', 'd/npm-shrinkwrap.json', 'package-lock.json', 'package.json'),
+        blobs('yarn.lock', 'a/pnpm-lock.yaml', 'b/c/bun.lock', 'bun.lockb', 'd/npm-shrinkwrap.json', 'e/deno.lock', 'package-lock.json', 'package.json'),
       ),
-    ).toEqual(['yarn.lock', 'a/pnpm-lock.yaml', 'b/c/bun.lock', 'bun.lockb', 'd/npm-shrinkwrap.json']);
+    ).toEqual(['yarn.lock', 'a/pnpm-lock.yaml', 'b/c/bun.lock', 'bun.lockb', 'd/npm-shrinkwrap.json', 'e/deno.lock']);
   });
 
   it('matches names case-insensitively and ignores directories named like a lockfile', () => {
@@ -1237,6 +1724,26 @@ describe('selectForeignLockfilePaths', () => {
 
   it('skips vendored, build and fixture directories like the other lockfile selectors', () => {
     expect(selectForeignLockfilePaths(blobs('node_modules/x/yarn.lock', 'tests/fixtures/y/pnpm-lock.yaml', 'dist/bun.lock'))).toEqual([]);
+  });
+});
+
+describe('selectPackageManagerConfigPaths', () => {
+  const blobs = (...paths: string[]) => paths.map((path) => ({ path, type: 'blob' }));
+
+  it('finds pnpm-workspace.yaml, .yarnrc.yml and .pnpmfile.cjs at any depth', () => {
+    expect(
+      selectPackageManagerConfigPaths(
+        blobs('pnpm-workspace.yaml', 'a/.yarnrc.yml', 'b/c/.pnpmfile.cjs', 'package.json', '.yarnrc', 'pnpm-workspace.yml', '.yarnrc.yml.bak', 'yarnrc.yml'),
+      ),
+    ).toEqual(['pnpm-workspace.yaml', 'a/.yarnrc.yml', 'b/c/.pnpmfile.cjs']);
+  });
+
+  it('matches names case-insensitively and ignores directories named like one', () => {
+    expect(selectPackageManagerConfigPaths([{ path: 'x/.YarnRC.yml', type: 'blob' }, { path: '.pnpmfile.cjs', type: 'tree' }])).toEqual(['x/.YarnRC.yml']);
+  });
+
+  it('skips vendored, build and fixture directories like the lockfile selection', () => {
+    expect(selectPackageManagerConfigPaths(blobs('node_modules/x/.yarnrc.yml', 'tests/fixtures/y/pnpm-workspace.yaml', 'dist/.pnpmfile.cjs'))).toEqual([]);
   });
 });
 

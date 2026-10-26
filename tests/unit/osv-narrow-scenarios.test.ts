@@ -488,6 +488,113 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.7', 'vite@8.3.5'],
     why: 'an .npmrc under node_modules is not read, like the manifests there; floor 7.3.5 installed in no lockfile the scan reads',
   }),
+
+  // ---- peer dependencies, overrides, loose lockfile validity, edges, link and
+  // renamed entries, other package managers' files ----
+  negPeerUnlistedTransitive: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ has a peer dependency its lockfile does not list; npm installs peers, so the project is not locked',
+  }),
+  negPeerUnlistedTransitiveV1: narrow({
+    base: ['ms@2.1.3', 'vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ has a lockfileVersion 1 lockfile that lists its dependency ms but not its peer dependency',
+  }),
+  negPeerOutOfRange: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile lists the peer at 1.0.0 but the manifest asks for ^2.0.0: stale lockfile',
+  }),
+  peerListedInRange: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'positive control: extra/ lists its peer in range, so it is locked; floor 7.3.5 installed nowhere',
+  }),
+  optionalPeerNotListed: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'positive control: a peer marked optional in peerDependenciesMeta need not be listed; floor 7.3.5 installed nowhere',
+  }),
+  negOverridesStaleLock: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ overrides vite to 7.3.5 but its lockfile holds vite 7.3.6: the lockfile does not reflect the override',
+  }),
+  overridesReflectedInLock: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'positive control: extra/ overrides vite to 7.3.6 and its lockfile holds exactly that; floor 7.3.5 installed nowhere',
+  }),
+  negOverridesNestedObject: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ has an override written as a nested object: not a plain string spec, so its lockfile cannot be taken to reflect it',
+  }),
+  negOverridesDollarReference: narrow({
+    base: ['ms@2.1.3', 'vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ has a $ reference override',
+  }),
+  negPrereleaseStaleLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@8.3.5'],
+    why: 'frontend lockfile holds 7.4.0-beta.1, which npm does not accept for ^7.3.5 (no includePrerelease): not narrow, floor stays; backend adds 8.3.5',
+  }),
+  negLockEdgeWithoutEntry: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile has an entry that depends on vite while the lockfile has no vite entry: some vite is installed that the lockfile does not show',
+  }),
+  negLinkEntryWithVersion: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@8.3.5'],
+    why: 'frontend lockfile has vite as a link entry that carries a version: not narrow, adds nothing; backend adds 8.3.5',
+  }),
+  negEntryRenamedByNameField: same(['vite@8.3.5']),
+  negDenoLock: same(['vite@7.3.5']),
+  negPnpmWorkspaceWithoutPnpmLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a pnpm-workspace.yaml at the root: no drops',
+  }),
+  negYarnrcYmlAtRoot: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a .yarnrc.yml at the root: no drops',
+  }),
+  negPnpmfileInProject: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a .pnpmfile.cjs in backend/: no drops',
+  }),
+  negDevEnginesPackageManager: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'frontend/package.json pins a package manager through devEngines: no drops',
+  }),
+  vendoredPackageManagerConfigNotRead: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'package manager config files under node_modules and dist are not read; floor 7.3.5 installed in no lockfile the scan reads',
+  }),
 };
 
 describe('narrow npm lockfile override: end-to-end OSV query scenarios', () => {
