@@ -18,6 +18,8 @@ services:
       dockerfile: Dockerfile
     environment:
       - NODE_ENV=production
+      # Explicit V8 heap ceiling: Node otherwise derives it from the memory cap.
+      - NODE_OPTIONS=--max-old-space-size=1024
       # One variable feeds the app, the db service and the migrate service. The :-depsight
       # fallback is the password of the live database; see docs/configuration.md
       # (Rotating the database password).
@@ -31,23 +33,31 @@ services:
     restart: unless-stopped
     # Fails on any non-2xx answer, so /api/health's 503 (database unreachable) marks the
     # container unhealthy. The runner image has neither curl nor wget, hence inline Node.
-    # start_period covers a cold Next start: probes inside it never count as failures.
-    # Plain compose does not restart an unhealthy container; this is a status that
-    # `docker ps` and `docker compose ps` show, not a self-healing mechanism.
+    # The fetch gives up after 9s, inside the 10s probe timeout, so a slow answer is a
+    # failed probe and not a hung one. start_period covers a cold Next start: failures
+    # inside it do not count, and start_interval probes every 2s during it, so the first
+    # passing probe, and the end of the period, comes about 2s after the server is up
+    # (start_interval needs Docker Engine 25 or later).
+    # Plain compose does not restart an unhealthy container: the status shows in
+    # `docker ps` and `docker compose ps`, it is not a self-healing mechanism.
+    # Traefik's docker provider routes only to a healthy container: while it is starting or
+    # unhealthy (5 failed probes in a row), both routers below answer 404.
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/api/health', { signal: AbortSignal.timeout(4000) }).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+        - "fetch('http://127.0.0.1:3000/api/health', { signal: AbortSignal.timeout(9000) }).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
       interval: 30s
-      timeout: 5s
-      retries: 3
+      timeout: 10s
+      retries: 5
       start_period: 40s
+      start_interval: 2s
     # Memory cap for the running server and its scan cycles (the image build runs before
-    # the container exists and is not under this limit). Sizing: docs/configuration.md,
-    # Resource limits and log rotation.
-    mem_limit: 1g
+    # the container exists and is not under this limit). The heap is the binding limit:
+    # NODE_OPTIONS sets it to 1024 MiB, so the cap leaves 512 MiB for buffers and native
+    # memory. Sizing: docs/configuration.md, Health check, resource limits and log rotation.
+    mem_limit: 1536m
     logging: *default-logging
     labels:
       - "traefik.enable=true"

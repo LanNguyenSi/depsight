@@ -104,6 +104,9 @@ const memoryLimit = (service) => {
   return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
 };
 
+// `.ok` (fetch's 2xx flag), or both bounds of an explicit test: status >= 200 and < 300.
+const ACCEPTS_ONLY_2XX = /\.ok\b|status\s*>=?\s*200\b[^;]*status\s*<=?\s*(299|300)\b/;
+
 // Rotation and limits for every service (migrate included), and the app's healthcheck.
 // Without rotation the json-file driver grows one file per container for as long as it
 // runs; without a memory limit one service can take the host's memory from the database.
@@ -128,6 +131,14 @@ function checkOperations(file, cfg) {
     fail(file, 'app has no healthcheck');
   } else {
     if (!command.includes('/api/health')) fail(file, 'app healthcheck does not probe /api/health');
+    // The probe must judge the answer: r.ok (any 2xx), or an explicit 2xx range test.
+    // Without it a 503 from /api/health would still exit 0 and the container stay healthy.
+    if (!ACCEPTS_ONLY_2XX.test(command)) {
+      fail(
+        file,
+        'app healthcheck does not fail on a non-2xx answer (expected r.ok or a 200 to 299 status test)',
+      );
+    }
     if (!check.start_period || /^0+(\.0+)?[a-z]*$/.test(String(check.start_period))) {
       fail(file, 'app healthcheck has no start_period, so a cold start counts as failures');
     }
