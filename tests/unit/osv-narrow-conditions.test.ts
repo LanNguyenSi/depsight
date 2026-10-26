@@ -8,9 +8,13 @@
  * Drop rule conditions (a baseline entry is removed only if all hold):
  *   - the tree walk was complete
  *   - no other package manager's lockfile exists anywhere
- *   - every manifest the scan reads has a readable lockfile of its own
+ *   - no `.npmrc` exists anywhere and no manifest has a `packageManager` field
+ *   - every manifest the scan reads is locked: its own lockfile has a known
+ *     shape and lists every dependency, devDependency and optionalDependency in
+ *     range
  *   - every manifest declaring the name is narrow for it
- *   - the baseline version is installed by no fetched lockfile, anywhere
+ *   - the baseline version is installed by no fetched lockfile, anywhere, and
+ *     every lockfile entry that names a package carries a semver version
  *
  * In the negative tests the baseline floor `vite@7.3.5` must stay in the
  * result; where the violation leaves other manifests narrow, their installed
@@ -95,12 +99,18 @@ describe('drop rule: tree walk complete', () => {
   it('detectEcosystem records the cap and the foreign lockfiles, and nothing when the walk is incomplete', async () => {
     loadRepo({ ...SCENARIOS.negYarnLockElsewhere, extraManifests: 100 });
     const capped = await detectEcosystem('t', 'o', 'r', 'main');
-    expect(capped.observedTreeFacts).toEqual({ foreignLockfilePaths: ['tools/yarn.lock'], manifestsCapped: true });
+    expect(capped.observedTreeFacts).toEqual({ foreignLockfilePaths: ['tools/yarn.lock'], manifestsCapped: true, npmrcPaths: [] });
     expect(capped.manifestPaths).toHaveLength(100);
 
     loadRepo(SCENARIOS.viteTwoProjects);
     const whole = await detectEcosystem('t', 'o', 'r', 'main');
-    expect(whole.observedTreeFacts).toEqual({ foreignLockfilePaths: [], manifestsCapped: false });
+    expect(whole.observedTreeFacts).toEqual({ foreignLockfilePaths: [], manifestsCapped: false, npmrcPaths: [] });
+
+    loadRepo(SCENARIOS.negNpmrcInProject);
+    const withNpmrc = await detectEcosystem('t', 'o', 'r', 'main');
+    expect(withNpmrc.observedTreeFacts?.npmrcPaths).toEqual(['frontend/.npmrc']);
+    loadRepo(SCENARIOS.vendoredNpmrcNotRead);
+    expect((await detectEcosystem('t', 'o', 'r', 'main')).observedTreeFacts?.npmrcPaths).toEqual([]);
 
     loadRepo(SCENARIOS.negTruncatedTree);
     const truncated = await detectEcosystem('t', 'o', 'r', 'main');
@@ -132,6 +142,49 @@ describe('drop rule: no other package manager lockfile anywhere', () => {
       expect(await scan(name)).toEqual(['vite@7.3.5']);
     });
   }
+});
+
+describe('drop rule: no .npmrc and no packageManager field', () => {
+  for (const name of [
+    'negNpmrcInProject',
+    'negNpmrcAtRoot',
+    'negPackageManagerYarnField',
+    'negPackageManagerInUnrelatedManifest',
+  ]) {
+    it(`${name}: the baseline floor stays and the narrow versions are still added`, async () => {
+      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
+    });
+  }
+
+  it('an .npmrc in a vendored directory is not read: the floor is still dropped', async () => {
+    expect(await scan('vendoredNpmrcNotRead')).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+});
+
+describe('drop rule: every project is locked and every lockfile entry is readable', () => {
+  for (const name of [
+    'negV1GitVersionTransitive',
+    'negV1TarballVersionTransitive',
+    'negV1FileVersionTransitive',
+    'negV3EntryWithoutVersion',
+    'negV3EntryNotAnObject',
+    'negUnknownLockfileVersion',
+    'negLockfileVersion3WithoutPackages',
+    'negStaleLockMissingDeclaredDep',
+    'negStaleLockOneDepAddedLater',
+    'negStaleLockRangeUnsatisfied',
+    'negStaleLockMissingDevDep',
+    'negStaleLockMissingOptionalDep',
+    'negStaleV1LockMissingDeclaredDep',
+  ]) {
+    it(`${name}: the baseline floor stays`, async () => {
+      expect(await scan(name)).toContain('vite@7.3.5');
+    });
+  }
+
+  it('a project whose lockfile lists everything it declares does not block the drop', async () => {
+    expect(await scan('extraProjectCompleteLock')).toEqual(['vite@7.3.7', 'vite@8.3.5', 'x@1.2.0', 'y@1.0.0']);
+  });
 });
 
 describe('drop rule: every declaring manifest is narrow for the name', () => {

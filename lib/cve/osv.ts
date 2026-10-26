@@ -490,11 +490,15 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * adds, for repos of separate projects each with its own package-lock.json,
  * the version each manifest's own lockfile installs, and removes a chain
  * entry only when `resolveNarrowNpm` proves its version is installed by no
- * package-lock.json the scan reads (every declaring manifest narrow, every
- * manifest with a lockfile of its own, complete tree, no other package
- * manager's lockfile; conditions in manifest-discovery.ts; vendored, build and
- * fixture directories are not read). The result
- * can therefore hold several entries for one name, one per installed version.
+ * package-lock.json the scan reads. The proof needs everything to be
+ * positively accounted for (conditions in manifest-discovery.ts): a complete
+ * tree; no other package manager's lockfile, no `.npmrc`, no `packageManager`
+ * field; every manifest locked (an own lockfile of a known shape that lists
+ * each declared dependency in range); every declaring manifest narrow; and
+ * every lockfile entry that names a package readable as a semver version (an
+ * unreadable one makes the name unknown, so it is never removed). Vendored,
+ * build and fixture directories are not read. The result can therefore hold
+ * several entries for one name, one per installed version.
  * Npm workspaces (any `workspaces` key), repos with a yarn.lock, pnpm-lock.yaml,
  * bun lockfile or npm-shrinkwrap.json, and trees or manifest lists that could
  * not be read completely keep the chain result as it was.

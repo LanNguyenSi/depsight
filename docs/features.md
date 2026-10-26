@@ -65,14 +65,22 @@ A complete list of what depsight does today, beyond the headline value props in 
     lockfile installs: a package installed at different versions in different
     projects is queried at each installed version, and the repository-wide
     entry for it (a manifest floor that no project installs) is removed only
-    when no `package-lock.json` the scan reads installs it (vendored, build and
-    fixture directories are not read): complete git tree, no `yarn.lock`,
-    `pnpm-lock.yaml`, `bun.lock`, `bun.lockb` or `npm-shrinkwrap.json`, every
-    `package.json` the scan reads has a readable lockfile of its own, no
-    `workspaces` key in or above any declaring manifest (dependencies, dev,
-    optional, peer or bundled), and every declaring manifest's lockfile
-    satisfies its declared range. Npm workspace monorepos, repositories with
-    another package manager's lockfile and truncated trees keep the
+    when everything the scan reads is positively accounted for and no
+    `package-lock.json` the scan reads installs it (vendored, build and fixture
+    directories are not read); anything that cannot be read or checked keeps the
+    entry. That needs a complete git tree, no `yarn.lock`, `pnpm-lock.yaml`,
+    `bun.lock`, `bun.lockb` or `npm-shrinkwrap.json`, no `.npmrc` and no
+    `packageManager` field in a manifest the scan reads, every `package.json`
+    the scan reads locked (a `package-lock.json` of its own with a known shape
+    that lists each of its dependencies, dev dependencies and optional
+    dependencies in the declared range; a project with a stale or missing
+    lockfile installs fresh), no `workspaces` key in or above any declaring
+    manifest (dependencies, dev, optional, peer or bundled), every declaring
+    manifest's lockfile satisfying its declared range, and every lockfile entry
+    that names a package carrying a semver version (a git, tarball or `file:`
+    version makes the name unknown, and an unknown name is kept). Npm workspace
+    monorepos, repositories with another package manager's lockfile and
+    truncated trees keep the
     repository-wide result. It is not a
     backstop for a TRANSITIVE-only package (outside that query set, e.g. a
     dependency pulled in only via another devDependency) — that gap is

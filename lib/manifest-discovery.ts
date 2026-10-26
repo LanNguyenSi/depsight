@@ -111,6 +111,12 @@ export interface ObservedTreeFacts {
   foreignLockfilePaths: string[];
   /** The manifest list hit MAX_MANIFESTS, so manifests beyond the cut are unknown. */
   manifestsCapped: boolean;
+  /**
+   * Paths of every `.npmrc` in the (non-excluded) tree. An `.npmrc` can change
+   * what npm installs (`package-lock=false`, registry and `omit` settings), so
+   * its presence anywhere means the lockfiles cannot be taken as the install.
+   */
+  npmrcPaths: string[];
 }
 
 /**
@@ -125,6 +131,20 @@ export function selectForeignLockfilePaths(entries: TreeEntry[]): string[] {
     if (EXCLUDED_DIR.test('/' + entry.path)) continue;
     const base = entry.path.split('/').pop();
     if (base && FOREIGN_LOCKFILE_NAMES.has(base.toLowerCase())) out.push(entry.path);
+  }
+  return out;
+}
+
+/**
+ * Pure: the `.npmrc` files in a flat git tree, with the same vendored/build/
+ * fixture exclusion as `selectLockfilePaths`.
+ */
+export function selectNpmrcPaths(entries: TreeEntry[]): string[] {
+  const out: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== 'blob' || !entry.path) continue;
+    if (EXCLUDED_DIR.test('/' + entry.path)) continue;
+    if (entry.path.split('/').pop()?.toLowerCase() === '.npmrc') out.push(entry.path);
   }
   return out;
 }
@@ -358,6 +378,7 @@ export async function detectEcosystem(
       observedTreeFacts = {
         foreignLockfilePaths: selectForeignLockfilePaths(tree),
         manifestsCapped: allRefs.length > MAX_MANIFESTS,
+        npmrcPaths: selectNpmrcPaths(tree),
       };
     }
     if (data.truncated || refs.length === 0) needFallback = true;
@@ -1157,29 +1178,49 @@ export async function fetchNpmManifests(
 //     `node_modules/<name>` only, never an ancestor's lockfile) and the manifest
 //     is narrow for it (the declaration rules below). Only `dependencies` and
 //     `devDependencies` produce additions, as before.
-//   - REMOVAL. The baseline entry of a name is removed only when
-//     `narrowDropSafe` holds, i.e. ALL of: the tree was read completely; no
-//     other package manager's lockfile exists; every manifest the scan reads
-//     has a readable package-lock.json of its own (a project without one can
-//     install anything, transitively or through `overrides`); every manifest
-//     declaring the name (`dependencies`, `devDependencies`,
-//     `optionalDependencies`, `peerDependencies`, `bundleDependencies`) is
-//     narrow for it; and the baseline version is installed by no fetched
-//     lockfile at any install path (answered from an index built once over all
-//     fetched lockfiles, under one node budget).
+//   - REMOVAL. The baseline entry of a name is removed only when everything the
+//     scan reads is positively accounted for. `narrowDropSafe` holds when ALL of
+//     these hold:
+//       * the tree was read completely (not truncated, manifest list not cut);
+//       * the tree has no other package manager's lockfile and no `.npmrc`, and
+//         no manifest has a `packageManager` field (each can change what is
+//         installed without the package-lock.json saying so);
+//       * every manifest the scan reads is locked: its own-directory
+//         package-lock.json was fetched and parsed, has a known shape
+//         (lockfileVersion 1, 2 or 3 with its `dependencies` or `packages` map),
+//         and lists every key of the manifest's `dependencies`,
+//         `devDependencies` and `optionalDependencies` as a top-level entry whose
+//         version satisfies the declared range (a spec that is not a plain semver
+//         range only needs the entry to exist). A missing, stale or unreadable
+//         lockfile means the project installs fresh, which nothing here can see.
+//         Local package names are not exempt: only the same names the baseline
+//         leaves out would qualify, and a stale lockfile that lacks one still
+//         installs its dependencies fresh;
+//       * every manifest declaring the name (`dependencies`, `devDependencies`,
+//         `optionalDependencies`, `peerDependencies`, `bundleDependencies`) is
+//         narrow for it;
+//       * the baseline version is installed by no fetched lockfile at any
+//         install path. This is answered from an index built once over all
+//         fetched lockfiles, under one node budget. Every lockfile must have a
+//         known shape and every entry that names a package must carry a semver
+//         version (an `npm:` alias is resolved first); an entry that does not
+//         (a git or tarball version, a `file:` version, no version, not an
+//         object) makes its name "unknown", and an unknown name is never
+//         provably uninstalled. A lockfile of unknown shape, or an exhausted
+//         budget, makes every name unprovable.
 //
 // "Complete tree" and "no other package manager's lockfile" gate the whole
 // override, additions included: without them there is no narrow resolution and
-// the result is the baseline. The lockless-manifest rule gates removals only,
-// since an addition never removes anything. Optional, peer and bundled
-// declarations block removals but never add. Nothing else removes or replaces a
-// baseline entry. No pattern is built from repository content, and `workspaces`
-// is only tested for presence. Whatever a check cannot establish (a read or
-// parse error, an unknown shape, an exhausted budget) keeps the baseline entry:
-// under-reporting is worse than over-reporting. "Installed nowhere" means in no
-// package-lock.json the scan reads; vendored, build and fixture directories are
-// not read. Npm workspaces, repos with another package manager's lockfile and
-// repos whose tree could not be read completely keep the baseline result.
+// the result is the baseline. The other conditions gate removals only, since an
+// addition never removes anything. Optional, peer and bundled declarations block
+// removals but never add. Nothing else removes or replaces a baseline entry. No
+// pattern is built from repository content, and `workspaces` is only tested for
+// presence. Whatever a check cannot establish (a read or parse error, an
+// unknown shape, an exhausted budget) keeps the baseline entry: under-reporting
+// is worse than over-reporting. "Installed nowhere" means in no package-lock.json
+// the scan reads; vendored, build and fixture directories are not read. Npm
+// workspaces, repos with another package manager's lockfile and repos whose
+// tree could not be read completely keep the baseline result.
 
 /** What `resolveNarrowNpm` reads. The raw files are the ones the fetchers read anyway. */
 export interface NarrowNpmInputs {
@@ -1210,6 +1251,16 @@ function isPlainObject(v: unknown): v is JsonObject {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+// An own property only: `JSON.parse` can create a key called `__proto__`, and a
+// plain lookup of an absent `__proto__` would answer with `Object.prototype`.
+function hasOwn(o: JsonObject, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(o, key);
+}
+
+function ownValue(o: JsonObject, key: string): unknown {
+  return hasOwn(o, key) ? o[key] : undefined;
+}
+
 function parseJsonObject(content: string): JsonObject | null {
   try {
     const parsed: unknown = JSON.parse(content);
@@ -1224,12 +1275,18 @@ function dirOf(path: string): string {
   return i === -1 ? '' : path.slice(0, i);
 }
 
+function ownLockfilePath(dir: string): string {
+  return dir ? `${dir}/package-lock.json` : 'package-lock.json';
+}
+
 // Is `ancestor` the directory `dir` itself or one of its parents? '' is the repo root.
 function isSelfOrAncestorDir(ancestor: string, dir: string): boolean {
   return ancestor === '' || dir === ancestor || dir.startsWith(ancestor + '/');
 }
 
 interface NarrowDeclaration {
+  /** The manifest field the declaration comes from. */
+  field: string;
   /** The key the manifest declares the dependency under. */
   key: string;
   spec: string;
@@ -1255,9 +1312,11 @@ interface NarrowManifest {
 // Every field of a manifest that names a package it installs or expects.
 const ADDABLE_DEP_FIELDS = ['dependencies', 'devDependencies'] as const;
 const BLOCKING_DEP_FIELDS = ['optionalDependencies', 'peerDependencies'] as const;
+// The fields whose every key the manifest's own lockfile must list.
+const LOCKED_DEP_FIELDS = new Set<string>(['dependencies', 'devDependencies', 'optionalDependencies']);
 
-// A manifest whose dependency maps have an unexpected shape counts as unread:
-// it could declare anything.
+// A manifest whose dependency maps have an unexpected shape (not an object, a
+// spec that is not a string) counts as unread: it could declare anything.
 function readNarrowManifest(path: string, content: string): NarrowManifest | null {
   const data = parseJsonObject(content);
   if (!data) return null;
@@ -1270,10 +1329,11 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
     const map = data[field];
     if (map === undefined) continue;
     if (!isPlainObject(map)) return null;
-    for (const [key, rawSpec] of Object.entries(map)) {
-      const spec = String(rawSpec);
+    for (const [key, spec] of Object.entries(map)) {
+      if (typeof spec !== 'string') return null;
       const alias = parseNpmAlias(spec);
       declarations.push({
+        field,
         key,
         spec,
         aliasForm: spec.trim().startsWith('npm:'),
@@ -1292,7 +1352,7 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
     for (const name of list) {
       if (typeof name !== 'string') return null;
       // A bundled name carries no range: any installed version satisfies `*`.
-      declarations.push({ key: name, spec: '*', aliasForm: false, realName: name, addable: false });
+      declarations.push({ field, key: name, spec: '*', aliasForm: false, realName: name, addable: false });
     }
   }
   return { path, dir: dirOf(path), data, declarations };
@@ -1302,6 +1362,14 @@ interface NarrowLockfile {
   data: JsonObject;
   /** lockfileVersion 2/3 with a `packages` map: the only shape narrow resolution reads. */
   packages: JsonObject | null;
+  /** lockfileVersion 1 with a `dependencies` map. */
+  v1Dependencies: JsonObject | null;
+  /**
+   * A shape this scan understands: lockfileVersion 1 with a `dependencies`
+   * object, or 2/3 with a `packages` object, and no `packages` / `dependencies`
+   * key that is not an object. Anything else proves nothing about what installs.
+   */
+  known: boolean;
 }
 
 function readNarrowLockfile(content: string): NarrowLockfile | null {
@@ -1309,7 +1377,10 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
   if (!data) return null;
   const version = data.lockfileVersion;
   const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
-  return { data, packages };
+  const v1Dependencies = version === 1 && isPlainObject(data.dependencies) ? data.dependencies : null;
+  const mapsWellFormed = [data.packages, data.dependencies].every((m) => m === undefined || isPlainObject(m));
+  const known = mapsWellFormed && (version === 1 ? v1Dependencies !== null : packages !== null);
+  return { data, packages, v1Dependencies, known };
 }
 
 // Budget for the one pass over all fetched lockfiles: lockfile entries visited
@@ -1317,44 +1388,77 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
 // indexed completely, so nothing is provably installed nowhere.
 export const MAX_LOCK_INDEX_NODES = 1_000_000;
 
-// name -> every version string some fetched lockfile installs for it, at any
-// install path. Both the raw string and its semver-normalised form (which drops
-// build metadata) are stored, so a lookup counts unequal strings that are
-// semver-equal as the same version and errs towards keeping the baseline entry.
-type InstalledIndex = Map<string, Set<string>>;
+// What the fetched lockfiles install, at any install path. `versions` holds, per
+// name, both the raw version string and its semver-normalised form (which drops
+// build metadata), so a lookup counts unequal strings that are semver-equal as
+// the same version and errs towards keeping the baseline entry. `unknown` holds
+// the names some entry installs at a version that could not be read as semver.
+interface InstalledIndex {
+  versions: Map<string, Set<string>>;
+  unknown: Set<string>;
+}
+
+const NODE_MODULES = 'node_modules/';
+
+// The package name a `packages` key installs under: what follows its last
+// `node_modules/`. undefined for a key without one (a workspace package folder).
+function nameFromPackagesKey(key: string): string | undefined {
+  const i = key.lastIndexOf(NODE_MODULES);
+  return i === -1 ? undefined : key.slice(i + NODE_MODULES.length);
+}
 
 /**
  * Index what the fetched lockfiles install, in one pass: top level, nested
- * under another package, aliased installs, a v1 `dependencies` tree. Returns
- * null ("not provable for any name") when a lockfile is missing or unparsed,
- * has a shape this scan does not understand, or the total node budget is
- * exhausted.
+ * under another package, aliased installs, a v1 `dependencies` tree. Every
+ * entry that names a package must yield a semver version, else its name goes to
+ * `unknown` (the root `""` entry, `link: true` entries and version-less
+ * workspace folder entries are exempt). Returns null ("not provable for any
+ * name") when a lockfile is missing, unparsed or of an unknown shape, an entry
+ * cannot be attributed to a name at all (an unparsable `name`, an unparsable
+ * `npm:` version, a key without a name), or the total node budget is exhausted.
  */
 function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledIndex | null {
-  const index: InstalledIndex = new Map();
+  const versions = new Map<string, Set<string>>();
+  const unknown = new Set<string>();
   let visited = 0;
   const record = (name: string, version: string): void => {
-    let versions = index.get(name);
-    if (!versions) {
-      versions = new Set();
-      index.set(name, versions);
+    let set = versions.get(name);
+    if (!set) {
+      set = new Set();
+      versions.set(name, set);
     }
-    versions.add(version);
+    set.add(version);
     const normalised = semver.valid(version);
-    if (normalised !== null) versions.add(normalised);
+    if (normalised !== null) set.add(normalised);
   };
   for (const lock of locks) {
-    if (lock === null) return null;
+    if (lock === null || !lock.known) return null;
     const { packages, dependencies } = lock.data;
     if (packages !== undefined) {
       if (!isPlainObject(packages)) return null;
       for (const [key, entry] of Object.entries(packages)) {
         if (++visited > MAX_LOCK_INDEX_NODES) return null;
-        if (!isPlainObject(entry)) continue;
-        const tail = key.includes('node_modules/') ? key.split('node_modules/').pop() : undefined;
-        const entryName = typeof entry.name === 'string' && entry.name ? entry.name : tail;
-        if (entryName === undefined || typeof entry.version !== 'string') continue;
-        record(entryName, entry.version);
+        if (key === '') continue;
+        const tail = nameFromPackagesKey(key);
+        if (tail === '') return null;
+        if (!isPlainObject(entry)) {
+          if (tail === undefined) return null;
+          unknown.add(tail);
+          continue;
+        }
+        if (entry.link === true) continue;
+        const declared = entry.name;
+        if (declared !== undefined && (typeof declared !== 'string' || declared === '')) return null;
+        // A workspace package folder entry without a version names nothing installed.
+        if (tail === undefined && entry.version === undefined) continue;
+        const name = declared ?? tail ?? key.split('/').pop()!;
+        const version = entry.version;
+        if (typeof version !== 'string' || semver.valid(version) === null) {
+          unknown.add(name);
+          if (tail !== undefined) unknown.add(tail);
+          continue;
+        }
+        record(name, version);
       }
     }
     if (dependencies !== undefined) {
@@ -1365,27 +1469,68 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
         const map = stack.pop()!;
         for (const [key, entry] of Object.entries(map)) {
           if (++visited > MAX_LOCK_INDEX_NODES) return null;
-          if (!isPlainObject(entry)) continue;
-          if (typeof entry.version === 'string') {
-            const alias = parseNpmAlias(entry.version);
-            record(alias ? alias.realName : key, alias ? alias.realSpec : entry.version);
+          if (!isPlainObject(entry)) {
+            unknown.add(key);
+            continue;
           }
-          if (isPlainObject(entry.dependencies)) stack.push(entry.dependencies);
+          if (entry.dependencies !== undefined) {
+            if (!isPlainObject(entry.dependencies)) return null;
+            stack.push(entry.dependencies);
+          }
+          const raw = entry.version;
+          if (typeof raw !== 'string') {
+            unknown.add(key);
+            continue;
+          }
+          const aliasForm = raw.trim().startsWith('npm:');
+          const alias = aliasForm ? parseNpmAlias(raw) : null;
+          // An `npm:` version that does not parse still installs some real
+          // package; which one cannot be told, so no name is provable.
+          if (aliasForm && alias === null) return null;
+          const name = alias ? alias.realName : key;
+          const version = alias ? alias.realSpec : raw;
+          if (semver.valid(version) === null) {
+            unknown.add(name);
+            unknown.add(key);
+            continue;
+          }
+          record(name, version);
         }
       }
     }
   }
-  return index;
+  return { versions, unknown };
 }
 
-// Is `version` among the versions the index holds for `name`? Equal strings, or
-// semver-equal ignoring build metadata.
+// Is `version` possibly installed for `name`? True for an unknown name, for an
+// equal string, and for a semver-equal version ignoring build metadata.
 function indexHas(index: InstalledIndex, name: string, version: string): boolean {
-  const versions = index.get(name);
+  if (index.unknown.has(name)) return true;
+  const versions = index.versions.get(name);
   if (!versions) return false;
   if (versions.has(version)) return true;
   const normalised = semver.valid(version);
   return normalised !== null && versions.has(normalised);
+}
+
+// Does the manifest's own lockfile list this declaration as a top-level entry?
+// A plain semver range additionally needs an installed, registry version (no
+// link, no alias under another name) that satisfies it; any other spec (git,
+// `file:`, tag, alias) only needs the entry to exist.
+function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration): boolean {
+  const entry = lock.packages
+    ? ownValue(lock.packages, `node_modules/${decl.key}`)
+    : lock.v1Dependencies
+      ? ownValue(lock.v1Dependencies, decl.key)
+      : undefined;
+  if (!isPlainObject(entry)) return false;
+  const range = decl.spec.trim();
+  if (semver.validRange(range) === null) return true;
+  if (entry.link === true) return false;
+  if (lock.packages && entry.name !== undefined && entry.name !== decl.key) return false;
+  const version = entry.version;
+  if (typeof version !== 'string' || semver.valid(version) === null) return false;
+  return semver.satisfies(version, range, { includePrerelease: true });
 }
 
 /**
@@ -1435,6 +1580,15 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   const noForeignLockfiles =
     observedTreeFacts.foreignLockfilePaths.length === 0 && observedLockfilePaths.yarn.length === 0;
 
+  // No `.npmrc` anywhere in the observed tree and no `packageManager` field in
+  // any manifest the scan reads: either can change what gets installed (an
+  // `.npmrc` with `package-lock=false`, a manifest pinned to yarn) without the
+  // package-lock.json saying so. Facts of an unexpected shape count as present.
+  const noInstallPolicyFiles =
+    Array.isArray(observedTreeFacts.npmrcPaths) &&
+    observedTreeFacts.npmrcPaths.length === 0 &&
+    manifests.every((m) => !hasOwn(m.data, 'packageManager'));
+
   // Names the baseline never queries: another local package of the repo.
   const localNames = new Set(
     manifests.map((m) => m.data.name).filter((n): n is string => typeof n === 'string' && n !== ''),
@@ -1444,17 +1598,27 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // declare any name).
   const everyManifestRead = manifestPaths.every((p) => manifestByPath.get(p) != null);
 
-  // Every manifest the scan reads has a package-lock.json in its own directory.
-  // A project without one can install anything, transitively or through
-  // `overrides`, and nothing here can see that, so with a single lockless
-  // manifest in the tree no baseline entry is removed. (Additions are not gated
-  // by this: they never remove anything.) A lockfile that exists but could not
-  // be read or parsed is not handled here: it makes the installed-versions index
-  // unavailable, which makes nothing provable.
-  const everyManifestLocked = manifestPaths.every((path) => {
-    const dir = dirOf(path);
-    return lockByPath.has(dir ? `${dir}/package-lock.json` : 'package-lock.json');
-  });
+  // Every manifest the scan reads is locked: its own-directory package-lock.json
+  // was fetched, parsed, has a known shape, and lists every key of the manifest's
+  // dependencies, devDependencies and optionalDependencies at the top level with a
+  // version that satisfies the declared range (see `lockfileListsDeclaration`).
+  // A project without such a lockfile installs fresh, transitively or through
+  // `overrides`, and nothing here can see what. With a single manifest that is
+  // not locked no baseline entry is removed. (Additions are not gated by this:
+  // they never remove anything.) Computed on first use.
+  let everyManifestLockedMemo: boolean | undefined;
+  const everyManifestLocked = (): boolean => {
+    if (everyManifestLockedMemo === undefined) {
+      everyManifestLockedMemo = manifestPaths.every((path) => {
+        const m = manifestByPath.get(path);
+        if (!m) return false;
+        const lock = lockByPath.get(ownLockfilePath(m.dir));
+        if (!lock || !lock.known) return false;
+        return m.declarations.every((d) => !LOCKED_DEP_FIELDS.has(d.field) || lockfileListsDeclaration(lock, d));
+      });
+    }
+    return everyManifestLockedMemo;
+  };
 
   // Standalone: the manifest and every package.json in a directory above it were
   // read and parsed, and none has a `workspaces` key (any value). The ancestors
@@ -1466,7 +1630,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     const standalone = manifestPaths.every((path) => {
       if (!isSelfOrAncestorDir(dirOf(path), m.dir)) return true;
       const ancestor = manifestByPath.get(path);
-      return ancestor != null && !Object.prototype.hasOwnProperty.call(ancestor.data, 'workspaces');
+      return ancestor != null && !hasOwn(ancestor.data, 'workspaces');
     });
     standaloneByPath.set(m.path, standalone);
     return standalone;
@@ -1475,9 +1639,9 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // The version M's own-directory lockfile installs for `name` at the
   // top-level key, or null.
   const ownLockVersion = (m: NarrowManifest, name: string): string | null => {
-    const lock = lockByPath.get(m.dir ? `${m.dir}/package-lock.json` : 'package-lock.json');
+    const lock = lockByPath.get(ownLockfilePath(m.dir));
     if (!lock?.packages) return null;
-    const entry = lock.packages[`node_modules/${name}`];
+    const entry = ownValue(lock.packages, `node_modules/${name}`);
     if (!isPlainObject(entry)) return null;
     if (typeof entry.version !== 'string' || !/\d/.test(entry.version)) return null;
     if (entry.link === true) return null;
@@ -1544,7 +1708,8 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
       // The tree walk was complete here: without it computeNarrowNpm returned before building this.
       return (
         noForeignLockfiles &&
-        everyManifestLocked &&
+        noInstallPolicyFiles &&
+        everyManifestLocked() &&
         declarersAllNarrow(name) &&
         baseVersionInstalledNowhere(name, baseVersion)
       );

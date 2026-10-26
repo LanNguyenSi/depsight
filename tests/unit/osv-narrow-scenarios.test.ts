@@ -372,6 +372,122 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.7', 'vite@8.3.5'],
     why: 'a manifest under node_modules is never read, so it is not a project without a lockfile; floor 7.3.5 installed in no lockfile the scan reads',
   }),
+  // ---- an extra project whose lockfile or manifest holds something the drop proof
+  // cannot read as "installs nothing": the baseline floor stays ----
+  negV1GitVersionTransitive: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v1 has a nested vite at a git URL version (not semver): what it installs is unknown, so vite is never provably uninstalled',
+  }),
+  negV1TarballVersionTransitive: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v1 has a nested vite at a tarball URL version: unknown',
+  }),
+  negV1FileVersionTransitive: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v1 has a nested vite at a file: version: unknown',
+  }),
+  negV3EntryWithoutVersion: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v3 has a nested vite entry without a version: unknown',
+  }),
+  negV3EntryNotAnObject: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v3 has a nested vite entry that is a string: unknown',
+  }),
+  negUnknownLockfileVersion: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile has lockfileVersion 4: shape unknown, nothing provable',
+  }),
+  negLockfileVersion3WithoutPackages: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile is version 3 without a packages map: nothing provable',
+  }),
+  negStaleLockMissingDeclaredDep: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ declares x but its lockfile lists nothing: npm installs x fresh, so the project is not locked',
+  }),
+  negStaleLockOneDepAddedLater: narrow({
+    base: ['ms@2.1.3', 'vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lists ms but not x, added later: not locked (ms is already a baseline entry, so it is not an addition)',
+  }),
+  negStaleLockRangeUnsatisfied: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile has x 1.0.0 but the manifest asks ^2.0.0: the lockfile is stale, not locked',
+  }),
+  negStaleLockMissingDevDep: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile lacks a devDependency: not locked',
+  }),
+  negStaleLockMissingOptionalDep: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile lacks an optionalDependency: not locked',
+  }),
+  negStaleV1LockMissingDeclaredDep: narrow({
+    base: ['vite@7.3.5', 'x@1.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile v1 lacks a declared dependency: not locked',
+  }),
+  extraProjectCompleteLock: narrow({
+    base: ['vite@7.3.5', 'x@1.2.0', 'y@1.0.0'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'extra/ lockfile lists x (in range) and the git-spec y: the project is locked; floor 7.3.5 installed nowhere (x@1.2.0 and y@1.0.0 are baseline entries that stay)',
+  }),
+  negNpmrcInProject: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'frontend/ has an .npmrc (package-lock=false is possible): no drops',
+  }),
+  negNpmrcAtRoot: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a root .npmrc: no drops',
+  }),
+  negPackageManagerYarnField: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'frontend/package.json has a packageManager field: no drops',
+  }),
+  negPackageManagerInUnrelatedManifest: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'tools/package.json has a packageManager field and no vite: still no drops',
+  }),
+  vendoredNpmrcNotRead: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'an .npmrc under node_modules is not read, like the manifests there; floor 7.3.5 installed in no lockfile the scan reads',
+  }),
 };
 
 describe('narrow npm lockfile override: end-to-end OSV query scenarios', () => {

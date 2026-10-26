@@ -994,4 +994,163 @@ export const SCENARIOS: Record<string, Scenario> = {
       'node_modules/vite-fork/package.json': pkg({ name: 'vite-fork', dependencies: { vite: '7.3.5' } }),
     },
   },
+
+  // ---- an extra project `extra/` next to the two vite projects whose lockfile
+  // or manifest holds something the drop proof must not read as "installs
+  // nothing". Each of these keeps the baseline floor (vite 7.3.5). ----
+
+  // lockfileVersion 1 entry for vite installed from a git URL, nested under a
+  // regular dependency: the version is not semver, so what it installs is unknown.
+  negV1GitVersionTransitive: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        dependencies: {
+          x: {
+            version: '1.0.0',
+            dependencies: { vite: { version: 'github:vitejs/vite#abc123', from: 'github:vitejs/vite' } },
+          },
+        },
+      }),
+    },
+  },
+  negV1TarballVersionTransitive: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        dependencies: { x: { version: '1.0.0', dependencies: { vite: { version: 'https://example.com/vite.tgz' } } } },
+      }),
+    },
+  },
+  negV1FileVersionTransitive: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        dependencies: { x: { version: '1.0.0', dependencies: { vite: { version: 'file:../vite-fork' } } } },
+      }),
+    },
+  },
+  // A lockfileVersion 3 entry for a nested vite without a version (only a git `resolved`).
+  negV3EntryWithoutVersion: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({
+        'node_modules/x': '1.0.0',
+        'node_modules/x/node_modules/vite': { resolved: 'git+ssh://git@github.com/vitejs/vite.git#abc' },
+      }),
+    },
+  },
+  // A lockfileVersion 3 entry that is a string, not an object.
+  negV3EntryNotAnObject: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({
+        lockfileVersion: 3,
+        packages: { '': {}, 'node_modules/x': { version: '1.0.0' }, 'node_modules/x/node_modules/vite': '7.3.5' },
+      }),
+    },
+  },
+  negUnknownLockfileVersion: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({ lockfileVersion: 4, installs: { 'x/vite': '7.3.5' } }),
+    },
+  },
+  negLockfileVersion3WithoutPackages: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({ lockfileVersion: 3 }),
+    },
+  },
+  // A stale own lockfile that lacks a declared dependency: npm installs that
+  // dependency (and what it pulls in) fresh.
+  negStaleLockMissingDeclaredDep: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({}),
+    },
+  },
+  negStaleLockOneDepAddedLater: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { ms: '^2.0.0', x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+    },
+  },
+  negStaleLockRangeUnsatisfied: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^2.0.0' } }),
+      'extra/package-lock.json': v3({
+        'node_modules/x': '1.0.0',
+        'node_modules/x/node_modules/vite': '7.3.6',
+      }),
+    },
+  },
+  negStaleLockMissingDevDep: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', devDependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({}),
+    },
+  },
+  negStaleLockMissingOptionalDep: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', optionalDependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({}),
+    },
+  },
+  // The same shape in a lockfileVersion 1 own lockfile.
+  negStaleV1LockMissingDeclaredDep: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v1({}),
+    },
+  },
+  // The extra project's lockfile is complete: nothing blocks the drop.
+  extraProjectCompleteLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' }, devDependencies: { y: 'github:o/y#v1' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': '1.2.0', 'node_modules/y': { version: '1.0.0', resolved: 'git+ssh://x' } }),
+    },
+  },
+  // An `.npmrc` anywhere (it can switch the lockfile off or change the registry).
+  negNpmrcInProject: {
+    files: { ...viteTwoProjectFiles(), 'frontend/.npmrc': 'package-lock=false\n' },
+  },
+  negNpmrcAtRoot: {
+    files: { ...viteTwoProjectFiles(), '.npmrc': 'registry=https://registry.example.com/\n' },
+  },
+  // A `packageManager` field in any manifest (corepack pins another manager).
+  negPackageManagerYarnField: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'frontend/package.json': pkg({ name: 'frontend', packageManager: 'yarn@4.1.0', dependencies: { vite: '^7.3.5' } }),
+    },
+  },
+  negPackageManagerInUnrelatedManifest: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'tools/package.json': pkg({ name: 'tools', packageManager: 'npm@10.8.0' }),
+      'tools/package-lock.json': v3({}),
+    },
+  },
+  // An `.npmrc` in a vendored directory is not read, like the manifests there.
+  vendoredNpmrcNotRead: {
+    files: { ...viteTwoProjectFiles(), 'node_modules/vite-fork/.npmrc': 'package-lock=false\n' },
+  },
 };
