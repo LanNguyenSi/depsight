@@ -1,9 +1,14 @@
 import { createGitHubClient } from '@/lib/github';
+import { collectNpmReportVersions, type NpmReportVersion } from '@/lib/cve/osv';
+import { noteDegraded } from '@/lib/scan/degraded';
 import { getEcosystemLabel, type Ecosystem } from '@/lib/ecosystem';
 import {
   detectEcosystem,
   fetchNpmManifests,
   unionNpmDeps,
+  type FetchedManifest,
+  type ObservedTreeFacts,
+  type ParsedNpmManifest,
 } from '@/lib/manifest-discovery';
 import { scanPythonDeps } from './python';
 import { scanGoDeps } from './go';
@@ -111,11 +116,21 @@ export async function analyzeDepAge(
     ? ecosystemInfo.manifestPaths
     : ['package.json'];
 
-  const manifests = await fetchNpmManifests(octokit, owner, repo, manifestPaths);
+  const manifestFiles: FetchedManifest[] = [];
+  const manifests = await fetchNpmManifests(octokit, owner, repo, manifestPaths, manifestFiles);
   if (manifests.length === 0) return buildResult([]);
 
   // Combine prod + dev deps across all manifests, dropping workspace-internal refs.
   const allDeps = unionNpmDeps(manifests);
+
+  // Per name, today's floor strip or the version each declaring project's own
+  // lockfile proves (see `resolveNpmReportVersions`).
+  const reportVersions = await resolveNpmReportVersions(octokit, owner, repo, manifestPaths, {
+    manifests,
+    manifestFiles,
+    observedLockfilePaths: ecosystemInfo.observedLockfilePaths,
+    observedTreeFacts: ecosystemInfo.observedTreeFacts,
+  });
 
   // Batch npm registry lookups
   const BATCH_SIZE = 10;
@@ -131,7 +146,7 @@ export async function analyzeDepAge(
             { headers: { Accept: 'application/json' } },
           );
           if (!resp.ok) {
-            deps.push(makeUnknownDep(name, versionSpec));
+            deps.push(makeUnknownDep(name, versionSpec, reportVersions.get(name)));
             return;
           }
 
@@ -139,8 +154,10 @@ export async function analyzeDepAge(
           const latestVersion = data['dist-tags']?.latest ?? '';
           const isDeprecated = Boolean(data.deprecated);
 
-          // Get publish date for installed version
-          const cleanInstalled = versionSpec.replace(/^[^0-9]*/, '');
+          // Get publish date for the installed version: the version the
+          // lockfiles prove when the row is raised, else the manifest floor
+          // (leading range operator stripped).
+          const cleanInstalled = reportedVersion(versionSpec, reportVersions.get(name));
           const installedPublishedAt = data.time?.[cleanInstalled]
             ? new Date(data.time[cleanInstalled])
             : null;
@@ -168,7 +185,7 @@ export async function analyzeDepAge(
             latestPublishedAt,
           });
         } catch {
-          deps.push(makeUnknownDep(name, versionSpec));
+          deps.push(makeUnknownDep(name, versionSpec, reportVersions.get(name)));
         }
       }),
     );
@@ -177,10 +194,68 @@ export async function analyzeDepAge(
   return buildResult(deps);
 }
 
-function makeUnknownDep(name: string, versionSpec: string): DependencyInfo {
+/** The row's version: the raised one when the proof holds, else the floor strip. */
+function reportedVersion(versionSpec: string, row: NpmReportVersion | undefined): string {
+  if (row) return row.raisedTo ?? row.strip;
+  return versionSpec.replace(/^[^0-9]*/, '');
+}
+
+/**
+ * Per package name, what the CVE scan's narrow proof (`collectNpmReportVersions`
+ * in lib/cve/osv.ts) allows the report to show above the manifest floor. The
+ * row stays at the floor strip of the spec (the report as it was) unless every
+ * declaration of the package is in `dependencies` or `devDependencies`, every
+ * project declaring it has its own package-lock.json and each of them proves
+ * the version its top-level entry installs for that declaration; then it is
+ * the lowest of those versions. So the row rises above the manifest floor only
+ * where each declaring project's own lockfile proves a higher version and no
+ * lockfile installs the floor. A declaration in `optionalDependencies`,
+ * `peerDependencies` or `bundleDependencies` (the row is raised only from
+ * `dependencies` and `devDependencies` declarations), yarn-only repositories, lockfileVersion 1, workspaces, an unreadable or
+ * stale lockfile, an `.npmrc` and partially locked repositories keep the
+ * floor. A copy installed only as a dependency of another package (nested,
+ * or hoisted in a project that does not declare it) is not reflected in the
+ * row; a copy of the floor anywhere keeps the floor.
+ * Never throws: a failed resolution leaves the map empty (every name keeps the
+ * floor strip) and is reported as a degraded source.
+ */
+async function resolveNpmReportVersions(
+  octokit: ReturnType<typeof createGitHubClient>,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+  fetched: {
+    manifests: ParsedNpmManifest[];
+    manifestFiles: FetchedManifest[];
+    observedLockfilePaths: { npm: string[]; yarn: string[] } | null | undefined;
+    observedTreeFacts: ObservedTreeFacts | null | undefined;
+  },
+): Promise<Map<string, NpmReportVersion>> {
+  try {
+    const rows = await collectNpmReportVersions(
+      octokit,
+      owner,
+      repo,
+      manifestPaths,
+      fetched.observedLockfilePaths,
+      fetched.observedTreeFacts,
+      { manifests: fetched.manifests, manifestFiles: fetched.manifestFiles },
+    );
+    return new Map(rows.map((row) => [row.name, row]));
+  } catch (err) {
+    noteDegraded('npm lockfile resolution', err);
+    return new Map();
+  }
+}
+
+function makeUnknownDep(
+  name: string,
+  versionSpec: string,
+  row?: NpmReportVersion,
+): DependencyInfo {
   return {
     name,
-    installedVersion: versionSpec.replace(/^[^0-9]*/, '') || versionSpec,
+    installedVersion: row?.raisedTo ?? (versionSpec.replace(/^[^0-9]*/, '') || versionSpec),
     latestVersion: '',
     publishedAt: null,
     ageInDays: -1,

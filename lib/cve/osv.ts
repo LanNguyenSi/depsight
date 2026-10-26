@@ -11,6 +11,7 @@ import {
   fetchNpmManifests,
   fetchYarnLockfileResolutions,
   mergeLockfileResolutions,
+  parseNpmAlias,
   resolveNarrowNpm,
   unionNpmDeps,
 } from '@/lib/manifest-discovery';
@@ -358,6 +359,21 @@ interface DepEntry {
 }
 
 /**
+ * The usable manifest floor of a dependency spec, or null when there is none.
+ * Usable as-is when the spec with its leading range operator stripped parses as
+ * an exact semver version (fast path); otherwise the RAW spec is tried as a
+ * semver RANGE and its `minVersion` is the floor. A digit-free spec (`*`,
+ * `latest`, `workspace:*`) is excluded on purpose: `semver.validRange` would
+ * accept `*` and `minVersion` would wrongly resolve it to `0.0.0`.
+ */
+function manifestFloor(versionSpec: string): string | null {
+  const floor = versionSpec.replace(/^[^0-9]*/, '');
+  if (semver.valid(floor) !== null) return floor;
+  if (floor === '' || semver.validRange(versionSpec) === null) return null;
+  return semver.minVersion(versionSpec)?.version ?? null;
+}
+
+/**
  * The repo-wide npm chain: the entries `collectDeps` produced for npm before
  * the narrow override existed, moved here unchanged. One entry per declared
  * dependency name (`unionNpmDeps` dedupes by name); resolution order:
@@ -379,27 +395,16 @@ function repoWideNpmEntries(
       // floor-strip when neither lockfile is present or lists this dep;
       // full rationale for what counts as a "usable" floor (exact vs.
       // range-derived), the ambiguous last-resort, and the one documented
-      // drop case is in the doc comment above `collectDeps`. Mechanics:
-      // `floor` is usable as-is when it parses as an exact semver version
-      // (fast path); otherwise `rangeFloor()` tries the RAW `versionSpec`
-      // as a semver RANGE (`floor !== ''` excludes the digit-free
-      // wildcard class — `*`/`latest`/`workspace:*` — which
-      // `semver.validRange` would otherwise accept as `*` and
-      // `minVersion` would wrongly resolve to `0.0.0`) and returns its
-      // `minVersion`; only when neither yields anything does the
-      // `ambiguous` map (or, failing that, an empty string that drops the
-      // dep) apply. D-006 ordering is unchanged: resolved > usable floor
+      // drop case is in the doc comment above `collectDeps`. Mechanics: the
+      // usable floor is `manifestFloor` (above); only when it yields nothing
+      // does the `ambiguous` map (or, failing that, an empty string that drops
+      // the dep) apply. D-006 ordering is unchanged: resolved > usable floor
       // (exact or range-derived) > ambiguous.
-      const floor = versionSpec.replace(/^[^0-9]*/, '');
-      const rangeFloor = (): string | null => {
-        if (floor === '' || semver.validRange(versionSpec) === null) return null;
-        return semver.minVersion(versionSpec)?.version ?? null;
-      };
       const version =
         lockfileResolutions.get(name) ??
-        (semver.valid(floor) !== null
-          ? floor
-          : (rangeFloor() ?? ambiguousLockfileResolutions.get(name) ?? ''));
+        manifestFloor(versionSpec) ??
+        ambiguousLockfileResolutions.get(name) ??
+        '';
       return { name, version };
     })
     .filter(({ version }) => /\d/.test(version));
@@ -429,6 +434,183 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
   }
   for (const addition of narrow.additions) push(addition);
   return out;
+}
+
+/** Manifests a caller already fetched, so the npm resolution does not read them again. */
+export interface PrefetchedNpmManifests {
+  manifests: ParsedNpmManifest[];
+  manifestFiles: FetchedManifest[];
+}
+
+/**
+ * The npm part of `collectDeps`: the repo-wide chain plus the narrow override.
+ * `entries` is exactly what `collectDeps` returns for npm; `manifests` and
+ * `narrow` are the inputs it was built from, for `collectNpmReportVersions`.
+ * `prefetched` skips the manifest reads (same files `fetchNpmManifests` would
+ * read for `manifestPaths`); the lockfile reads still happen here.
+ */
+async function collectNpmEntries(
+  octokit: ReturnType<typeof createGitHubClient>,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+  observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
+  observedTreeFacts?: ObservedTreeFacts | null,
+  prefetched?: PrefetchedNpmManifests,
+): Promise<{ entries: DepEntry[]; manifests: ParsedNpmManifest[]; narrow: NarrowNpmResolution }> {
+  const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
+  // The raw files the two fetchers below read, for the narrow override.
+  const manifestFiles: FetchedManifest[] = prefetched ? [...prefetched.manifestFiles] : [];
+  const lockfileFiles: FetchedManifest[] = [];
+  const emptyLockfileResolutions = () => ({
+    resolved: new Map<string, string>(),
+    ambiguous: new Map<string, string>(),
+  });
+  const [manifests, npmLockfileResolutions, yarnLockfileResolutions] = await Promise.all([
+    prefetched
+      ? Promise.resolve(prefetched.manifests)
+      : fetchNpmManifests(octokit, owner, repo, paths, manifestFiles),
+    // Best-effort: a lockfile-resolution failure must only ever degrade to
+    // the manifest floor (per-dep fallback below), never reject and abort the
+    // whole npm scan, which would return zero advisories and hide every
+    // vuln for the repo.
+    fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null, lockfileFiles)
+      .catch((err) => {
+        noteDegraded('npm lockfile resolution', err);
+        return emptyLockfileResolutions();
+      }),
+    fetchYarnLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.yarn ?? null)
+      .catch((err) => {
+        noteDegraded('yarn lockfile resolution', err);
+        return emptyLockfileResolutions();
+      }),
+  ]);
+  const baseEntries = repoWideNpmEntries(
+    manifests,
+    npmLockfileResolutions,
+    yarnLockfileResolutions,
+  );
+  const narrow = resolveNarrowNpm({
+    manifestPaths: paths,
+    manifestFiles,
+    lockfileFiles,
+    observedLockfilePaths,
+    observedTreeFacts,
+  });
+  return { entries: applyNarrowOverride(baseEntries, narrow), manifests, narrow };
+}
+
+/** One row of the dependency-age report for an npm package name. */
+export interface NpmReportVersion {
+  name: string;
+  /** Today's row: the manifest spec with its leading range operator stripped. */
+  strip: string;
+  /**
+   * The version the row shows instead of `strip`, or null to keep `strip`. Set
+   * only where every project declaring the package has its own
+   * package-lock.json proving a higher version (the CVE scan's narrow proof).
+   */
+  raisedTo: string | null;
+}
+
+/**
+ * Per npm package name the dependency-age report would list (one row per name,
+ * as `unionNpmDeps` dedupes), the row it shows: today's floor strip, raised to
+ * the lowest version the CVE scan's narrow per-lockfile resolution adds for the
+ * name only when every declaration of the name is in `dependencies` or
+ * `devDependencies` and that scan's proof holds for the name's manifest floor
+ * (`narrow.dropSafe`: every manifest declaring the name is individually proven
+ * by its own lockfile, and no lockfile installs the floor). In every other case
+ * (a declaration outside those two fields, no proof, no addition, a floor that
+ * is not a usable version, a lowest addition below the floor) `raisedTo` is
+ * null and the row stays the floor strip, so the row is never lower than the
+ * floor and rises above it only where each declarer's own lockfile proves the
+ * higher version and that version is among the additions.
+ *
+ * The row is raised only from declarations in `dependencies` and
+ * `devDependencies`. A declaration in `optionalDependencies`,
+ * `peerDependencies` (optional or not) or `bundleDependencies` /
+ * `bundledDependencies` keeps the floor (`declaredOutsideDeps`), even where the
+ * narrow override adds its version as a CVE query, so the row never skips the
+ * version such a project installs. Pass
+ * `prefetched` when the manifests were already fetched for `manifestPaths`,
+ * to avoid reading them twice.
+ */
+export async function collectNpmReportVersions(
+  octokit: ReturnType<typeof createGitHubClient>,
+  owner: string,
+  repo: string,
+  manifestPaths: string[],
+  observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
+  observedTreeFacts?: ObservedTreeFacts | null,
+  prefetched?: PrefetchedNpmManifests,
+): Promise<NpmReportVersion[]> {
+  const { manifests, narrow } = await collectNpmEntries(
+    octokit,
+    owner,
+    repo,
+    manifestPaths,
+    observedLockfilePaths,
+    observedTreeFacts,
+    prefetched,
+  );
+  return unionNpmDeps(manifests).map(({ name, versionSpec }) => ({
+    name,
+    strip: versionSpec.replace(/^[^0-9]*/, ''),
+    raisedTo: raisedNpmVersion(name, versionSpec, narrow, manifests),
+  }));
+}
+
+/**
+ * Does a manifest the scan read declare `name` outside `dependencies` and
+ * `devDependencies`: in `optionalDependencies`, `peerDependencies` (whether or
+ * not `peerDependenciesMeta` marks it optional) or `bundleDependencies` /
+ * `bundledDependencies`? An `npm:` alias declares its target. The row is
+ * raised only from `dependencies` and `devDependencies` declarations, so a row
+ * raised beside such a declaration could skip the version its project installs. A map or list of another
+ * shape is skipped here: the narrow proof counts that manifest as unread and
+ * refuses to prove any name, so the row keeps the floor anyway. A boolean
+ * `bundleDependencies` bundles the `dependencies`, which are declared there.
+ */
+function declaredOutsideDeps(manifests: ParsedNpmManifest[], name: string): boolean {
+  for (const manifest of manifests) {
+    const raw = manifest as Record<string, unknown>;
+    for (const field of ['optionalDependencies', 'peerDependencies'] as const) {
+      const map = raw[field];
+      if (typeof map !== 'object' || map === null) continue;
+      for (const [key, spec] of Object.entries(map)) {
+        const alias = typeof spec === 'string' ? parseNpmAlias(spec) : null;
+        if ((alias ? alias.realName : key) === name) return true;
+      }
+    }
+    for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+      const list = raw[field];
+      if (Array.isArray(list) && list.includes(name)) return true;
+    }
+  }
+  return false;
+}
+
+function raisedNpmVersion(
+  name: string,
+  versionSpec: string,
+  narrow: NarrowNpmResolution,
+  manifests: ParsedNpmManifest[],
+): string | null {
+  const proofFloor = manifestFloor(versionSpec);
+  if (proofFloor === null) return null;
+  if (declaredOutsideDeps(manifests, name)) return null;
+  if (!narrow.dropSafe(name, proofFloor)) return null;
+  let lowest: string | null = null;
+  for (const addition of narrow.additions) {
+    if (addition.name !== name) continue;
+    if (lowest === null || semver.lt(addition.version, lowest)) lowest = addition.version;
+  }
+  // Never below the floor: a lowest addition under it (a `*` declarer locked at
+  // an older major beside a ranged one) is no raise, so the floor strip stays.
+  if (lowest === null) return null;
+  if (semver.lt(lowest, proofFloor)) return null;
+  return lowest;
 }
 
 /**
@@ -544,48 +726,17 @@ async function collectDeps(
   observedTreeFacts?: ObservedTreeFacts | null,
 ): Promise<DepEntry[]> {
   switch (eco) {
-    case 'npm': {
-      const paths = manifestPaths.length > 0 ? manifestPaths : ['package.json'];
-      // The raw files the two fetchers below read, for the narrow override.
-      const manifestFiles: FetchedManifest[] = [];
-      const lockfileFiles: FetchedManifest[] = [];
-      const emptyLockfileResolutions = () => ({
-        resolved: new Map<string, string>(),
-        ambiguous: new Map<string, string>(),
-      });
-      const [manifests, npmLockfileResolutions, yarnLockfileResolutions] = await Promise.all([
-        fetchNpmManifests(octokit, owner, repo, paths, manifestFiles),
-        // Best-effort: a lockfile-resolution failure must only ever degrade to
-        // the manifest floor (per-dep fallback below), never reject and abort the
-        // whole npm scan, which would return zero advisories and hide every
-        // vuln for the repo.
-        fetchNpmLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.npm ?? null, lockfileFiles)
-          .catch((err) => {
-            noteDegraded('npm lockfile resolution', err);
-            return emptyLockfileResolutions();
-          }),
-        fetchYarnLockfileResolutions(octokit, owner, repo, paths, observedLockfilePaths?.yarn ?? null)
-          .catch((err) => {
-            noteDegraded('yarn lockfile resolution', err);
-            return emptyLockfileResolutions();
-          }),
-      ]);
-      const baseEntries = repoWideNpmEntries(
-        manifests,
-        npmLockfileResolutions,
-        yarnLockfileResolutions,
-      );
-      return applyNarrowOverride(
-        baseEntries,
-        resolveNarrowNpm({
-          manifestPaths: paths,
-          manifestFiles,
-          lockfileFiles,
+    case 'npm':
+      return (
+        await collectNpmEntries(
+          octokit,
+          owner,
+          repo,
+          manifestPaths,
           observedLockfilePaths,
           observedTreeFacts,
-        }),
-      );
-    }
+        )
+      ).entries;
 
     case 'python': {
       const [pyDeps, lockfileResolutions] = await Promise.all([
