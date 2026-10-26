@@ -1239,6 +1239,88 @@ export const SCENARIOS: Record<string, Scenario> = {
       'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.0.0', dependencies: { vite: '7.3.5' } } }),
     },
   },
+  // A lockfile written with --legacy-peer-deps leaves a plugin's peer out; npm
+  // install (without the flag) resolves the missing peer from the registry.
+  negPeerEdgeMissingExact: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { plug: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/plug': { version: '1.0.0', peerDependencies: { vite: '7.3.5' } } }),
+    },
+  },
+  // The edge names a package unrelated to vite: the whole lockfile is unusable.
+  negDepEdgeToUnrelatedNameWithoutEntry: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.0.0', dependencies: { gone: '^1.0.0' } } }),
+    },
+  },
+  negOptionalDepEdgeWithoutEntry: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v3({ 'node_modules/x': { version: '1.0.0', optionalDependencies: { gone: '^1.0.0' } } }),
+    },
+  },
+  // lockfileVersion 1 lists `requires` that npm does not install from.
+  negV1RequiresMissing: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': JSON.stringify({
+        lockfileVersion: 1,
+        dependencies: { x: { version: '1.0.0', requires: { vite: '7.3.5' } } },
+      }),
+    },
+  },
+  negV1LockOfUnrelatedProject: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { x: '^1.0.0' } }),
+      'extra/package-lock.json': v1({ x: '1.0.0' }),
+    },
+  },
+  // Positive controls: edges that need no entry.
+  optionalPeerEdgeWithoutEntry: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { plug: '^1.0.0' } }),
+      'extra/package-lock.json': v3({
+        'node_modules/plug': {
+          version: '1.0.0',
+          peerDependencies: { vite: '7.3.5' },
+          peerDependenciesMeta: { vite: { optional: true } },
+        },
+      }),
+    },
+  },
+  bundledNameEdgeWithoutEntry: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { w: '^1.0.0' } }),
+      'extra/package-lock.json': v3({
+        'node_modules/w': {
+          version: '1.0.0',
+          optional: true,
+          dependencies: { 'w-wasm': '^1.0.0', 'w-runtime': '^1.0.0' },
+          bundleDependencies: ['w-wasm', 'w-runtime'],
+        },
+      }),
+    },
+  },
+  // An override makes the lockfile hold a version an edge's range does not
+  // admit; the entry exists, so the lockfile stays usable.
+  overrideAcrossEdgeRange: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'extra/package.json': pkg({ name: 'extra', dependencies: { eslint: '^9.0.0' }, overrides: { minimatch: '^10.0.0' } }),
+      'extra/package-lock.json': v3({
+        'node_modules/eslint': { version: '9.0.0', dependencies: { minimatch: '^3.1.5' } },
+        'node_modules/minimatch': '10.2.5',
+      }),
+    },
+  },
   // ---- link and renamed lockfile entries ----
   negLinkEntryWithVersion: {
     files: {

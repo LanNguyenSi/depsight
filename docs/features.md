@@ -73,7 +73,7 @@ A complete list of what depsight does today, beyond the headline value props in 
     `deno.lock`, `.npmrc`, `pnpm-workspace.yaml`, `.yarnrc.yml` and
     `.pnpmfile.cjs`; no `packageManager` or `devEngines.packageManager` field in
     a manifest the scan reads; every `package.json` the scan reads locked (a
-    `package-lock.json` of its own with a known shape that lists each of its
+    `package-lock.json` of its own, lockfileVersion 2 or 3, that lists each of its
     dependencies, dev, optional and non-optional peer dependencies in the
     declared range, judged as npm judges a lockfile, and in which every entry of
     an overridden name satisfies a plain string override; a project with a
@@ -82,9 +82,21 @@ A complete list of what depsight does today, beyond the headline value props in 
     above any declaring manifest (dependencies, dev, optional, peer or bundled);
     every declaring manifest's lockfile satisfying its declared range; and every
     lockfile entry that names a package carrying a semver version (a git,
-    tarball or `file:` version, or a `dependencies` edge to a name the same
-    lockfile has no entry for, makes the name unknown, and an unknown name is
-    kept). Npm workspace
+    tarball or `file:` version makes the name unknown, and an unknown name is
+    kept); no lockfileVersion 1 lockfile anywhere (npm re-resolves from the
+    registry instead of installing from it, so it proves nothing); and no
+    lockfile entry with a `dependencies`, `optionalDependencies` or
+    `peerDependencies` edge (a peer the entry marks optional in
+    `peerDependenciesMeta` excepted) to a name the same lockfile has no entry
+    for, since `npm install` resolves such an edge from the registry (entries
+    marked `inBundle` and names the entry lists in `bundleDependencies` are
+    exempt; an edge's range is not compared with the held version). The
+    removal guarantees no under-reporting for an install that honours the
+    lockfiles: `npm ci`, or `npm install` on a lockfile with no missing or
+    invalid edge. Outside that guarantee are `npm install` on a lockfile whose
+    transitive edges are inconsistent, a git or `file:` dependency changed
+    without updating the lockfile, command line flags, a user or global npmrc,
+    the environment and the state of the registry. Npm workspace
     monorepos, repositories with another package manager's lockfile and
     truncated trees keep the
     repository-wide result. It is not a

@@ -5,9 +5,9 @@
  * siblings, nested) and varies, per case:
  *
  *   - each manifest's declaration (plain range, alias, git spec, tag) and its
- *     own lockfile: none, lockfileVersion 1, 2 or 3, an unknown lockfileVersion
- *     (4), no lockfileVersion, version 3 without a `packages` map, malformed
- *     JSON, a read error (HTTP 500)
+ *     own lockfile: none, lockfileVersion 1 (which proves nothing), 2 or 3, an
+ *     unknown lockfileVersion (4), no lockfileVersion, version 3 without a
+ *     `packages` map, malformed JSON, a read error (HTTP 500)
  *   - the version the lockfile installs (inside or outside the declared range)
  *     and a nested copy of vite in it whose entry is a semver version, a git
  *     URL, a tarball URL, has no version, or is not an object
@@ -30,6 +30,11 @@
  *     nested object, a number, a key with a version selector
  *   - lockfile versions that are prereleases (also against a range that names a
  *     prerelease), which npm does not accept for a stable range
+ *   - an entry of a version 2/3 lockfile with an edge (`dependencies`,
+ *     `optionalDependencies` or `peerDependencies`) to a name the lockfile has
+ *     no entry for, which makes the lockfile unusable (no drops), unless the
+ *     entry is marked `inBundle`, lists the name in `bundleDependencies`, or the
+ *     edge is a peer that `peerDependenciesMeta` marks optional
  *   - `deno.lock` among the foreign lockfiles; `pnpm-workspace.yaml`,
  *     `.yarnrc.yml` and `.pnpmfile.cjs` anywhere (also in vendored and build
  *     directories, where they are not read); `devEngines.packageManager`
@@ -107,6 +112,17 @@ interface ModelManifest {
   overrides?: { kind: OverrideKind; spec: string }; // `overrides` of vite
   packageManager?: string;
   devEngines?: boolean; // devEngines.packageManager
+  dangling?: Dangling; // a lockfile entry with an edge to a name the lockfile has no entry for
+}
+
+type DanglingField = 'dependencies' | 'optionalDependencies' | 'peerDependencies';
+// plain: nothing exempts the edge; bundled: the entry lists the name in
+// bundleDependencies; inBundle: the entry is marked inBundle; peerOptional: the
+// entry marks the peer optional in peerDependenciesMeta (only a peer edge).
+type DanglingMode = 'plain' | 'bundled' | 'inBundle' | 'peerOptional';
+interface Dangling {
+  field: DanglingField;
+  mode: DanglingMode;
 }
 
 type ExtraField = 'optionalDependencies' | 'peerDependencies' | 'bundleDependencies' | 'overrides';
@@ -119,7 +135,9 @@ interface ModelExtra {
   lock: LockKind;
   lockVersion: string;
   entry: EntryKind; // the kind of its top-level vite entry
-  edge?: boolean; // lockfile (version 2/3) has an entry depending on vite and no vite entry
+  // lockfile (version 2/3) has an entry depending on vite and no vite entry; with
+  // `bundled` that entry lists vite in bundleDependencies
+  edge?: 'plain' | 'bundled';
   packageManager?: string;
 }
 
@@ -144,7 +162,7 @@ const LAYOUTS: string[][] = [
 ];
 const SPECS = ['^7.3.5', '^8.3.0', '^7.0.0', '~8.3.1', '^6.0.0', '^7.3.5-beta.1'];
 const VERSIONS = ['5.4.0', '6.3.0', '7.3.5', '7.3.5-beta.2', '7.3.7', '7.4.0-beta.1', '8.3.0', '8.3.5', '8.3.6'];
-const FOREIGN = ['yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'deno.lock', 'deno.lock'];
+const FOREIGN = ['yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'deno.lock', 'deno.lock', 'deno.lock'];
 const PM_CONFIG_PATHS = [
   'pnpm-workspace.yaml',
   'a/.yarnrc.yml',
@@ -235,6 +253,12 @@ function generate(rand: () => number): Model {
       spec: rand() < 0.5 ? target.lockVersion : pick(VERSIONS),
     };
   }
+  if (chance(0.15)) {
+    pick(manifests).dangling = {
+      field: pick<DanglingField>(['dependencies', 'optionalDependencies', 'peerDependencies']),
+      mode: pick<DanglingMode>(['plain', 'plain', 'bundled', 'inBundle', 'peerOptional']),
+    };
+  }
   if (chance(0.06)) pick(manifests).packageManager = pick(['yarn@4.1.0', 'pnpm@9.0.0', 'npm@10.8.0']);
   if (chance(0.05)) pick(manifests).devEngines = true;
 
@@ -263,7 +287,7 @@ function generate(rand: () => number): Model {
   const extra: ModelExtra | undefined =
     rand() < 0.35
       ? {
-          field: pick<ExtraField>(['optionalDependencies', 'peerDependencies', 'bundleDependencies', 'overrides', 'overrides']),
+          field: pick<ExtraField>(['optionalDependencies', 'peerDependencies', 'bundleDependencies', 'overrides', 'overrides', 'overrides']),
           spec: pick(SPECS),
           lock: lockKind([
             ['none', 0.15],
@@ -281,7 +305,7 @@ function generate(rand: () => number): Model {
           packageManager: chance(0.04) ? 'yarn@4.1.0' : undefined,
         }
       : undefined;
-  if (extra && extra.field === 'overrides' && chance(0.7)) extra.edge = true;
+  if (extra && extra.field === 'overrides' && chance(0.85)) extra.edge = rand() < 0.5 ? 'plain' : 'bundled';
   return { manifests, extra, root, foreign, npmrc, pmConfig, truncated: chance(0.07), capped: chance(0.04) };
 }
 
@@ -310,7 +334,8 @@ interface LockSpec {
   version: string;
   nested?: { kind: EntryKind; version: string };
   ms?: MsState;
-  edge?: boolean; // version 2/3: no vite entry, but an entry that depends on vite
+  edge?: 'plain' | 'bundled'; // version 2/3: no vite entry, but an entry that depends on vite
+  dangling?: Dangling; // version 2/3: an entry with an edge to the name `gone`, which has no entry
 }
 
 // The text of a lockfile of the given kind, or null when no file exists.
@@ -331,8 +356,20 @@ function lockText(s: LockSpec): string | null {
     return JSON.stringify({ lockfileVersion: 1, dependencies });
   }
   const packages: Record<string, unknown> = { '': {} };
-  if (s.edge) packages['node_modules/depends-on-vite'] = { version: '1.0.0', dependencies: { vite: '^7.0.0' } };
-  else packages[`node_modules/${s.key}`] = entryJson(s.topKind, s.version, alias);
+  if (s.edge) {
+    packages['node_modules/depends-on-vite'] = {
+      version: '1.0.0',
+      dependencies: { vite: '^7.0.0' },
+      ...(s.edge === 'bundled' ? { bundleDependencies: ['vite'] } : {}),
+    };
+  } else packages[`node_modules/${s.key}`] = entryJson(s.topKind, s.version, alias);
+  if (s.dangling) {
+    const entry: Record<string, unknown> = { version: '1.0.0', [s.dangling.field]: { gone: '^1.0.0' } };
+    if (s.dangling.mode === 'bundled') entry.bundleDependencies = ['gone'];
+    if (s.dangling.mode === 'inBundle') entry.inBundle = true;
+    if (s.dangling.mode === 'peerOptional') entry.peerDependenciesMeta = { gone: { optional: true } };
+    packages['node_modules/dangling'] = entry;
+  }
   if (msVersion) packages['node_modules/ms'] = { version: msVersion };
   if (s.nested) {
     packages['node_modules/other'] = { version: '1.0.0' };
@@ -381,7 +418,15 @@ function toScenario(model: Model): Scenario {
     if (m.packageManager) body.packageManager = m.packageManager;
     if (m.devEngines) body.devEngines = { packageManager: { name: 'yarn', version: '4.1.0' } };
     files[path(m.dir, 'package.json')] = pkg(body);
-    putLock(m.dir, { kind: m.lock, key: m.key, topKind: 'semver', version: m.lockVersion, nested: m.nested, ms: m.ms?.state });
+    putLock(m.dir, {
+      kind: m.lock,
+      key: m.key,
+      topKind: 'semver',
+      version: m.lockVersion,
+      nested: m.nested,
+      ms: m.ms?.state,
+      dangling: m.dangling,
+    });
   }
   if (model.extra) {
     const e = model.extra;
@@ -410,7 +455,8 @@ function toScenario(model: Model): Scenario {
 
 // ---- oracle (from the drop rule, not from the implementation) ----------------
 
-const KNOWN_SHAPES: LockKind[] = ['v1', 'v2', 'v3'];
+// lockfileVersion 1 proves nothing: npm re-resolves from the registry.
+const KNOWN_SHAPES: LockKind[] = ['v2', 'v3'];
 const NARROW_SHAPES: LockKind[] = ['v2', 'v3'];
 const LOCKED_FIELDS: string[] = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
 // npm judges a lockfile against a declared range in loose mode and without
@@ -488,6 +534,9 @@ function extraLocked(e: ModelExtra): boolean {
   return !plainRange(e.spec) || (e.entry === 'semver' && inRange(e.lockVersion, e.spec));
 }
 
+const danglingExempt = (d: Dangling) =>
+  d.mode === 'bundled' || d.mode === 'inBundle' || (d.mode === 'peerOptional' && d.field === 'peerDependencies');
+
 // What the lockfiles install: null when some existing lockfile is unparsed,
 // unread or of an unknown shape; else the vite versions installed and whether
 // some vite entry has a version that cannot be read.
@@ -499,9 +548,16 @@ function installIndex(model: Model): { versions: Set<string>; unknownVite: boole
     top: EntryKind;
     version: string;
     nested?: ModelManifest['nested'];
-    edge?: boolean;
+    edge?: 'plain' | 'bundled';
+    dangling?: Dangling;
   }> = [
-    ...model.manifests.map((m) => ({ kind: m.lock, top: 'semver' as EntryKind, version: m.lockVersion, nested: m.nested })),
+    ...model.manifests.map((m) => ({
+      kind: m.lock,
+      top: 'semver' as EntryKind,
+      version: m.lockVersion,
+      nested: m.nested,
+      dangling: m.dangling,
+    })),
     ...(model.extra
       ? [{ kind: model.extra.lock, top: model.extra.entry, version: model.extra.lockVersion, edge: model.extra.edge }]
       : []),
@@ -509,9 +565,14 @@ function installIndex(model: Model): { versions: Set<string>; unknownVite: boole
   for (const l of locks) {
     if (l.kind === 'none') continue;
     if (!KNOWN_SHAPES.includes(l.kind)) return null;
-    // An entry depends on vite and the lockfile has no vite entry: damaged, so
-    // some vite is installed that it does not show. (Only version 2/3 has edges.)
-    if (l.edge && NARROW_SHAPES.includes(l.kind)) {
+    // An entry has an edge to a name the lockfile has no entry for: npm
+    // resolves it from the registry, so the lockfile is unusable, except where
+    // the edge is exempt (inBundle entry, bundled name, optional peer).
+    if (l.dangling && NARROW_SHAPES.includes(l.kind) && !danglingExempt(l.dangling)) return null;
+    if (l.edge === 'plain' && NARROW_SHAPES.includes(l.kind)) return null;
+    // An entry depends on vite and lists it as bundled: what it installs is
+    // unknown, not absent. (Only version 2/3 has edges.)
+    if (l.edge === 'bundled' && NARROW_SHAPES.includes(l.kind)) {
       unknownVite = true;
       continue;
     }
@@ -551,6 +612,7 @@ type Blinder =
   | 'peer'
   | 'overrides'
   | 'edge'
+  | 'dangling'
   | 'prerelease'
   | 'npmrc'
   | 'packageManager'
@@ -559,7 +621,8 @@ type Blinder =
   | 'deno';
 function blind(model: Model, what: Blinder): Model {
   const m: Model = JSON.parse(JSON.stringify(model));
-  const shape = (k: LockKind): LockKind => (k === 'v4' || k === 'nover' || k === 'v3nopackages' ? 'v3' : k);
+  const shape = (k: LockKind): LockKind =>
+    k === 'v1' || k === 'v4' || k === 'nover' || k === 'v3nopackages' ? 'v3' : k;
   for (const mf of m.manifests) {
     if (what === 'lockShape') mf.lock = shape(mf.lock);
     if (what === 'entryKind' && mf.nested) mf.nested.kind = 'semver';
@@ -568,6 +631,7 @@ function blind(model: Model, what: Blinder): Model {
     if (what === 'overrides') delete mf.overrides;
     if (what === 'packageManager') delete mf.packageManager;
     if (what === 'devEngines') delete mf.devEngines;
+    if (what === 'dangling') delete mf.dangling;
   }
   if (m.extra) {
     if (what === 'lockShape') m.extra.lock = shape(m.extra.lock);
@@ -587,6 +651,7 @@ const BLINDERS: Blinder[] = [
   'peer',
   'overrides',
   'edge',
+  'dangling',
   'prerelease',
   'npmrc',
   'packageManager',
@@ -619,6 +684,7 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     const soleBlocker = Object.fromEntries(BLINDERS.map((b) => [b, 0])) as Record<Blinder, number>;
     let optionalPeerDrops = 0;
     let reflectedOverrideDrops = 0;
+    let exemptEdgeDrops = 0;
     const failures: string[] = [];
 
     for (let i = 0; i < CASES; i++) {
@@ -656,6 +722,8 @@ describe('narrow override properties (seeded, generated repositories)', () => {
           // with a string override the lockfile reflects.
           if (model.manifests.some((m) => m.ms?.peerOptional && m.ms.state !== 'listed')) optionalPeerDrops++;
           if (model.manifests.some((m) => m.overrides?.kind === 'string')) reflectedOverrideDrops++;
+          // And a drop with an edge that needs no entry (the lockfile stays usable).
+          if (model.manifests.some((m) => m.dangling && NARROW_SHAPES.includes(m.lock) && danglingExempt(m.dangling))) exemptEdgeDrops++;
         } else keptBase++;
         if (!wasDropped && !oracle) {
           for (const b of BLINDERS) if (droppableBlinded(model, b, v)) soleBlocker[b]++;
@@ -695,6 +763,7 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     for (const b of BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
     expect(optionalPeerDrops, 'an optional peer that is not listed never coexists with a drop').toBeGreaterThan(20);
     expect(reflectedOverrideDrops, 'a reflected string override never coexists with a drop').toBeGreaterThan(20);
+    expect(exemptEdgeDrops, 'an exempt edge without an entry never coexists with a drop').toBeGreaterThan(20);
     expect(failures.slice(0, 3).join('\n\n')).toBe('');
     expect(failures).toEqual([]);
   }, 180_000);

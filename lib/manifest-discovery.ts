@@ -812,7 +812,7 @@ export function parseNpmLockfileContentsList(contents: string[]): LockfileResolu
  * candidates from `discoverLockfilePaths`, narrowed to the observed set when
  * one is known (case-insensitive, like the fetcher always did).
  *
- * Pure function — exported for testing.
+ * Pure function, exported for testing.
  */
 export function npmLockfileFetchPaths(
   manifestPaths: string[],
@@ -1204,6 +1204,17 @@ export async function fetchNpmManifests(
 // resolves to different versions in different projects it drops out of
 // `resolved` and is queried at a manifest floor that no project installs.
 //
+// What a removal guarantees: no under-reporting for an install that honours the
+// lockfiles, that is `npm ci`, or `npm install` on a lockfile that has no
+// missing or invalid edge. Under `npm ci` npm refuses a lockfile that differs
+// from the ideal tree, so the lockfile is the install. Out of that guarantee,
+// and so residuals that can still install a removed floor: `npm install` on a
+// lockfile whose transitive edges are inconsistent (npm re-resolves them from
+// the registry; this scan notices an edge to a name without an entry, not an
+// edge whose range the held version does not satisfy), a git or `file:`
+// dependency changed without updating the lockfile, command line flags, a user
+// or global npmrc, the environment and the state of the registry.
+//
 //   - ADDITIONS. A (manifest, dependency) pair is narrow-resolved when
 //     `narrowVersion` finds the dependency in the manifest's own-directory
 //     `package-lock.json` (lockfileVersion 2/3, top-level key
@@ -1222,8 +1233,7 @@ export async function fetchNpmManifests(
 //         without the package-lock.json saying so);
 //       * every manifest the scan reads is locked: its own-directory
 //         package-lock.json was fetched and parsed, has a known shape
-//         (lockfileVersion 1, 2 or 3 with its `dependencies` or `packages` map),
-//         lists every key of the manifest's `dependencies`, `devDependencies`,
+//         (lockfileVersion 2 or 3 with a `packages` map), lists every key of the manifest's `dependencies`, `devDependencies`,
 //         `optionalDependencies` and `peerDependencies` (a peer that
 //         `peerDependenciesMeta` marks `optional: true` excepted) as a
 //         top-level entry whose version satisfies the declared range (a spec
@@ -1245,27 +1255,37 @@ export async function fetchNpmManifests(
 //       * the baseline version is installed by no fetched lockfile at any
 //         install path. This is answered from an index built once over all
 //         fetched lockfiles, under one node budget. Every lockfile must have a
-//         known shape and every entry that names a package must carry a semver
-//         version (an `npm:` alias is resolved first); an entry that does not
-//         (a git or tarball version, a `file:` version, no version, not an
-//         object) makes its name "unknown", and an unknown name is never
-//         provably uninstalled. So does a `dependencies` or
-//         `optionalDependencies` edge of a lockfile entry (the root entry and
-//         workspace folders included; entries marked `inBundle` excepted) to a
-//         name the same lockfile has no entry for by key (an alias key counts as
-//         the key it is): such a lockfile is damaged or edited by hand. A
-//         lockfile of unknown shape, or an exhausted budget (entries and edges
-//         count), makes every name unprovable.
+//         known shape (a lockfileVersion 1 lockfile has none: npm does not
+//         install from its `requires` but re-resolves from the registry, so
+//         one anywhere makes every name unprovable) and every entry that names
+//         a package must carry a semver version (an `npm:` alias is resolved
+//         first); an entry that does not (a git or tarball version, a `file:`
+//         version, no version, not an object) makes its name "unknown", and an
+//         unknown name is never provably uninstalled. The edges of the
+//         `packages` entries are read too: `dependencies`, `optionalDependencies`
+//         and `peerDependencies` (a peer the entry itself marks optional in its
+//         `peerDependenciesMeta` excepted), of every entry including the root
+//         entry and workspace folders. An edge to a name the same lockfile has
+//         no entry for by key (an alias key counts as the key it is) makes the
+//         lockfile unusable and every name unprovable: `npm install` resolves
+//         such an edge from the registry (a lockfile written with
+//         `--legacy-peer-deps`, a damaged or hand-edited one). Two exemptions:
+//         entries marked `inBundle` (their edges are inside the package), and
+//         a name the entry itself lists in `bundleDependencies` or
+//         `bundledDependencies` (npm takes it from the tarball): that name only
+//         becomes unknown. The legacy `dependencies` mirror of a version 2
+//         lockfile is scanned for installed versions only, since npm reads the
+//         `packages` map. An exhausted budget (entries and edges count) makes
+//         every name unprovable.
 //
 // "Complete tree" and "no other package manager's lockfile" gate the whole
 // override, additions included: without them there is no narrow resolution and
 // the result is the baseline. The other conditions gate removals only, since an
 // addition never removes anything. Optional, peer and bundled declarations block
 // removals but never add. Nothing else removes or replaces a baseline entry. A
-// lockfileVersion 1 lockfile has no edge map, so the edge rule reads versions 2
-// and 3 only. No
-// pattern is built from repository content, and `workspaces` is only tested for
-// presence. Whatever a check cannot establish (a read or parse error, an
+// manifest with a lockfileVersion 1 lockfile is not narrow and keeps the
+// baseline chain. No pattern is built from repository content, and
+// `workspaces` is only tested for presence. Whatever a check cannot establish (a read or parse error, an
 // unknown shape, an exhausted budget) keeps the baseline entry: under-reporting
 // is worse than over-reporting. "Installed nowhere" means in no package-lock.json
 // the scan reads; vendored, build and fixture directories are not read. Npm
@@ -1489,17 +1509,13 @@ function pinsPackageManager(data: JsonObject): boolean {
 
 interface NarrowLockfile {
   data: JsonObject;
-  /** lockfileVersion 2/3 with a `packages` map: the only shape narrow resolution reads. */
-  packages: JsonObject | null;
-  /** The `dependencies` map: the whole tree of lockfileVersion 1, the legacy mirror in 2. */
-  v1Dependencies: JsonObject | null;
   /**
-   * A shape this scan understands: lockfileVersion 1 with a `dependencies`
-   * object, or 2/3 with a `packages` object. Anything else proves nothing about
-   * what installs. (`buildInstalledIndex` also refuses a `packages` or
-   * `dependencies` key that is present and not an object.)
+   * lockfileVersion 2 or 3 with a `packages` map: the only shape this scan can
+   * prove things from; null for anything else. That includes lockfileVersion 1:
+   * npm does not install from a v1 lockfile's `requires` edges but re-resolves
+   * from the registry, so a v1 lockfile does not say what is installed.
    */
-  known: boolean;
+  packages: JsonObject | null;
 }
 
 function readNarrowLockfile(content: string): NarrowLockfile | null {
@@ -1507,9 +1523,7 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
   if (!data) return null;
   const version = data.lockfileVersion;
   const packages = (version === 2 || version === 3) && isPlainObject(data.packages) ? data.packages : null;
-  const v1Dependencies = isPlainObject(data.dependencies) ? data.dependencies : null;
-  const known = version === 1 ? v1Dependencies !== null : packages !== null;
-  return { data, packages, v1Dependencies, known };
+  return { data, packages };
 }
 
 // Budget for the one pass over all fetched lockfiles: lockfile entries visited
@@ -1529,6 +1543,21 @@ interface InstalledIndex {
 
 const NODE_MODULES = 'node_modules/';
 
+// The edge fields of a lockfile entry that npm installs from.
+const EDGE_FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
+
+// The names an entry lists in its own `bundleDependencies` / `bundledDependencies`
+// (an array of names; any other shape lists none).
+function bundledNamesOf(entry: JsonObject): Set<string> {
+  const names = new Set<string>();
+  for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    const list = entry[field];
+    if (!Array.isArray(list)) continue;
+    for (const name of list) if (typeof name === 'string') names.add(name);
+  }
+  return names;
+}
+
 // The package name a `packages` key installs under: what follows its last
 // `node_modules/`. undefined for a key without one (a workspace package folder).
 function nameFromPackagesKey(key: string): string | undefined {
@@ -1538,13 +1567,15 @@ function nameFromPackagesKey(key: string): string | undefined {
 
 /**
  * Index what the fetched lockfiles install, in one pass: top level, nested
- * under another package, aliased installs, a v1 `dependencies` tree. Every
- * entry that names a package must yield a semver version, else its name goes to
- * `unknown` (the root `""` entry, `link: true` entries and version-less
- * workspace folder entries are exempt). Returns null ("not provable for any
- * name") when a lockfile is missing, unparsed or of an unknown shape, an entry
- * cannot be attributed to a name at all (an unparsable `name`, an unparsable
- * `npm:` version, a key without a name), or the total node budget is exhausted.
+ * under another package, aliased installs, and the legacy `dependencies`
+ * mirror of a v2 lockfile. Every entry that names a package must yield a semver
+ * version, else its name goes to `unknown` (the root `""` entry, `link: true`
+ * entries and version-less workspace folder entries are exempt). Returns null
+ * ("not provable for any name") when a lockfile is missing, unparsed or of an
+ * unknown shape (lockfileVersion 1 included), an entry cannot be attributed to
+ * a name at all (an unparsable `name`, an unparsable `npm:` version, a key
+ * without a name), an entry has an edge to a name the same lockfile has no
+ * entry for (see below), or the total node budget is exhausted.
  */
 function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledIndex | null {
   const versions = new Map<string, Set<string>>();
@@ -1561,65 +1592,76 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
     if (normalised !== null) set.add(normalised);
   };
   for (const lock of locks) {
-    if (lock === null || !lock.known) return null;
-    const { packages, dependencies } = lock.data;
-    if (packages !== undefined) {
-      if (!isPlainObject(packages)) return null;
-      // Names this lockfile has an entry for (by key), and the names its
-      // entries depend on (`dependencies`, `optionalDependencies`).
-      const entryNames = new Set<string>();
-      const edges: Array<{ key: string; spec: unknown }> = [];
-      for (const [key, entry] of Object.entries(packages)) {
-        if (++visited > MAX_LOCK_INDEX_NODES) return null;
-        const tail = nameFromPackagesKey(key);
-        if (tail !== undefined) entryNames.add(tail);
-        // An entry the lockfile itself lists as bundled carries its own
-        // dependencies inside the package, so its edges need no entry here.
-        if (isPlainObject(entry) && entry.inBundle !== true) {
-          for (const field of ['dependencies', 'optionalDependencies'] as const) {
-            const map = entry[field];
-            if (map === undefined) continue;
-            if (!isPlainObject(map)) return null;
-            for (const [edgeKey, spec] of Object.entries(map)) {
-              if (++visited > MAX_LOCK_INDEX_NODES) return null;
-              edges.push({ key: edgeKey, spec });
-            }
+    if (lock === null || lock.packages === null) return null;
+    const { packages } = lock;
+    const { dependencies } = lock.data;
+    // Names this lockfile has an entry for (by key), and the edges its entries
+    // have: `dependencies`, `optionalDependencies` and `peerDependencies` (a
+    // peer the entry's own `peerDependenciesMeta` marks optional excepted).
+    const entryNames = new Set<string>();
+    const edges: Array<{ key: string; spec: unknown; bundled: boolean }> = [];
+    for (const [key, entry] of Object.entries(packages)) {
+      if (++visited > MAX_LOCK_INDEX_NODES) return null;
+      const tail = nameFromPackagesKey(key);
+      if (tail !== undefined) entryNames.add(tail);
+      // An entry the lockfile itself lists as bundled carries its own
+      // dependencies inside the package, so its edges need no entry here.
+      if (isPlainObject(entry) && entry.inBundle !== true) {
+        const bundledNames = bundledNamesOf(entry);
+        const peerMeta = isPlainObject(entry.peerDependenciesMeta) ? entry.peerDependenciesMeta : undefined;
+        for (const field of EDGE_FIELDS) {
+          const map = entry[field];
+          if (map === undefined) continue;
+          if (!isPlainObject(map)) return null;
+          for (const [edgeKey, spec] of Object.entries(map)) {
+            if (++visited > MAX_LOCK_INDEX_NODES) return null;
+            if (field === 'peerDependencies' && peerIsOptional(peerMeta, edgeKey)) continue;
+            edges.push({ key: edgeKey, spec, bundled: bundledNames.has(edgeKey) });
           }
         }
-        if (key === '') continue;
-        if (tail === '') return null;
-        if (!isPlainObject(entry)) {
-          if (tail === undefined) return null;
-          unknown.add(tail);
-          continue;
-        }
-        if (entry.link === true) continue;
-        const declared = entry.name;
-        if (declared !== undefined && (typeof declared !== 'string' || declared === '')) return null;
-        // A workspace package folder entry without a version names nothing installed.
-        if (tail === undefined && entry.version === undefined) continue;
-        const name = declared ?? tail ?? key.split('/').pop()!;
-        const version = String(entry.version);
-        if (semver.valid(version) === null) {
-          unknown.add(name);
-          continue;
-        }
-        record(name, version);
       }
-      // An edge to a name the lockfile has no entry for means it is damaged or
-      // hand-edited: some version of that name is installed that the lockfile
-      // does not show. (An alias edge names the real package as well.)
-      for (const { key, spec } of edges) {
-        if (entryNames.has(key)) continue;
-        unknown.add(key);
-        const alias = typeof spec === 'string' && spec.trim().startsWith('npm:') ? parseNpmAlias(spec) : null;
-        if (alias) unknown.add(alias.realName);
-        else if (typeof spec === 'string' && spec.trim().startsWith('npm:')) return null;
+      if (key === '') continue;
+      if (tail === '') return null;
+      if (!isPlainObject(entry)) {
+        if (tail === undefined) return null;
+        unknown.add(tail);
+        continue;
       }
+      if (entry.link === true) continue;
+      const declared = entry.name;
+      if (declared !== undefined && (typeof declared !== 'string' || declared === '')) return null;
+      // A workspace package folder entry without a version names nothing installed.
+      if (tail === undefined && entry.version === undefined) continue;
+      const name = declared ?? tail ?? key.split('/').pop()!;
+      const version = String(entry.version);
+      if (semver.valid(version) === null) {
+        unknown.add(name);
+        continue;
+      }
+      record(name, version);
+    }
+    // An edge to a name the lockfile has no entry for means the lockfile is
+    // not the whole install: `npm install` resolves the missing edge from the
+    // registry (a lock written with `--legacy-peer-deps`, a damaged or
+    // hand-edited lock), so nothing is provable. The one exception is a name
+    // the entry itself lists in `bundleDependencies`: npm takes it from the
+    // package tarball, so what it installs is unknown, not absent. (An alias
+    // edge names the real package as well.) Edge ranges are not compared with
+    // the versions the lockfile holds.
+    for (const { key, spec, bundled } of edges) {
+      if (entryNames.has(key)) continue;
+      if (!bundled) return null;
+      unknown.add(key);
+      const aliasForm = typeof spec === 'string' && spec.trim().startsWith('npm:');
+      const alias = aliasForm ? parseNpmAlias(spec) : null;
+      if (alias) unknown.add(alias.realName);
+      else if (aliasForm) return null;
     }
     if (dependencies !== undefined) {
       if (!isPlainObject(dependencies)) return null;
-      // lockfileVersion 1 (and the legacy mirror in v2): nested `dependencies`.
+      // The legacy mirror of a v2 lockfile: nested `dependencies`. npm reads `packages`
+      // when it is there; the mirror is scanned only so that a version it holds that
+      // `packages` lacks keeps its name from being provably uninstalled.
       const stack: JsonObject[] = [dependencies];
       while (stack.length > 0) {
         const map = stack.pop()!;
@@ -1669,15 +1711,11 @@ function indexHas(index: InstalledIndex, name: string, version: string): boolean
 // link, no alias under another name) that satisfies it; any other spec (git,
 // `file:`, tag, alias) only needs the entry to exist.
 function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration): boolean {
-  const entry = lock.packages
-    ? ownValue(lock.packages, `node_modules/${decl.key}`)
-    : lock.v1Dependencies
-      ? ownValue(lock.v1Dependencies, decl.key)
-      : undefined;
+  const entry = lock.packages ? ownValue(lock.packages, `node_modules/${decl.key}`) : undefined;
   if (!isPlainObject(entry)) return false;
   if (!isPlainSemverRange(decl.spec)) return true;
   if (entry.link === true) return false;
-  if (lock.packages && entry.name !== undefined && entry.name !== decl.key) return false;
+  if (entry.name !== undefined && entry.name !== decl.key) return false;
   return satisfiesLikeNpm(String(entry.version), decl.spec);
 }
 
@@ -1686,8 +1724,7 @@ function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration)
 // at any depth; a lockfile made before the override was added, or edited by
 // hand, can hold other versions.) An entry of an overridden name that has no
 // readable version, or is not an object, fails. Entries are found by key name,
-// by `name` field (aliases) and, in a legacy `dependencies` tree, by key or
-// `npm:` target. `link` entries install no registry version and are skipped.
+// by `name` field (aliases). `link` entries install no registry version and are skipped.
 // (A `name` of the wrong type and an `npm:` version that cannot be parsed are
 // not judged here: `buildInstalledIndex` refuses such a lockfile, which keeps
 // every baseline entry.)
@@ -1710,21 +1747,6 @@ function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, s
       if (entry.link === true) continue;
       const named = typeof entry.name === 'string' ? entry.name : tail;
       if (!check(named, entry.version)) return false;
-    }
-  }
-  if (lock.v1Dependencies) {
-    const stack: JsonObject[] = [lock.v1Dependencies];
-    while (stack.length > 0) {
-      for (const [key, entry] of Object.entries(stack.pop()!)) {
-        if (!isPlainObject(entry)) {
-          if (overrides.has(key)) return false;
-          continue;
-        }
-        if (isPlainObject(entry.dependencies)) stack.push(entry.dependencies);
-        const raw = typeof entry.version === 'string' ? entry.version : undefined;
-        const alias = raw !== undefined && raw.trim().startsWith('npm:') ? parseNpmAlias(raw) : null;
-        if (alias ? !check(alias.realName, alias.realSpec) : !check(key, raw)) return false;
-      }
     }
   }
   return true;
