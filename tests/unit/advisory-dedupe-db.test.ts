@@ -79,8 +79,13 @@ describe('deploy wiring', () => {
     expect(execute[execute.indexOf('--file') + 1]).toBe(SQL_FILE);
     expect(push).toContain('--skip-generate');
     for (const c of commands) expect(c).not.toContain('--accept-data-loss');
-    // Both steps are chained with && so a failing SQL step stops the deploy.
-    expect(migrateScript()).toMatch(/db execute .*&& npx prisma@\S+ db push/);
+    // Every step is chained with && and nothing else, so a failing SQL step
+    // stops the deploy: no ||, no ; and no pipe may follow or wrap a step.
+    const script = migrateScript();
+    expect(script).toMatch(/db execute .*&& npx prisma@\S+ db push/);
+    for (const part of script.split('&&')) {
+      expect(part, `step "${part.trim()}"`).not.toMatch(/\|\||;|\s\|\s/);
+    }
   });
 
   it('no other post_update item pushes the schema around the Advisory SQL', () => {
