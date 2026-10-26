@@ -20,6 +20,9 @@
  *                 lockfile of the repository (`why` names the reason); an
  *                 added entry is a version a manifest's own lockfile installs.
  *
+ * In the declarer-floor block at the end, `base` is the result before the
+ * declarer floors (the narrow override included), not the pre-narrow code.
+ *
  * The invariant checked for every scenario: no base entry is lost unless it is
  * listed as dropped.
  */
@@ -270,8 +273,8 @@ const EXPECTED: Record<string, Expectation> = {
   negDeclarationNotAPlainRange: narrow({
     base: ['vite@8.3.0'],
     dropped: [],
-    added: ['vite@8.3.5'],
-    why: 'frontend declares a git spec: baseline stays; backend adds 8.3.5',
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'frontend declares a git spec: baseline stays; backend adds 8.3.5; a git spec is no range to compare, so every lockfile version of vite (7.3.7 too) is queried',
   }),
   negLockVersionOutsideDeclaredRange: narrow({
     base: ['vite@7.3.5'],
@@ -431,8 +434,8 @@ const EXPECTED: Record<string, Expectation> = {
   negStaleLockRangeUnsatisfied: narrow({
     base: ['vite@7.3.5', 'x@1.0.0'],
     dropped: [],
-    added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'extra/ lockfile has x 1.0.0 but the manifest asks ^2.0.0: the lockfile is stale, not locked',
+    added: ['vite@7.3.7', 'vite@8.3.5', 'x@2.0.0'],
+    why: 'extra/ lockfile has x 1.0.0 but the manifest asks ^2.0.0: the lockfile is stale, not locked; the declarer installs a version inside ^2.0.0, so its floor 2.0.0 is queried next to the lockfile 1.0.0',
   }),
   negStaleLockMissingDevDep: narrow({
     base: ['vite@7.3.5', 'x@1.0.0'],
@@ -611,7 +614,12 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@8.3.5'],
     why: 'frontend lockfile has vite as a link entry that carries a version: not narrow, adds nothing; backend adds 8.3.5',
   }),
-  negEntryRenamedByNameField: same(['vite@8.3.5']),
+  negEntryRenamedByNameField: narrow({
+    base: ['vite@8.3.5'],
+    dropped: [],
+    added: ['vite@7.3.5'],
+    why: 'frontend lockfile entry is renamed (vite-fork), so only backend 8.3.5 resolves vite; frontend declares ^7.3.5, which 8.3.5 does not satisfy: its floor 7.3.5 is queried',
+  }),
   negDenoLock: same(['vite@7.3.5']),
   negPnpmWorkspaceWithoutPnpmLock: narrow({
     base: ['vite@7.3.5'],
@@ -709,6 +717,63 @@ const EXPECTED: Record<string, Expectation> = {
   }),
   midPeerForeignLockfile: same(['vite@7.3.5']),
   midPeerInWorkspaceMember: same(['vite@7.3.5']),
+  // ---- declarer floors and non-range declarers beside a repo-wide resolution:
+  // head = base + added (additions only). ----
+  declarerRangeBelowRootLock: narrow({
+    base: ['vite@8.3.5'],
+    dropped: [],
+    added: ['vite@6.0.0'],
+    why: 'root ^8.3.0 locked 8.3.5, docs/ ^6.0.0 without a lockfile installs a 6.x: its floor 6.0.0 is queried next to the repo-wide 8.3.5',
+  }),
+  declarerDevRangeBelowRootLock: narrow({
+    base: ['vite@8.3.5'],
+    dropped: [],
+    added: ['vite@6.0.0'],
+    why: 'the same for a devDependencies declaration',
+  }),
+  declarerAliasBelowRootLock: narrow({
+    base: ['vite@8.3.5'],
+    dropped: [],
+    added: ['vite@6.0.0'],
+    why: 'the same for an npm: alias declaration, which declares its real name',
+  }),
+  declarerRangeSatisfiedByRootLock: same(['vite@8.3.5']),
+  declarerTwoRangesBelowRootLock: narrow({
+    base: ['vite@8.3.5'],
+    dropped: [],
+    added: ['vite@5.4.2', 'vite@6.0.0'],
+    why: 'two declarers without a lockfile, both below the repo-wide 8.3.5: both floors are queried',
+  }),
+  declarerRangesWithoutAnyLock: same(['vite@6.0.0']),
+  // Documented residual, not a feature: an ambiguous name is answered by the floor
+  // of the lowest range only, so root's installed 8.3.5 and 7.3.7 are never queried.
+  declarerRangesBesideAmbiguousYarnLock: same(['vite@6.0.0']),
+  latestDeclarerBesideLockedRange: narrow({
+    base: ['vite@8.3.0', 'vite@8.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'a/ declares latest and installs 7.3.7, b/ ^8.3.0 installs 8.3.5; the repo-wide chain holds the floor 8.3.0 and the narrow 8.3.5, never 7.3.7: every lockfile version of a name a non-range spec declares is queried',
+  }),
+  tagDeclarerBesideLockedRange: narrow({
+    base: ['vite@8.3.0', 'vite@8.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'a dist-tag other than latest behaves like latest',
+  }),
+  wildcardDeclarerBesideLockedRange: same(['vite@7.3.7', 'vite@8.3.5']),
+  latestDeclarerSingleResolution: same(['vite@8.3.5']),
+  rangeBelowAndLatestDeclarer: narrow({
+    base: ['vite@6.0.0', 'vite@8.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7'],
+    why: 'docs/ ^6.0.0 has no lockfile: the repo-wide floor 6.0.0 already stands for it; the latest declarer adds its 7.3.7',
+  }),
+  latestDeclarerNestedCopy: narrow({
+    base: ['plug@1.0.0', 'vite@7.3.6'],
+    dropped: [],
+    added: ['vite@8.3.5'],
+    why: 'one project declaring latest; the lockfile holds vite 8.3.5 at the top level and 7.3.6 under plug: the chain used only the lowest, 8.3.5 is added',
+  }),
   vendoredPackageManagerConfigNotRead: narrow({
     base: ['vite@7.3.5'],
     dropped: ['vite@7.3.5'],
