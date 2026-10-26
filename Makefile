@@ -2,6 +2,12 @@
 
 .DEFAULT_GOAL := help
 
+# Dev compose command. -p beats COMPOSE_PROJECT_NAME from .env, so the dev stack
+# (project depsight-dev, volume depsight-dev_postgres_data) can never share a
+# project or a database volume with the production stack, even in a production
+# checkout. Defined before the first use: recipes expand it when they run.
+DC_DEV = docker compose -p depsight-dev -f docker-compose.dev.yml
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -11,22 +17,22 @@ help: ## Show this help message
 # ── Development (Docker) ────────────────────────────────────────────
 
 dev: ## Start dev environment (installs deps, pushes DB schema, starts server)
-	docker compose -f docker-compose.dev.yml up --build
+	$(DC_DEV) up --build
 
 dev-up: ## Start dev environment in background
-	docker compose -f docker-compose.dev.yml up --build -d
+	$(DC_DEV) up --build -d
 
 dev-down: ## Stop dev environment
-	docker compose -f docker-compose.dev.yml down
+	$(DC_DEV) down
 
 dev-logs: ## Tail dev logs
-	docker compose -f docker-compose.dev.yml logs -f
+	$(DC_DEV) logs -f
 
 dev-ps: ## Show running dev containers
-	docker compose -f docker-compose.dev.yml ps
+	$(DC_DEV) ps
 
 dev-clean: ## Stop dev environment and remove volumes
-	docker compose -f docker-compose.dev.yml down -v
+	$(DC_DEV) down -v
 
 # ── Production (Docker) ─────────────────────────────────────────────
 
@@ -38,7 +44,6 @@ prod-down: ## Stop production containers
 
 # ── Run commands inside dev container ───────────────────────────────
 
-DC_DEV = docker compose -f docker-compose.dev.yml
 RUN    = $(DC_DEV) run --rm app
 
 test: ## Run tests (in container)

@@ -24,7 +24,7 @@ docker compose -f docker-compose.traefik.yml build --no-cache app
 docker compose -f docker-compose.traefik.yml up -d
 ```
 
-The container does not apply schema changes; the deploy hook in `.relay.yml` (`post_update`) does, by running `prisma/pre-push/advisory-unique-key.sql` and then `prisma db push`. For a manual push use `npm run db:push`, not a bare `prisma db push`: the script runs the same SQL first, which removes duplicate Advisory rows and creates the unique key the push would otherwise refuse. No flag or operator step is needed, see [Configuration](configuration.md#deploying-the-advisory-unique-key).
+The container does not apply schema changes; the deploy hook in `.relay.yml` (`post_update`) does, by running the one-shot `migrate` service of `docker-compose.traefik.yml` (`docker compose -f docker-compose.traefik.yml run --rm -T migrate`), which runs `prisma/pre-push/advisory-unique-key.sql` and then `prisma db push` on the private database network with the compose file's `POSTGRES_PASSWORD`. For a manual push use `npm run db:push`, not a bare `prisma db push`: the script runs the same SQL first, which removes duplicate Advisory rows and creates the unique key the push would otherwise refuse. No flag or operator step is needed, see [Configuration](configuration.md#deploying-the-advisory-unique-key).
 
 ## Code Review Checklist
 

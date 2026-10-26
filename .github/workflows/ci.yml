@@ -19,6 +19,8 @@ jobs:
           cache: 'npm'
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
       - run: npm run lint
+      - name: Compose files keep the database private and the stacks isolated
+        run: node scripts/check-compose-isolation.mjs
 
   typecheck:
     name: Type Check

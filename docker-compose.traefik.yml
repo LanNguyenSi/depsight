@@ -1,3 +1,8 @@
+# Hosted deployment (agent-relay, see .relay.yml). The project name is pinned so
+# the database volume stays depsight_postgres_data wherever the checkout lives and
+# the dev stack (docker-compose.dev.yml, project depsight-dev) can never share it.
+name: depsight
+
 services:
   app:
     build:
@@ -5,7 +10,10 @@ services:
       dockerfile: Dockerfile
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://depsight:depsight@db:5432/depsight
+      # One variable feeds the app, the db service and the migrate service. The :-depsight
+      # fallback is the password of the live database; see docs/configuration.md
+      # (Rotating the database password).
+      - DATABASE_URL=postgresql://depsight:${POSTGRES_PASSWORD:-depsight}@db:5432/depsight
     env_file:
       - path: .env
         required: false
@@ -29,12 +37,13 @@ services:
       - "traefik.http.routers.ci-insights.service=depsight"
     networks:
       - traefik-public
+      - db-internal
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: depsight
-      POSTGRES_PASSWORD: depsight
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-depsight}
       POSTGRES_DB: depsight
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -44,8 +53,33 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    # Only the private db network: not on traefik-public, no published port.
     networks:
-      - traefik-public
+      - db-internal
+
+  # One-shot schema apply, run by the .relay.yml post_update hook with
+  # `docker compose -f docker-compose.traefik.yml run --rm -T migrate`. The profile keeps
+  # `up`, `build` and the health check from starting it. It joins the default network
+  # for outbound access (apt and npm), because db-internal has none.
+  migrate:
+    profiles: ["tools"]
+    image: node:20-slim
+    working_dir: /app
+    environment:
+      HOME: /tmp
+      DATABASE_URL: postgresql://depsight:${POSTGRES_PASSWORD:-depsight}@db:5432/depsight
+    volumes:
+      - ./prisma:/app/prisma
+    command:
+      - sh
+      - -c
+      - >-
+        apt-get update -qq && apt-get install -y -qq openssl >/dev/null 2>&1
+        && npx prisma@5.22.0 db execute --file prisma/pre-push/advisory-unique-key.sql --schema=prisma/schema.prisma
+        && npx prisma@5.22.0 db push --skip-generate --schema=prisma/schema.prisma
+    networks:
+      - db-internal
+      - default
 
 volumes:
   postgres_data:
@@ -53,3 +87,7 @@ volumes:
 networks:
   traefik-public:
     external: true
+  # internal: no route out of the network; the name is explicit so tools can address it.
+  db-internal:
+    name: depsight-db
+    internal: true
