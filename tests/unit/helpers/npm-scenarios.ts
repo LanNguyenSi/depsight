@@ -20,6 +20,15 @@ const viteTwoProjectFiles = (): Record<string, string> => ({
   'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
 });
 
+// A project that depends on vite ^7.3.5 and installs 7.3.7; the baseline floor
+// is 7.3.5. Beside it a second project `b/` declares vite in a field the
+// baseline does not query (peer, optional or bundled) and installs 7.3.6, a
+// version between the floor and the first project's install.
+const viteMidFiles = (): Record<string, string> => ({
+  'a/package.json': pkg({ name: 'a', dependencies: { vite: '^7.3.5' } }),
+  'a/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+});
+
 export const SCENARIOS: Record<string, Scenario> = {
   viteGoal: {
     files: {
@@ -1359,5 +1368,133 @@ export const SCENARIOS: Record<string, Scenario> = {
   },
   vendoredPackageManagerConfigNotRead: {
     files: { ...viteTwoProjectFiles(), 'node_modules/x/.yarnrc.yml': 'a: b\n', 'dist/pnpm-workspace.yaml': 'packages: []\n' },
+  },
+
+  // ---- peer and optional declarations install under `npm ci`: a narrow one
+  // adds the version its own lockfile installs (vite fixture `viteMidFiles`:
+  // a/ installs 7.3.7, b/ declares vite and installs 7.3.6) ----
+  midPeerDeclarer: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  midOptionalDeclarer: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', optionalDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  // A bundled name carries no range: it keeps blocking and never adds.
+  midBundledDeclarer: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', bundleDependencies: ['vite'] }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  // An optional peer whose own lockfile has the entry: npm installs it, so it adds.
+  midOptionalPeerListed: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({
+        name: 'b',
+        peerDependencies: { vite: '^7.3.6' },
+        peerDependenciesMeta: { vite: { optional: true } },
+      }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  // An optional peer the lockfile lacks is not installed: nothing to add, and
+  // it keeps blocking the drop of the floor (no lockfile entry to prove it by).
+  midOptionalPeerUnlisted: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({
+        name: 'b',
+        peerDependencies: { vite: '^7.3.6' },
+        peerDependenciesMeta: { vite: { optional: true } },
+      }),
+      'b/package-lock.json': v3({}),
+      // A third project that resolves vite elsewhere, so the baseline name is
+      // ambiguous and sits at the floor.
+      'c/package.json': pkg({ name: 'c', dependencies: { vite: '^8.3.0' } }),
+      'c/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  // The lockfile installs a version outside the declared peer range: not narrow.
+  midPeerOutOfRange: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.1.0' }),
+    },
+  },
+  midOptionalOutOfRange: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', optionalDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.1.0' }),
+    },
+  },
+  // An alias form is never narrow: the lockfile key is the local alias.
+  midPeerAlias: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { bundler: 'npm:vite@^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/bundler': { name: 'vite', version: '7.3.6' } }),
+    },
+  },
+  midOptionalAlias: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', optionalDependencies: { bundler: 'npm:vite@^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/bundler': { name: 'vite', version: '7.3.6' } }),
+    },
+  },
+  // The same package as a peer and a dev dependency of one project (the usual
+  // plugin shape) adds its version once.
+  midPeerAndDevDeclarer: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({
+        name: 'b',
+        peerDependencies: { vite: '^7.3.6' },
+        devDependencies: { vite: '^7.3.6' },
+      }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  // A peer on a package that is another project of the repository: local names
+  // are never queried.
+  midPeerOnLocalPackage: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { a: '^1.0.0' } }),
+      'b/package-lock.json': v3({ 'node_modules/a': '1.0.0' }),
+      'a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { vite: '^7.3.5' } }),
+    },
+  },
+  // Another package manager's lockfile anywhere switches the whole override
+  // off, additions included.
+  midPeerForeignLockfile: {
+    files: {
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+      'c/yarn.lock': yarn([['left@^1.0.0', '1.0.0']]),
+    },
+  },
+  // A peer declaration in a project that is a workspace member is not narrow.
+  midPeerInWorkspaceMember: {
+    files: {
+      'package.json': pkg({ name: 'root', private: true, workspaces: ['b'] }),
+      'package-lock.json': v3({}),
+      ...viteMidFiles(),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
   },
 };

@@ -488,7 +488,8 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * Narrow override (npm only): the chain above is computed first and unchanged
  * (`repoWideNpmEntries`, one entry per name). `applyNarrowOverride` then
  * adds, for repos of separate projects each with its own package-lock.json,
- * the version each manifest's own lockfile installs, and removes a chain
+ * the version each manifest's own lockfile installs (for a dependency, dev, optional or
+ * peer declaration; a bundled name never adds), and removes a chain
  * entry only when `resolveNarrowNpm` proves its version is installed by no
  * package-lock.json the scan reads. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
@@ -516,8 +517,7 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * transitive edges are inconsistent, a git or `file:` dependency changed
  * without updating the lockfile, the contents of a bundling optional package
  * that the lockfile was written without unpacking (on another platform),
- * command line flags, a user or global npmrc, the environment and the state of
- * the registry.
+ * command line flags, a user or global npmrc, the environment and the state of the registry.
  *
  * Vendored, build and fixture directories are not read. The result can
  * therefore hold several entries for one name, one per installed version.

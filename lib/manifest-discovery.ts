@@ -1223,8 +1223,8 @@ export async function fetchNpmManifests(
 //     `narrowVersion` finds the dependency in the manifest's own-directory
 //     `package-lock.json` (lockfileVersion 2/3, top-level key
 //     `node_modules/<name>` only, never an ancestor's lockfile) and the manifest
-//     is narrow for it (the declaration rules below). Only `dependencies` and
-//     `devDependencies` produce additions, as before.
+//     is narrow for it (the declaration rules below). Declarations in `dependencies`,
+//     `devDependencies`, `optionalDependencies` and `peerDependencies` all add.
 //   - REMOVAL. The baseline entry of a name is removed only when everything the
 //     scan reads is positively accounted for. `narrowDropSafe` holds when ALL of
 //     these hold:
@@ -1286,7 +1286,7 @@ export async function fetchNpmManifests(
 // override, additions included: without them there is no narrow resolution and
 // the result is the baseline. The other conditions gate removals only, since an
 // addition never removes anything. Optional, peer and bundled declarations block
-// removals but never add. Nothing else removes or replaces a baseline entry. A
+// removals; only a bundled one never adds. Nothing else removes or replaces an entry. A
 // manifest with a lockfileVersion 1 lockfile is not narrow and keeps the
 // baseline chain. No pattern is built from repository content, and
 // `workspaces` is only tested for presence. Whatever a check cannot establish (a read or parse error, an
@@ -1380,9 +1380,10 @@ interface NarrowDeclaration {
   /** The name `unionNpmDeps` queries it under: the alias target, else the key. */
   realName: string;
   /**
-   * May this declaration produce an addition? Only `dependencies` and
-   * `devDependencies` do (the baseline queries only those); optional, peer and
-   * bundled declarations block removals but never add.
+   * May this declaration produce an addition? Every one with a version range does
+   * (`dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`;
+   * an optional peer only when its own lockfile lists it). A bundled name carries
+   * no range, blocks removals and never adds.
    */
   addable: boolean;
   /**
@@ -1413,9 +1414,8 @@ interface NarrowManifest {
   overridesPlain: boolean;
 }
 
-// Every field of a manifest that names a package it installs or expects.
-const ADDABLE_DEP_FIELDS = ['dependencies', 'devDependencies'] as const;
-const BLOCKING_DEP_FIELDS = ['optionalDependencies', 'peerDependencies'] as const;
+// The fields that declare a package with a version range (`bundleDependencies` has none).
+const DECLARING_DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 
 // A manifest whose dependency maps have an unexpected shape (not an object, a
 // spec that is not a string) counts as unread: it could declare anything.
@@ -1427,11 +1427,11 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
   const rawPeerMeta = data.peerDependenciesMeta;
   if (rawPeerMeta !== undefined && !isPlainObject(rawPeerMeta)) return null;
   const peerMeta: JsonObject | undefined = rawPeerMeta;
-  const fields: Array<{ field: string; addable: boolean }> = [
-    ...ADDABLE_DEP_FIELDS.map((field) => ({ field, addable: true })),
-    ...BLOCKING_DEP_FIELDS.map((field) => ({ field, addable: false })),
-  ];
-  for (const { field, addable } of fields) {
+  // `npm ci` installs a root project's dependencies, devDependencies and
+  // optionalDependencies, and its peerDependencies (an optional peer only when
+  // something else requires it), so each of them adds a version when narrow.
+  // The baseline queries only the first two.
+  for (const field of DECLARING_DEP_FIELDS) {
     const map = data[field];
     if (map === undefined) continue;
     if (!isPlainObject(map)) return null;
@@ -1444,7 +1444,7 @@ function readNarrowManifest(path: string, content: string): NarrowManifest | nul
         spec,
         aliasForm: spec.trim().startsWith('npm:'),
         realName: alias ? alias.realName : key,
-        addable,
+        addable: true,
         // npm 7 and later install peers, unless they are marked optional.
         lockRequired: !(field === 'peerDependencies' && peerIsOptional(peerMeta, key)),
       });
