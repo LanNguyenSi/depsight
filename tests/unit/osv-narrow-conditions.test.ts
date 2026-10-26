@@ -245,8 +245,9 @@ describe('drop rule: every declaring manifest is narrow for the name', () => {
   });
 
   it('declaration that is not a plain semver range (git spec)', async () => {
-    // The baseline here is 8.3.0, the floor of the only semver range; the git spec is not narrow.
-    expect(await scan('negDeclarationNotAPlainRange')).toEqual(['vite@8.3.0', 'vite@8.3.5']);
+    // The baseline here is 8.3.0, the floor of the only semver range; the git spec is not narrow
+    // and no range to compare, so every lockfile version of the name (7.3.7 too) is queried.
+    expect(await scan('negDeclarationNotAPlainRange')).toEqual(['vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
   });
 
   it('installed version outside the declared range (stale lockfile)', async () => {

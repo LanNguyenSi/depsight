@@ -271,9 +271,6 @@ export interface UnionedDep {
  * dimension to Dependency) and is a deliberate follow-up, see task cac1b6fb.
  */
 export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
-  const localNames = new Set(
-    manifests.map((m) => m.name).filter((n): n is string => Boolean(n)),
-  );
   const byName = new Map<string, UnionedDep>();
 
   // The lowest version a spec's semver range admits, or null when the spec is
@@ -303,7 +300,6 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
   };
 
   const add = (name: string, spec: string, isDev: boolean) => {
-    if (localNames.has(name)) return; // workspace-internal reference
     const existing = byName.get(name);
     if (!existing) {
       byName.set(name, { name, versionSpec: spec, isDev });
@@ -318,26 +314,44 @@ export function unionNpmDeps(manifests: ParsedNpmManifest[]): UnionedDep[] {
     });
   };
 
-  // Resolve an `npm:` alias entry to its real name + range before unioning
-  // (see the `npm:` alias RESOLUTION paragraph in the docstring above); a
+  // `npmDeclarations` resolves an `npm:` alias entry to its real name + range
+  // and drops workspace-internal references before the by-name collapse (see
+  // the `npm:` alias RESOLUTION paragraph in the docstring above); a
   // non-alias or unparseable-alias entry passes through unchanged.
-  const resolveAliasedEntry = (name: string, spec: string): { name: string; spec: string } => {
-    const alias = parseNpmAlias(spec);
-    return alias ? { name: alias.realName, spec: alias.realSpec } : { name, spec };
-  };
-
-  for (const m of manifests) {
-    for (const [name, spec] of Object.entries(m.dependencies ?? {})) {
-      const resolved = resolveAliasedEntry(name, String(spec));
-      add(resolved.name, resolved.spec, false);
-    }
-    for (const [name, spec] of Object.entries(m.devDependencies ?? {})) {
-      const resolved = resolveAliasedEntry(name, String(spec));
-      add(resolved.name, resolved.spec, true);
-    }
+  for (const decl of npmDeclarations(manifests)) {
+    add(decl.name, decl.versionSpec, decl.isDev);
   }
 
   return [...byName.values()];
+}
+
+/**
+ * Pure: every `dependencies` / `devDependencies` declaration of every manifest,
+ * one entry per declaring manifest and field (NOT deduped by name), with an
+ * `npm:` alias resolved to its real name and range exactly as `unionNpmDeps`
+ * does, and workspace-internal references (a name that is one of the local
+ * manifests' own `name`) left out. Order: per manifest, dependencies, then
+ * devDependencies. `unionNpmDeps` is the by-name collapse of this list; the
+ * repo-wide CVE chain reads it to see every declared range of a name, not only
+ * the one `unionNpmDeps` keeps.
+ */
+export function npmDeclarations(manifests: ParsedNpmManifest[]): UnionedDep[] {
+  const localNames = new Set(
+    manifests.map((m) => m.name).filter((n): n is string => Boolean(n)),
+  );
+  const out: UnionedDep[] = [];
+  const push = (name: string, rawSpec: unknown, isDev: boolean) => {
+    const spec = String(rawSpec);
+    const alias = parseNpmAlias(spec);
+    const resolved = alias ? { name: alias.realName, spec: alias.realSpec } : { name, spec };
+    if (localNames.has(resolved.name)) return; // workspace-internal reference
+    out.push({ name: resolved.name, versionSpec: resolved.spec, isDev });
+  };
+  for (const m of manifests) {
+    for (const [name, spec] of Object.entries(m.dependencies ?? {})) push(name, spec, false);
+    for (const [name, spec] of Object.entries(m.devDependencies ?? {})) push(name, spec, true);
+  }
+  return out;
 }
 
 /**
@@ -429,7 +443,7 @@ export async function detectEcosystem(
     // Any fallback (exception, truncated tree, or a walk that yielded zero
     // manifest refs and is being patched up via the root probe) means the
     // observed set does not describe the tree the fetched manifests came
-    // from - it must not be used to filter candidates (Finding 1, R1).
+    // from - it must not be used to filter candidates.
     observedLockfilePaths = null;
     observedTreeFacts = null;
     const rootRefs = await probeRootManifests(octokit, owner, repo);
@@ -524,7 +538,7 @@ export async function fetchManifestContents(
 // fall back to is dropped from the scan, same as any other dep with no
 // usable version anywhere.
 //
-// "Usable manifest floor" (task 7fc55e6f, R2 finding on 18f6c239): `collectDeps`
+// "Usable manifest floor" (task 7fc55e6f): `collectDeps`
 // derives the floor by stripping the leading non-digit prefix off the raw
 // manifest spec (e.g. `^2.5.0` -> `2.5.0`). Gating that floor's usability on
 // merely "non-empty" was wrong: a non-semver spec whose text happens to
@@ -591,6 +605,25 @@ export interface LockfileResolutions {
    * `resolved` has no entry for the name.
    */
   ambiguous: Map<string, string>;
+  /**
+   * name -> EVERY distinct concrete version any lockfile entry recorded for
+   * the name (the single `resolved` version, or all the versions behind an
+   * `ambiguous` entry, nested copies included). Optional so a hand-built
+   * `{ resolved, ambiguous }` stays valid; when absent a caller falls back to
+   * the `resolved` and `ambiguous` values. The repo-wide CVE chain queries
+   * these for a name that a non-range spec (`latest`, a tag, `*`) declares.
+   */
+  observed?: Map<string, Set<string>>;
+}
+
+/** Every version the lockfile resolutions know for `name` (see `observed`). */
+export function lockfileVersionsOf(resolutions: LockfileResolutions, name: string): string[] {
+  const out = new Set<string>(resolutions.observed?.get(name) ?? []);
+  const resolved = resolutions.resolved.get(name);
+  if (resolved !== undefined) out.add(resolved);
+  const ambiguous = resolutions.ambiguous.get(name);
+  if (ambiguous !== undefined) out.add(ambiguous);
+  return [...out].filter((v) => /\d/.test(v));
 }
 
 /**
@@ -632,9 +665,13 @@ function createResolutionTracker(): {
   const resolved = new Map<string, string>();
   const ambiguous = new Map<string, string>();
   const conflicted = new Set<string>();
+  const observed = new Map<string, Set<string>>();
 
   const record = (name: string, version: string): void => {
     if (!/\d/.test(version)) return; // skip non-concrete placeholders
+    const seenVersions = observed.get(name);
+    if (seenVersions) seenVersions.add(version);
+    else observed.set(name, new Set([version]));
     if (conflicted.has(name)) {
       const lowest = ambiguous.get(name);
       ambiguous.set(name, lowest === undefined ? version : pickLowerVersion(lowest, version));
@@ -651,7 +688,7 @@ function createResolutionTracker(): {
     // existing === version: same resolution seen again, no-op.
   };
 
-  return { record, result: () => ({ resolved, ambiguous }) };
+  return { record, result: () => ({ resolved, ambiguous, observed }) };
 }
 
 // ---- npm lockfile resolver -------------------------------------------------
@@ -1164,6 +1201,25 @@ export function mergeLockfileResolutions(
       );
     }
   }
+
+  // Every version any input observed for a name, kept whole (the `ambiguous`
+  // map above keeps only the lowest). The inputs' `resolved` and `ambiguous`
+  // values count as observed even when an input carries no `observed` map.
+  const observed = merged.observed ?? new Map<string, Set<string>>();
+  const observe = (name: string, version: string): void => {
+    if (!/\d/.test(version)) return;
+    const versions = observed.get(name);
+    if (versions) versions.add(version);
+    else observed.set(name, new Set([version]));
+  };
+  for (const input of results) {
+    for (const [name, versions] of input.observed ?? []) {
+      for (const version of versions) observe(name, version);
+    }
+    for (const [name, version] of input.resolved) observe(name, version);
+    for (const [name, version] of input.ambiguous) observe(name, version);
+  }
+  merged.observed = observed;
 
   return merged;
 }

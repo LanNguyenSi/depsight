@@ -363,11 +363,14 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
 
     const body = osvQueryBody(mockFetch);
     // THE REGRESSION GUARD: a query is sent at all (pre-fix: zero queries).
-    expect(body.queries).toHaveLength(1);
-    expect(body.queries[0].package.name).toBe('foo');
-    // The lowest of the two conflicting resolutions (1.0.0), not the floor
-    // (unusable — '*' has no digit) and not the higher conflicting value.
-    expect(body.queries[0].version).toBe('1.0.0');
+    // The chain answers with the lowest of the two conflicting resolutions
+    // (1.0.0), not the floor (unusable: '*' has no digit); a `*` declarer
+    // installs whatever its lockfile holds, so the other copy (2.0.0) is
+    // queried too.
+    expect(body.queries.map((q) => `${q.package.name}@${q.version}`).sort()).toEqual([
+      'foo@1.0.0',
+      'foo@2.0.0',
+    ]);
   });
 
   it('(d) FINDING 2 ALIAS END-TO-END: an aliased dependency is queried under its REAL name, using the lockfile-resolved version', async () => {
@@ -479,11 +482,14 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     await fetchOsvAdvisories('tok', 'o', 'r', 'main');
 
     const body = osvQueryBody(mockFetch);
-    expect(body.queries).toHaveLength(1);
-    expect(body.queries[0].package.name).toBe('widget');
     // THE FIX: the ambiguous lowest (2.0.4), not the meaningless floor
-    // ('2#main', which the pre-fix `floor !== ''` guard would have sent).
-    expect(body.queries[0].version).toBe('2.0.4');
+    // ('2#main', which the pre-fix `floor !== ''` guard would have sent). A git
+    // spec is no range to compare, so the other lockfile copy (3.2.1) is
+    // queried as well.
+    expect(body.queries.map((q) => `${q.package.name}@${q.version}`).sort()).toEqual([
+      'widget@2.0.4',
+      'widget@3.2.1',
+    ]);
   });
 
   it('(g) NEGATIVE CONTROL: a usable semver floor still wins over the ambiguous fallback', async () => {
@@ -541,10 +547,14 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     await fetchOsvAdvisories('tok', 'o', 'r', 'main');
 
     const body = osvQueryBody(mockFetch);
-    expect(body.queries).toHaveLength(2);
-    const byName = Object.fromEntries(body.queries.map((q) => [q.package.name, q.version]));
-    expect(byName.latestDep).toBe('1.0.0');
-    expect(byName.wsDep).toBe('4.0.0');
+    // The ambiguous lowest of each name (the last-resort fallback) plus the
+    // other lockfile copy: neither spec is a range to compare.
+    expect(body.queries.map((q) => `${q.package.name}@${q.version}`).sort()).toEqual([
+      'latestDep@1.0.0',
+      'latestDep@2.0.0',
+      'wsDep@4.0.0',
+      'wsDep@5.0.0',
+    ]);
   });
 
   // --------------------------------------------------------------------------
@@ -819,9 +829,12 @@ describe('collectDeps / fetchOsvAdvisories: yarn.lock version selection (end-to-
     await fetchOsvAdvisories('tok', 'o', 'r', 'main');
 
     const body = osvQueryBody(mockFetch);
-    expect(body.queries).toHaveLength(1);
-    expect(body.queries[0].package.name).toBe('widget');
-    expect(body.queries[0].version).toBe('9.3.1');
+    // The cross-format ambiguous lowest (9.3.1) and the other format's version
+    // (10.5.0): `latest` is no range to compare.
+    expect(body.queries.map((q) => `${q.package.name}@${q.version}`).sort()).toEqual([
+      'widget@10.5.0',
+      'widget@9.3.1',
+    ]);
   });
 });
 
