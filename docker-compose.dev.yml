@@ -1,3 +1,9 @@
+# Development stack (`make dev`). It has its own project name and database
+# volume, so it never touches the production stack's data even when it runs
+# from a production checkout. The Makefile also passes -p depsight-dev, which
+# beats a COMPOSE_PROJECT_NAME set in .env.
+name: depsight-dev
+
 services:
   app:
     build:

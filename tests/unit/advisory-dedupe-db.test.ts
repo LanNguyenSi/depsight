@@ -30,14 +30,40 @@ const INDEX_NAME = 'Advisory_scanId_ghsaId_packageName_key';
 const SQL_FILE = 'prisma/pre-push/advisory-unique-key.sql';
 const BASE_SCHEMA = 'tests/fixtures/schema-before-advisory-key.prisma';
 
-/** The prisma invocations of the relay's post_update command, in order. */
-function relayPrismaCommands(): string[][] {
+const HOSTED_FILE = 'docker-compose.traefik.yml';
+const RELAY_HOOK = `docker compose -f ${HOSTED_FILE} run --rm -T migrate`;
+
+/** The relay's post_update items. */
+function relayHookItems(): string[] {
   const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
   const hook = relay.match(/^post_update:\s*\n((?:\s+-.*\n?)+)/m);
   expect(hook, '.relay.yml has a post_update list').not.toBeNull();
-  const inner = (hook as RegExpMatchArray)[1].match(/sh -c "([^"]*)"/);
-  expect(inner, 'post_update runs its steps through sh -c').not.toBeNull();
-  return (inner as RegExpMatchArray)[1]
+  return (hook as RegExpMatchArray)[1]
+    .split('\n')
+    .filter((line) => /^\s+-\s/.test(line))
+    .map((line) => line.replace(/^\s+-\s+/, '').trim());
+}
+
+/** The shell text of the migrate service's `sh -c` command in the hosted compose file. */
+function migrateScript(): string {
+  const compose = readFileSync(join(ROOT, HOSTED_FILE), 'utf8');
+  const service = compose.match(/^ {2}migrate:\n((?: {4}.*\n| *\n)+)/m);
+  expect(service, `${HOSTED_FILE} has a migrate service`).not.toBeNull();
+  const command = (service as RegExpMatchArray)[1].match(
+    /^ {4}command:\n {6}- sh\n {6}- -c\n {6}- >-\n((?: {8}.*\n)+)/m,
+  );
+  expect(command, 'migrate runs its steps through sh -c (folded block)').not.toBeNull();
+  return (command as RegExpMatchArray)[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** The prisma invocations the relay's post_update runs (via the migrate service), in order. */
+function relayPrismaCommands(): string[][] {
+  expect(relayHookItems()).toEqual([RELAY_HOOK]);
+  return migrateScript()
     .split('&&')
     .map((part) => part.trim())
     .filter((part) => part.startsWith('npx prisma@'))
@@ -53,22 +79,26 @@ describe('deploy wiring', () => {
     expect(execute[execute.indexOf('--file') + 1]).toBe(SQL_FILE);
     expect(push).toContain('--skip-generate');
     for (const c of commands) expect(c).not.toContain('--accept-data-loss');
-    // Both steps are chained with && so a failing SQL step stops the deploy.
-    const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
-    expect(relay).toMatch(/db execute [^"]*&& npx prisma@\S+ db push/);
+    // Every step is chained with && and nothing else, so a failing SQL step
+    // stops the deploy: no ||, no ; and no pipe may follow or wrap a step.
+    const script = migrateScript();
+    expect(script).toMatch(/db execute .*&& npx prisma@\S+ db push/);
+    for (const part of script.split('&&')) {
+      expect(part, `step "${part.trim()}"`).not.toMatch(/\|\||;|\s\|\s/);
+    }
   });
 
   it('no other post_update item pushes the schema around the Advisory SQL', () => {
-    // The replay below parses only the sh -c item, so any further item would
-    // run unseen. Pin the hook to that one item, and pin that the whole file
-    // pushes the schema exactly once, after the SQL step.
+    // The replay below runs only the migrate service's command, so any further
+    // hook item would run unseen. Pin the hook to that one item, and pin that
+    // the migrate command pushes the schema exactly once, after the SQL step.
+    expect(relayHookItems()).toEqual([RELAY_HOOK]);
     const relay = readFileSync(join(ROOT, '.relay.yml'), 'utf8');
-    const hook = relay.match(/^post_update:\s*\n((?:\s+-.*\n?)+)/m) as RegExpMatchArray;
-    const items = hook[1].split('\n').filter((line) => /^\s+-\s/.test(line));
-    expect(items).toHaveLength(1);
-    expect(relay.match(/db push/g)).toHaveLength(1);
-    expect(relay.indexOf(`db execute --file ${SQL_FILE}`)).toBeGreaterThan(-1);
-    expect(relay.indexOf(`db execute --file ${SQL_FILE}`)).toBeLessThan(relay.indexOf('db push'));
+    expect(relay).not.toMatch(/prisma/);
+    const script = migrateScript();
+    expect(script.match(/db push/g)).toHaveLength(1);
+    expect(script.indexOf(`db execute --file ${SQL_FILE}`)).toBeGreaterThan(-1);
+    expect(script.indexOf(`db execute --file ${SQL_FILE}`)).toBeLessThan(script.indexOf('db push'));
   });
 
   it('npm run db:push runs the Advisory SQL before prisma db push', () => {

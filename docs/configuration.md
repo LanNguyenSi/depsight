@@ -68,8 +68,8 @@ make dev-up        # Same as dev, but in background
 make dev-down      # Stop dev environment
 make dev-logs      # Tail dev logs
 make dev-ps        # List dev containers
-make dev-clean     # Stop + delete DB volumes (full reset)
-make prod          # Production build + start (docker-compose.yml), see Self-hosting below
+make dev-clean     # Stop the dev stack + delete its DB volumes (project depsight-dev only)
+make prod          # Production build + start (docker-compose.yml, project depsight), see Self-hosting below
 make prod-down     # Stop production containers
 make test          # Run tests inside the dev container
 make lint          # Lint + type-check inside the dev container
@@ -86,15 +86,55 @@ make clean         # Remove node_modules, .next, dist, build and coverage
 
 `make prod` runs `docker compose up --build -d` on `docker-compose.yml`: the app image (which starts `node server.js` and nothing else) and a Postgres 16 container. A first deployment needs these steps:
 
-1. Set `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `.env`. A production build has no Dev Login, so without the GitHub pair nobody can sign in (see [GitHub OAuth](#github-oauth)). `DATABASE_URL` in `.env` is ignored by the app container, because `docker-compose.yml` sets it.
+1. Set `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `POSTGRES_PASSWORD` in `.env`. A production build has no Dev Login, so without the GitHub pair nobody can sign in (see [GitHub OAuth](#github-oauth)). `POSTGRES_PASSWORD` is the database password; generate one with `openssl rand -hex 24` (hex keeps it safe inside the connection URL). `docker-compose.yml` builds the app's `DATABASE_URL` from the same variable, so one value sets both and `make prod` refuses to start while it is unset or empty; a `DATABASE_URL` in `.env` is ignored by the app container. Postgres reads the password only when it first creates the data volume, so for a database that already exists see [Rotating the database password](#rotating-the-database-password).
 2. Run `make prod`.
-3. Apply the schema once, and again after every upgrade; the image does not do it. For example, from a checkout with `npm ci`, run `DATABASE_URL=postgresql://depsight:depsight@localhost:5432/depsight npm run db:push`. That runs the pre-push SQL, then `prisma db push`, the same steps as the `.relay.yml` deploy hook (see [Deploying the Advisory unique key](#deploying-the-advisory-unique-key)).
-4. Before exposing the host, change `POSTGRES_PASSWORD` and the app's `DATABASE_URL` in `docker-compose.yml` together (both use the password `depsight`). Remove the published 5432 port, or bind it and 3000 to 127.0.0.1 behind a reverse proxy (the command in step 3 needs 5432 reachable from the host); a reachable 3000 port also bypasses the proxy that `WEBHOOK_TRUSTED_PROXY_HOPS` relies on (see [API reference](api.md#github-pull-request-webhook)).
+3. Apply the schema once, and again after every upgrade; the image does not do it. For example, from a checkout with `npm ci` on the same host, run `( set -a; . ./.env; set +a; DATABASE_URL="postgresql://depsight:${POSTGRES_PASSWORD}@localhost:5432/depsight" npm run db:push )`, which reads the password from `.env` instead of putting it on the command line (a `.env` that holds a password with `$`, quotes or spaces needs quoting for the shell; `openssl rand -hex 24` has none). That runs the pre-push SQL, then `prisma db push`, the same steps as the `.relay.yml` deploy hook (see [Deploying the Advisory unique key](#deploying-the-advisory-unique-key)). `docker-compose.yml` publishes Postgres on `127.0.0.1:5432` only, so the command works from the host itself and from nowhere else; do not widen the binding.
+4. Before exposing the host, put the app behind a reverse proxy and publish port 3000 on `127.0.0.1` only (change `3000:3000` to `127.0.0.1:3000:3000`). A reachable 3000 port also bypasses the proxy that `WEBHOOK_TRUSTED_PROXY_HOPS` relies on (see [API reference](api.md#github-pull-request-webhook)).
 5. Check `GET /api/health`.
 
-`docker-compose.traefik.yml` is an example for a traefik setup: its hostnames and the external `traefik-public` network must be adapted before use.
+The compose file pins the project name `depsight`, so the database lives in the volume `depsight_postgres_data` wherever the checkout is. Upgrading an older install whose checkout directory was named differently (volume `<directory>_postgres_data`): set `COMPOSE_PROJECT_NAME=<directory>` in `.env` before the first `make prod`, or the stack starts on a new empty volume (the old one stays untouched).
 
-How depsight stores credentials and separates users is summarised in [Security model](architecture.md#security-model).
+`docker-compose.traefik.yml` is the hosted setup and an example for a traefik deployment: its hostnames and the external `traefik-public` network must be adapted before use. The `db` service sits only on a private network (`db-internal`, which compose scopes to the project as `depsight_db-internal`, marked `internal`), never on `traefik-public`, and publishes no port. Because `app` is on both networks, it carries the label `traefik.docker.network=traefik-public`; without it Traefik may pick the private network at random (when its provider default is a different network) and route to an address it cannot reach, so keep the label on any routed service that joins a second network. The deploy hook applies the schema with `docker compose -f docker-compose.traefik.yml run --rm -T migrate`, a one-shot service (profile `tools`) that joins that network and reads the same `POSTGRES_PASSWORD`. In this file an unset or empty `POSTGRES_PASSWORD` falls back to `depsight`, the password the hosted database was created with, so an existing deployment keeps working without any change to `.env`; set the variable (and rotate, below) to move off it. A fresh install should set it before the first start.
+
+### Dev and production stacks never share a checkout
+
+`docker-compose.dev.yml` is the development stack (project `depsight-dev`, its own database volume `depsight-dev_postgres_data`); `docker-compose.yml` and `docker-compose.traefik.yml` are production (project `depsight`, volume `depsight_postgres_data`). The `make dev*`, `make test` and `make dev-clean` targets pin `-p depsight-dev`, so they cannot start, replace or delete the production stack or its volume. Still, run the dev stack on a development machine and the production stack on the server, never both from one checkout: a `COMPOSE_PROJECT_NAME` in `.env` overrides the `name:` in the files (only the `-p` flag in the Makefile beats it), so a bare `docker compose -f docker-compose.dev.yml ...` in a production checkout that sets it would use the production project. The dev database from earlier checkouts lives in `depsight_postgres_data`; the dev stack now starts with an empty `depsight-dev_postgres_data`, and the old volume is yours to keep or remove by hand (on a production host it is the production data: leave it).
+
+`node scripts/check-compose-isolation.mjs` (run by CI) fails when a production file puts `db` on `traefik-public` or publishes it on all interfaces, when `db` sets a `network_mode` or (in the hosted file) sits on a network that is not `internal: true`, when a service that Traefik routes (`traefik.enable` true in any spelling Traefik accepts, or any `traefik.http.`, `traefik.tcp.` or `traefik.udp.` label) sits on several networks without the label `traefik.docker.network=traefik-public` or without being on the external `traefik-public` network, when the app (or, in the hosted file, the `migrate` service) sets no `DATABASE_URL`, when a database password stops coming from `POSTGRES_PASSWORD`, when the project names or volumes of the stacks collide, or when a `Makefile` dev target loses its `-p` pin. It resolves the files with `docker compose config` and an empty `--env-file`, so a local `.env` does not feed the interpolation or the `COMPOSE_*` settings. Compose still reads `.env` as the app's `env_file`, though: its variables reach the resolved app environment where the file sets none, and a malformed `.env` makes the check exit 2 (cannot resolve).
+
+### Rotating the database password
+
+Postgres reads `POSTGRES_PASSWORD` only when it creates an empty data directory, so changing the variable alone makes the app fail to log in. Rotate in this order, on the host, in the checkout (the commands below are for the hosted `docker-compose.traefik.yml`; for the self-hosting `docker-compose.yml` drop the `-f docker-compose.traefik.yml` part and finish with step 3 of [Self-hosting](#self-hosting) instead of the last `migrate` line, which only the hosted file defines):
+
+```bash
+(
+  set -e
+  NEW=$(openssl rand -hex 24)
+  # 1. change it inside the running database (the password goes in over stdin, not the
+  #    command line); ON_ERROR_STOP=1 makes psql exit non-zero when the ALTER fails
+  printf "ALTER USER depsight WITH PASSWORD '%s';\n" "$NEW" \
+    | docker compose -f docker-compose.traefik.yml exec -T db psql -v ON_ERROR_STOP=1 -U depsight -d depsight
+  # 2. record it where compose reads it: drop any old POSTGRES_PASSWORD line, then append.
+  #    umask 077 keeps the temporary copy (and a .env this creates) readable by you only;
+  #    grep exits 1 when it keeps no line (fine) and 2 on an error (stops here); cat >
+  #    keeps the mode of an existing .env; the leading newline keeps a .env without a
+  #    trailing newline intact. POSIX tools only, the same on BSD and GNU.
+  umask 077
+  touch .env
+  rm -f .env.tmp
+  grep -v '^POSTGRES_PASSWORD=' .env > .env.tmp || [ $? -eq 1 ]
+  cat .env.tmp > .env
+  rm .env.tmp
+  printf '\nPOSTGRES_PASSWORD=%s\n' "$NEW" >> .env
+  # 3. recreate the app (and db) with the new value, then check the schema step and health
+  docker compose -f docker-compose.traefik.yml up -d
+  docker compose -f docker-compose.traefik.yml run --rm -T migrate
+)
+```
+
+The block is one `set -e` subshell rather than an `&&` chain: every step stays a plain line, the first command that fails ends the block, and `set -e`, the `umask` and `NEW` stay inside the subshell, so they cannot change your shell or close it on an error. A failed `ALTER` therefore stops the block before `.env` is touched: `ON_ERROR_STOP=1` makes psql exit non-zero, and psql is the last command of its pipeline, whose status `set -e` sees. Paste it into `bash` or `sh` (in zsh run `setopt interactive_comments` first, or zsh runs the comment lines as commands and the block stops at the first one, before the `ALTER`). Paste it as it is: `set -e` does not apply to a command on the left of `||` or `&&`, which is why the `grep` line ends in `|| [ $? -eq 1 ]` (a plain `|| true` would also hide a read error and then empty `.env`), and a `|| ...` after the closing parenthesis would switch it off for the whole block. If it stops in step 2, the database already has the new password while `.env` still holds the old one: run the `ALTER USER` again with the value from `.env` (and delete a leftover `.env.tmp`); if `.env` has lost its `POSTGRES_PASSWORD` line (a failure after the `cat` line, for example a full disk), write a new value into `.env` and run the `ALTER USER` with that value. If it stops in step 3, both hold the new password and step 3 can run again.
+
+Between steps 1 and 3 new connections from the old app container fail, so do it in a quiet moment. To go back, run the `ALTER USER` again with the old value and restore the `.env` line. There is no other place to edit: the app, the `db` service, the `migrate` service and the deploy hook all read `POSTGRES_PASSWORD`. The hosted database still has the original password `depsight` until someone rotates it this way.
 
 ### Network access
 
@@ -129,7 +169,8 @@ package once per manifest) cannot take that key: `prisma db push` fails with
 and there is no migrations directory, so the step that makes the push possible
 is part of the deploy itself and needs no operator action and no flag:
 
-- The production deploy (`.relay.yml` `post_update`) runs
+- The production deploy (`.relay.yml` `post_update`, the `migrate` service of
+  `docker-compose.traefik.yml`) runs
   `prisma db execute --file prisma/pre-push/advisory-unique-key.sql` and then the
   unchanged `prisma db push --skip-generate`. If the SQL fails the deploy stops
   before the push.
