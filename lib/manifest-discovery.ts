@@ -1572,7 +1572,7 @@ function buildInstalledIndex(locks: Iterable<NarrowLockfile | null>): InstalledI
       const edges: Array<{ key: string; spec: unknown }> = [];
       for (const [key, entry] of Object.entries(packages)) {
         if (++visited > MAX_LOCK_INDEX_NODES) return null;
-        const tail = key === '' ? undefined : nameFromPackagesKey(key);
+        const tail = nameFromPackagesKey(key);
         if (tail !== undefined) entryNames.add(tail);
         // An entry the lockfile itself lists as bundled carries its own
         // dependencies inside the package, so its edges need no entry here.
@@ -1692,7 +1692,8 @@ function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration)
 function lockfileHonoursOverrides(lock: NarrowLockfile, overrides: Map<string, string>): boolean {
   if (overrides.size === 0) return true;
   const check = (name: string | undefined, version: unknown): boolean => {
-    const range = name === undefined ? undefined : overrides.get(name);
+    if (name === undefined) return true; // a workspace folder entry without a name
+    const range = overrides.get(name);
     if (range === undefined) return true;
     return typeof version === 'string' && satisfiesLikeNpm(version, range);
   };

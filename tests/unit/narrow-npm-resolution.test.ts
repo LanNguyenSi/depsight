@@ -1245,6 +1245,10 @@ describe('overrides: a plain string override must be reflected in the own lockfi
     expect(ok({ 'node_modules/other': { version: '9.9.9' }, 'node_modules/odd': 'x' }, { ms: '2.1.3' })).toBe(true);
   });
 
+  it('a workspace folder entry without a name installs nothing under an overridden name', () => {
+    expect(ok({ 'packages/anon': { version: '2.0.0' } }, { ms: '2.1.3' })).toBe(true);
+  });
+
   it('every override is checked, not only the first', () => {
     const entries = { 'node_modules/ms': { version: '2.1.3' }, 'node_modules/qs': { version: '6.0.0' } };
     expect(ok(entries, { ms: '2.1.3', qs: '6.0.0' })).toBe(true);
@@ -1472,6 +1476,10 @@ describe('a lockfile entry with an edge to a name the same lockfile has no entry
 
     it('a peerDependencies edge (the lockfile may leave an optional peer out)', () => {
       expect(withEdge({}, { peerDependencies: { vite: '^7.0.0' } })).toBe(true);
+    });
+
+    it('a null entry of another name has no edges and does not stop the other names', () => {
+      expect(withEdge({ 'node_modules/vite': { version: '6.0.0' }, 'node_modules/gone': null }, {})).toBe(true);
     });
 
     it('a lockfileVersion 1 lockfile has no edge map to read', () => {
