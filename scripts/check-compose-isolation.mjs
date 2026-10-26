@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Guard for the shipped compose files: the production database must stay off the
-// edge network, its port must not be published on every interface, one variable
-// must carry its password, and the dev and production stacks must not share a
-// project name or a database volume.
+// edge network (and, in the hosted file, only on internal networks), its port must
+// not be published on every interface, one variable must carry its password, a routed
+// service on several networks must name the edge network for Traefik, and the dev
+// and production stacks must not share a project name or a database volume.
 //
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
@@ -12,7 +13,8 @@
 // the compose plugin and no running daemon. Exit 0 = all checks pass, 1 = a check
 // failed, 2 = a file could not be resolved.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const dir = resolve(process.argv[2] ?? '.');
@@ -32,6 +34,14 @@ const SENTINEL = 'sentinel-pw-0f3a';
 const failures = [];
 const fail = (file, message) => failures.push(`${file}: ${message}`);
 
+// An empty env file for every `docker compose config` call: compose reads the project's
+// .env for interpolation and COMPOSE_* settings, and a local one must not change the
+// result.
+const emptyEnvDir = mkdtempSync(join(tmpdir(), 'compose-isolation-'));
+const emptyEnvFile = join(emptyEnvDir, 'empty.env');
+writeFileSync(emptyEnvFile, '');
+process.on('exit', () => rmSync(emptyEnvDir, { recursive: true, force: true }));
+
 // password: the POSTGRES_PASSWORD to set; null leaves it unset.
 function resolveCompose(file, password = SENTINEL) {
   // Drop COMPOSE_* so the caller's shell cannot change the project name or file set.
@@ -43,7 +53,18 @@ function resolveCompose(file, password = SENTINEL) {
   try {
     const out = execFileSync(
       'docker',
-      ['compose', '-f', file, '--profile', '*', 'config', '--format', 'json'],
+      [
+        'compose',
+        '--env-file',
+        emptyEnvFile,
+        '-f',
+        file,
+        '--profile',
+        '*',
+        'config',
+        '--format',
+        'json',
+      ],
       { cwd: dir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
     return JSON.parse(out);
@@ -75,10 +96,17 @@ function checkProd(file) {
     return cfg;
   }
 
+  if (db.network_mode !== undefined) fail(file, `db sets network_mode "${db.network_mode}"`);
+
   const dbNets = networkNames(cfg, db);
   if (dbNets.includes(EDGE_NETWORK)) fail(file, `db is on the edge network ${EDGE_NETWORK}`);
-  for (const key of Object.keys(db.networks ?? {})) {
+  const dbKeys = Object.keys(db.networks ?? { default: null });
+  for (const key of dbKeys) {
     if (cfg.networks?.[key]?.external) fail(file, `db is on the external network "${key}"`);
+    // The hosted file keeps db on networks with no route out.
+    if (file === HOSTED_FILE && cfg.networks?.[key]?.internal !== true) {
+      fail(file, `db is on the network "${key}", which is not internal: true`);
+    }
   }
   if (!dbNets.some((name) => networkNames(cfg, app).includes(name))) {
     fail(file, 'app and db share no network');
@@ -87,6 +115,24 @@ function checkProd(file) {
   for (const port of db.ports ?? []) {
     if (!LOOPBACK.has(port.host_ip ?? '')) {
       fail(file, `db publishes ${port.published}->${port.target} on ${port.host_ip || '0.0.0.0'}`);
+    }
+  }
+
+  // A routed service on several networks must tell Traefik which one to use, or it
+  // may pick the private db network at random.
+  for (const [name, service] of Object.entries(cfg.services)) {
+    if (service.labels?.['traefik.enable'] !== 'true') continue;
+    const nets = Object.keys(service.networks ?? { default: null });
+    if (nets.length < 2) continue;
+    const chosen = service.labels['traefik.docker.network'];
+    const edge = nets
+      .map((key) => cfg.networks?.[key])
+      .some((net) => net?.external && net.name === chosen);
+    if (!edge) {
+      fail(
+        file,
+        `${name} is routed by Traefik on ${nets.length} networks without a traefik.docker.network label naming the external edge network`,
+      );
     }
   }
 

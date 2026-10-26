@@ -29,6 +29,9 @@ services:
       - "traefik.http.routers.depsight.tls=true"
       - "traefik.http.routers.depsight.tls.certresolver=letsencrypt"
       - "traefik.http.services.depsight.loadbalancer.server.port=3000"
+      # app is on two networks: without this label Traefik may pick the db network
+      # (an address it cannot reach) at random when its provider default differs.
+      - "traefik.docker.network=traefik-public"
       # ci-insights.opentriologue.ai — same container, second router
       - "traefik.http.routers.ci-insights.rule=Host(`ci-insights.opentriologue.ai`)"
       - "traefik.http.routers.ci-insights.entrypoints=websecure"
@@ -87,7 +90,7 @@ volumes:
 networks:
   traefik-public:
     external: true
-  # internal: no route out of the network; the name is explicit so tools can address it.
+  # internal: no route out of the network. Compose scopes the name to the project
+  # (depsight_db-internal), so a second stack of this file gets its own network.
   db-internal:
-    name: depsight-db
     internal: true
