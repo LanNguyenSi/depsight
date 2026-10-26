@@ -84,6 +84,20 @@ make clean         # Remove node_modules, .next, dist, build and coverage
 
 ## Self-hosting
 
+### Which compose file
+
+Production has one documented path for a self-hosted instance: `docker-compose.yml` with `make prod`, described in the rest of this chapter. `docker-compose.traefik.yml` is the file of the hosted instance (deployed by the `.relay.yml` hook), not a second recommended setup: it carries that instance's hostnames and expects an external `traefik-public` network and a Traefik that already runs. Take it as a template only when you run Traefik too, and adapt it first; do not start it as it is. Do not rename either file: the deploy hook and the live instance refer to them by name.
+
+| | `docker-compose.yml` (self-hosting, `make prod`) | `docker-compose.traefik.yml` (hosted instance) |
+|---|---|---|
+| Reverse proxy | none: you put one in front | Traefik, routes by label (hostnames of the live instance) |
+| App port | published on `3000` (bind it to `127.0.0.1` behind a proxy) | not published, reached through `traefik-public` |
+| Database port | `127.0.0.1:5432` (loopback only) | not published, on the internal `db-internal` network |
+| Networks | the default network | `traefik-public` (external) and `db-internal` (internal) |
+| Schema step | by hand, after every upgrade (step 3 below) | the `migrate` service, run by the deploy hook |
+| `POSTGRES_PASSWORD` unset | refuses to start | falls back to `depsight`, the live database's password |
+| `WEBHOOK_TRUSTED_PROXY_HOPS` | set it to the number of proxies you run (default `1`) | the default `1` matches the one Traefik |
+
 `make prod` runs `docker compose up --build -d` on `docker-compose.yml`: the app image (which starts `node server.js` and nothing else) and a Postgres 16 container. A first deployment needs these steps:
 
 1. Set `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `POSTGRES_PASSWORD` in `.env`. A production build has no Dev Login, so without the GitHub pair nobody can sign in (see [GitHub OAuth](#github-oauth)). `POSTGRES_PASSWORD` is the database password; generate one with `openssl rand -hex 24` (hex keeps it safe inside the connection URL). `docker-compose.yml` builds the app's `DATABASE_URL` from the same variable, so one value sets both and `make prod` refuses to start while it is unset or empty; a `DATABASE_URL` in `.env` is ignored by the app container. Postgres reads the password only when it first creates the data volume, so for a database that already exists see [Rotating the database password](#rotating-the-database-password).
@@ -94,7 +108,7 @@ make clean         # Remove node_modules, .next, dist, build and coverage
 
 The compose file pins the project name `depsight`, so the database lives in the volume `depsight_postgres_data` wherever the checkout is. Upgrading an older install whose checkout directory was named differently (volume `<directory>_postgres_data`): set `COMPOSE_PROJECT_NAME=<directory>` in `.env` before the first `make prod`, or the stack starts on a new empty volume (the old one stays untouched).
 
-`docker-compose.traefik.yml` is the hosted setup and an example for a traefik deployment: its hostnames and the external `traefik-public` network must be adapted before use. The `db` service sits only on a private network (`db-internal`, which compose scopes to the project as `depsight_db-internal`, marked `internal`), never on `traefik-public`, and publishes no port. Because `app` is on both networks, it carries the label `traefik.docker.network=traefik-public`; without it Traefik may pick the private network at random (when its provider default is a different network) and route to an address it cannot reach, so keep the label on any routed service that joins a second network. The deploy hook applies the schema with `docker compose -f docker-compose.traefik.yml run --rm -T migrate`, a one-shot service (profile `tools`) that joins that network and reads the same `POSTGRES_PASSWORD`. In this file an unset or empty `POSTGRES_PASSWORD` falls back to `depsight`, the password the hosted database was created with, so an existing deployment keeps working without any change to `.env`; set the variable (and rotate, below) to move off it. A fresh install should set it before the first start.
+`docker-compose.traefik.yml` is the hosted instance's setup (see [Which compose file](#which-compose-file)): its hostnames and the external `traefik-public` network belong to that instance. The `db` service sits only on a private network (`db-internal`, which compose scopes to the project as `depsight_db-internal`, marked `internal`), never on `traefik-public`, and publishes no port. Because `app` is on both networks, it carries the label `traefik.docker.network=traefik-public`; without it Traefik may pick the private network at random (when its provider default is a different network) and route to an address it cannot reach, so keep the label on any routed service that joins a second network. The deploy hook applies the schema with `docker compose -f docker-compose.traefik.yml run --rm -T migrate`, a one-shot service (profile `tools`) that reads the same `POSTGRES_PASSWORD` and joins only `db-internal`. It is the `migrate` stage of this repository's `Dockerfile`: the Prisma CLI is the version `package-lock.json` pins (the one the app's `@prisma/client` matches), and openssl and the schema are baked into the image when it is built. Running it downloads nothing, which is why it needs no network with a route out. A profile-scoped service is not part of a plain `docker compose build`, so the hook's `pre_update` step builds it with `docker compose -f docker-compose.traefik.yml --profile tools build --no-cache`; a `run` of a not yet built `migrate` would otherwise build it at deploy time and fetch packages. In this file an unset or empty `POSTGRES_PASSWORD` falls back to `depsight`, the password the hosted database was created with, so an existing deployment keeps working without any change to `.env`; set the variable (and rotate, below) to move off it. A fresh install should set it before the first start.
 
 ### Dev and production stacks never share a checkout
 
@@ -196,8 +210,9 @@ is part of the deploy itself and needs no operator action and no flag:
 - The production deploy (`.relay.yml` `post_update`, the `migrate` service of
   `docker-compose.traefik.yml`) runs
   `prisma db execute --file prisma/pre-push/advisory-unique-key.sql` and then the
-  unchanged `prisma db push --skip-generate`. If the SQL fails the deploy stops
-  before the push.
+  unchanged `prisma db push --skip-generate`, with the Prisma CLI that
+  `package-lock.json` pins (built into the image, not fetched at deploy time). If
+  the SQL fails the deploy stops before the push.
 - `npm run db:push` (development, or a manual push) runs the same SQL first via
   `npm run db:pre-push`.
 

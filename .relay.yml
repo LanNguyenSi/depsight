@@ -3,7 +3,7 @@ health: /api/health
 health_port: 3000
 compose_file: docker-compose.traefik.yml
 pre_update:
-  - docker compose -f docker-compose.traefik.yml build --no-cache
+  - docker compose -f docker-compose.traefik.yml --profile tools build --no-cache
 post_update:
   - docker compose -f docker-compose.traefik.yml run --rm -T migrate
 rollback: true

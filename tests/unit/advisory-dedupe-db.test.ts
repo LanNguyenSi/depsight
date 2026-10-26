@@ -1,9 +1,10 @@
 // Deploy-path test for the Advisory unique key: a production database that
 // already holds duplicate advisory rows must survive the deploy's schema push.
 //
-// Production deploys go through the relay: `.relay.yml` post_update runs
-// `prisma@5.22.0 db execute --file prisma/pre-push/advisory-unique-key.sql`
-// and then a bare `prisma@5.22.0 db push` (no --accept-data-loss). Prisma
+// Production deploys go through the relay: `.relay.yml` post_update runs the
+// `migrate` service, whose image carries the Prisma CLI of package-lock.json and
+// runs `prisma db execute --file prisma/pre-push/advisory-unique-key.sql`
+// and then a bare `prisma db push` (no --accept-data-loss). Prisma
 // refuses a bare push that adds a unique key, so the SQL creates the index
 // itself, under the name Prisma expects. The database half replays exactly the
 // commands the hook contains, starting from a copy of the schema as it was
@@ -60,14 +61,18 @@ function migrateScript(): string {
     .join(' ');
 }
 
-/** The prisma invocations the relay's post_update runs (via the migrate service), in order. */
+/**
+ * The prisma invocations the relay's post_update runs (via the migrate service), in order,
+ * each as the argument list of `npx` (`prisma db execute ...`): in the migrate image
+ * `prisma` is the lockfile's CLI, here `npx prisma` resolves to the same package-lock.json.
+ */
 function relayPrismaCommands(): string[][] {
   expect(relayHookItems()).toEqual([RELAY_HOOK]);
   return migrateScript()
     .split('&&')
     .map((part) => part.trim())
-    .filter((part) => part.startsWith('npx prisma@'))
-    .map((part) => part.split(/\s+/).slice(1));
+    .filter((part) => part.startsWith('prisma '))
+    .map((part) => part.split(/\s+/));
 }
 
 describe('deploy wiring', () => {
@@ -82,7 +87,7 @@ describe('deploy wiring', () => {
     // Every step is chained with && and nothing else, so a failing SQL step
     // stops the deploy: no ||, no ; and no pipe may follow or wrap a step.
     const script = migrateScript();
-    expect(script).toMatch(/db execute .*&& npx prisma@\S+ db push/);
+    expect(script).toMatch(/db execute .*&& prisma db push/);
     for (const part of script.split('&&')) {
       expect(part, `step "${part.trim()}"`).not.toMatch(/\|\||;|\s\|\s/);
     }
@@ -176,7 +181,8 @@ describe.skipIf(!BASE_URL)('Advisory key deploy against Postgres', () => {
 
   /** Apply the schema the production database had before this release. */
   function pushBaseSchema(url: string) {
-    // The older engine, as the relay's image uses; the fixture is the real base schema.
+    // The older engine the production database was created with (the previous migrate
+    // service ran prisma@5.22.0); the fixture is the real base schema.
     const out = run(['prisma@5.22.0', 'db', 'push', '--schema', BASE_SCHEMA, '--skip-generate'], url);
     expect(out.ok, out.output).toBe(true);
   }
