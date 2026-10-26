@@ -608,7 +608,8 @@ export interface LockfileResolutions {
   /**
    * name -> EVERY distinct concrete version any lockfile entry recorded for
    * the name (the single `resolved` version, or all the versions behind an
-   * `ambiguous` entry, nested copies included). Optional so a hand-built
+   * `ambiguous` entry, nested copies included for lockfileVersion 2/3 and
+   * yarn.lock; a v1 lockfile is read top-level only). Optional so a hand-built
    * `{ resolved, ambiguous }` stays valid; when absent a caller falls back to
    * the `resolved` and `ambiguous` values. The repo-wide CVE chain queries
    * these for a name that a non-range spec (`latest`, a tag, `*`) declares.

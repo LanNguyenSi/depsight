@@ -114,7 +114,13 @@ A complete list of what depsight does today, beyond the headline value props in 
     a lockfile) is also queried at its range's lowest version, and a
     declaration with no range to compare (`latest` or another tag, a git or
     `file:` spec, `*`) has every version any lockfile records for the name
-    queried, nested copies included. A project that declares a range the
+    queried, nested copies included (lockfileVersion 2 or 3 and `yarn.lock`;
+    a lockfileVersion 1 lockfile is read top-level only). For a name the
+    lockfiles resolve ambiguously, or that no lockfile resolves, only the
+    floor of the lowest declared range is queried: a declarer of a higher
+    range and the lockfile copies of that name are not covered (a `yarn.lock`
+    with vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries only
+    vite 6.0.0). A project that declares a range the
     resolved version satisfies but installs another version, and a name
     declared only in `optionalDependencies`, `peerDependencies` or
     `bundleDependencies` without a lockfile, are not covered. It is not a

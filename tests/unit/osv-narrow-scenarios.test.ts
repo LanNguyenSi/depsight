@@ -20,6 +20,9 @@
  *                 lockfile of the repository (`why` names the reason); an
  *                 added entry is a version a manifest's own lockfile installs.
  *
+ * In the declarer-floor block at the end, `base` is the result before the
+ * declarer floors (the narrow override included), not the pre-narrow code.
+ *
  * The invariant checked for every scenario: no base entry is lost unless it is
  * listed as dropped.
  */
@@ -742,6 +745,9 @@ const EXPECTED: Record<string, Expectation> = {
     why: 'two declarers without a lockfile, both below the repo-wide 8.3.5: both floors are queried',
   }),
   declarerRangesWithoutAnyLock: same(['vite@6.0.0']),
+  // Documented residual, not a feature: an ambiguous name is answered by the floor
+  // of the lowest range only, so root's installed 8.3.5 and 7.3.7 are never queried.
+  declarerRangesBesideAmbiguousYarnLock: same(['vite@6.0.0']),
   latestDeclarerBesideLockedRange: narrow({
     base: ['vite@8.3.0', 'vite@8.3.5'],
     dropped: [],

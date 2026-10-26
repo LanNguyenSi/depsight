@@ -621,7 +621,7 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     // `^1.0.0`, floor `1.0.0` (valid), and is therefore unaffected by this
     // task (verified empirically; NOT what this test exercises). The
     // genuine gap is a MALFORMED alias `parseNpmAlias` can't parse at all
-    // (no `@range` suffix, e.g. a bare `npm:h3`): `resolveAliasedEntry`
+    // (no `@range` suffix, e.g. a bare `npm:h3`): `npmDeclarations`
     // leaves it as an unresolved raw spec under the LOCAL alias key, which
     // then floors to '3' (fails `semver.valid`) and also fails the range
     // check (`semver.validRange('npm:h3')` is null). With no lockfile entry,

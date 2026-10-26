@@ -143,6 +143,16 @@ describe('range branch: a declared plain range the resolved version does not sat
     ).toEqual(['vite@6.0.0']);
   });
 
+  it('documented residual: an ambiguous or unresolved name queries only the lowest range floor', () => {
+    const ranges = [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })];
+    // yarn.lock with two versions: root's installed 8.3.5 and the 7.3.7 copy stay unqueried.
+    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, yarnLock({ vite: ['8.3.5', '7.3.7'] })))).toEqual([
+      'vite@6.0.0',
+    ]);
+    // No lockfile: the higher range's floor 8.3.0 stays unqueried.
+    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, EMPTY))).toEqual(['vite@6.0.0']);
+  });
+
   it('uses the resolution both lockfile formats agree on, and nothing when they disagree', () => {
     const agree = repoWideNpmEntries(
       [deps({ vite: '^6.0.0' })],

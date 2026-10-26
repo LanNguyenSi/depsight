@@ -1547,6 +1547,18 @@ export const SCENARIOS: Record<string, Scenario> = {
       'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
     },
   },
+  // Documented residual: yarn.lock records vite 8.3.5 and 7.3.7 (ambiguous), root
+  // declares ^8.3.0 and docs/ ^6.0.0. Only the lowest range's floor is queried.
+  declarerRangesBesideAmbiguousYarnLock: {
+    files: {
+      'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
+      'yarn.lock': yarn([
+        ['vite@^8.3.0', '8.3.5'],
+        ['vite@^7.0.0', '7.3.7'],
+      ]),
+      'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
+    },
+  },
   // a/ declares `latest` and installs 7.3.7, b/ declares ^8.3.0 and installs 8.3.5.
   latestDeclarerBesideLockedRange: {
     files: {

@@ -397,8 +397,12 @@ function manifestFloor(versionSpec: string): string | null {
  *   holds, which the merged map cannot attribute to it, so every version any
  *   lockfile records for the name is queried.
  *
- * Not covered: a name with no lockfile resolution at all (its floor is the
- * chain answer and the lowest declared range is already the one queried), and
+ * Not covered: a name the lockfiles resolve ambiguously, or that no lockfile
+ * resolves. The range branch only acts on a single merged `resolved` version,
+ * so for such a name only the chain answer, the floor of the lowest declared
+ * range, is queried: a declarer of a higher range and the lockfile copies of
+ * that name are not queried (a yarn.lock with vite 8.3.5 and 7.3.7, root
+ * `^8.3.0`, `docs/` `^6.0.0` queries only vite@6.0.0). Also not covered:
  * declarations outside `dependencies` and `devDependencies` (see
  * `declaredOutsideDeps`; the narrow override handles those per project).
  */
