@@ -35,7 +35,7 @@ cd depsight
 make dev          # docker compose up: app + Postgres, pushes the DB schema, starts dev server
 ```
 
-Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets, and [Self-hosting](docs/configuration.md#self-hosting) for a production deployment.
+Open http://localhost:3000 and click **Dev Login**. No GitHub OAuth credentials needed for a first look. Add `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` to `.env` to connect real repos. See [docs/configuration.md](docs/configuration.md) for env vars and Make targets, and [Self-hosting](docs/configuration.md#self-hosting) for a production deployment (`docker-compose.yml`; `docker-compose.traefik.yml` is the hosted instance's file, see [Which compose file](docs/configuration.md#which-compose-file)).
 
 ## Usage
 

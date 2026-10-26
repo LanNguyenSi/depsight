@@ -101,30 +101,34 @@ services:
       - db-internal
 
   # One-shot schema apply, run by the .relay.yml post_update hook with
-  # `docker compose -f docker-compose.traefik.yml run --rm -T migrate`. The profile keeps
-  # `up`, `build` and the health check from starting it. It joins the default network
-  # for outbound access (apt and npm), because db-internal has none.
+  # `docker compose -f docker-compose.traefik.yml run --rm -T --build migrate`. The profile
+  # keeps `up`, `build` and the health check from starting it. It is the `migrate` stage of
+  # this repo's Dockerfile: the Prisma CLI is the version package-lock.json pins, openssl and
+  # the schema are baked in at build time, so the run fetches nothing and the service sits
+  # only on db-internal, which has no route out. The image is built by the post_update hook
+  # itself (`run --build`): the relay runs pre_update on the tree from before the pull, a
+  # plain `docker compose build` skips a profile-scoped service, and `run` alone reuses an
+  # existing image, so any earlier build would bake in the previous commit's schema.
   migrate:
     profiles: ["tools"]
-    image: node:20-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
     working_dir: /app
     environment:
       HOME: /tmp
       DATABASE_URL: postgresql://depsight:${POSTGRES_PASSWORD:-depsight}@db:5432/depsight
-    volumes:
-      - ./prisma:/app/prisma
     command:
       - sh
       - -c
       - >-
-        apt-get update -qq && apt-get install -y -qq openssl >/dev/null 2>&1
-        && npx prisma@5.22.0 db execute --file prisma/pre-push/advisory-unique-key.sql --schema=prisma/schema.prisma
-        && npx prisma@5.22.0 db push --skip-generate --schema=prisma/schema.prisma
+        prisma db execute --file prisma/pre-push/advisory-unique-key.sql --schema=prisma/schema.prisma
+        && prisma db push --skip-generate --schema=prisma/schema.prisma
     mem_limit: 512m
     logging: *default-logging
     networks:
       - db-internal
-      - default
 
 volumes:
   postgres_data:
