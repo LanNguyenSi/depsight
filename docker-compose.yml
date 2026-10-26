@@ -4,9 +4,8 @@
 # front and bind port 3000 to 127.0.0.1, set WEBHOOK_TRUSTED_PROXY_HOPS, and apply the
 # schema yourself (this file has no migrate service). docker-compose.traefik.yml is the
 # hosted instance's file, with its hostnames; see "Which compose file" in the same chapter.
-# Do not run the dev stack
-# (docker-compose.dev.yml) from the same checkout: the dev file has its own
-# project name and database volume, and `make dev*` pins it with -p.
+# Do not run the dev stack (docker-compose.dev.yml) from the same checkout: the dev file has
+# its own project name and database volume, and `make dev*` pins it with -p.
 name: depsight
 
 # Rotating container logs for every service: without it the json-file driver keeps one

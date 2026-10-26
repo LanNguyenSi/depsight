@@ -1,8 +1,8 @@
 // The production schema step (the `migrate` service of docker-compose.traefik.yml, run by the
-// .relay.yml post_update hook) must run the Prisma CLI that package-lock.json pins, from an
-// image built with the app, and must fetch nothing when it runs. A step that downloads a
-// `prisma@<pin>` of its own drifts from the app's @prisma/client 6 and needs outbound network
-// on a database network that has none.
+// .relay.yml post_update hook, which builds it after the pull) must run the Prisma CLI that
+// package-lock.json pins, from an image built with the app, and must fetch nothing when it
+// runs. A step that downloads a `prisma@<pin>` of its own drifts from the app's @prisma/client
+// 6 and needs outbound network on a database network that has none.
 //
 // These tests read the shipped files as text (no docker needed); the build and a run against
 // a real Postgres are covered by the deploy-path test in advisory-dedupe-db.test.ts and by the
@@ -75,16 +75,40 @@ describe('migrate service uses the repo build', () => {
     ]);
   });
 
-  it('is built by the relay pre_update hook although its profile keeps `build` from selecting it', () => {
-    const relay = read('.relay.yml');
-    const hook = relay.match(/^pre_update:\s*\n((?:\s+-.*\n?)+)/m);
-    expect(hook, '.relay.yml has a pre_update list').not.toBeNull();
-    const items = (hook as RegExpMatchArray)[1]
+  // The relay runs pre_update on the tree from BEFORE the pull, its own post-pull build is a plain
+  // `build` (a profile-scoped service is skipped), and `compose run` reuses an existing image.
+  // Only a build inside post_update sees the pulled schema.
+  const hookItems = (name: 'pre_update' | 'post_update') => {
+    const hook = read('.relay.yml').match(new RegExp(`^${name}:\\s*\\n((?:\\s+-.*\\n?)+)`, 'm'));
+    expect(hook, `.relay.yml has a ${name} list`).not.toBeNull();
+    return (hook as RegExpMatchArray)[1]
       .split('\n')
       .filter((line) => /^\s+-\s/.test(line))
       .map((line) => line.replace(/^\s+-\s+/, '').trim());
-    expect(items).toEqual([`docker compose -f ${HOSTED_FILE} --profile tools build --no-cache`]);
+  };
+  const BUILDS_MIGRATE = new RegExp(
+    `^docker compose -f ${HOSTED_FILE.replace(/\./g, '\\.')} (?:run\\b.*--build\\b.*\\bmigrate$|--profile tools build\\b)`,
+  );
+
+  it('post_update builds migrate from the pulled tree and runs it', () => {
+    const items = hookItems('post_update');
+    // One step, so no ordering between a build and a run can come apart: `run --build` rebuilds
+    // from the post-pull tree (layer cache) and then runs that image.
+    expect(items).toEqual([`docker compose -f ${HOSTED_FILE} run --rm -T --build migrate`]);
+    expect(items.some((item) => BUILDS_MIGRATE.test(item))).toBe(true);
+    // The profile is what keeps `up` and the plain `build` from selecting it.
     expect(migrateBlock()).toMatch(/^ {4}profiles: \["tools"\]$/m);
+  });
+
+  it('pre_update does not build migrate: it runs on the pre-pull tree and would bake in the old schema', () => {
+    const items = hookItems('pre_update');
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item, item).not.toMatch(/--profile\b/);
+      expect(item, item).not.toMatch(/\bmigrate\b/);
+      expect(item, item).not.toMatch(/--build\b/);
+    }
+    expect(items.some((item) => BUILDS_MIGRATE.test(item))).toBe(false);
   });
 });
 
@@ -98,6 +122,10 @@ describe('migrate image stage', () => {
     expect(migrate).toMatch(/^COPY prisma \.\/prisma\/$/m);
     // The CLI is found in node_modules/.bin, not downloaded.
     expect(migrate).toMatch(/^ENV PATH="\/app\/node_modules\/\.bin:\$\{PATH\}"$/m);
+  });
+
+  it('runs as the non-root node user', () => {
+    expect(stage('migrate').body).toMatch(/^USER node$/m);
   });
 
   it('installs openssl at build time and runs no package fetch of its own', () => {

@@ -32,7 +32,7 @@ const SQL_FILE = 'prisma/pre-push/advisory-unique-key.sql';
 const BASE_SCHEMA = 'tests/fixtures/schema-before-advisory-key.prisma';
 
 const HOSTED_FILE = 'docker-compose.traefik.yml';
-const RELAY_HOOK = `docker compose -f ${HOSTED_FILE} run --rm -T migrate`;
+const RELAY_HOOK = `docker compose -f ${HOSTED_FILE} run --rm -T --build migrate`;
 
 /** The relay's post_update items. */
 function relayHookItems(): string[] {

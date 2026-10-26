@@ -101,13 +101,14 @@ services:
       - db-internal
 
   # One-shot schema apply, run by the .relay.yml post_update hook with
-  # `docker compose -f docker-compose.traefik.yml run --rm -T migrate`. The profile keeps
-  # `up`, `build` and the health check from starting it. It is the `migrate` stage of this
-  # repo's Dockerfile: the Prisma CLI is the version package-lock.json pins, openssl and
+  # `docker compose -f docker-compose.traefik.yml run --rm -T --build migrate`. The profile
+  # keeps `up`, `build` and the health check from starting it. It is the `migrate` stage of
+  # this repo's Dockerfile: the Prisma CLI is the version package-lock.json pins, openssl and
   # the schema are baked in at build time, so the run fetches nothing and the service sits
-  # only on db-internal, which has no route out. The image is built by the pre_update hook
-  # (`docker compose --profile tools build`); a profile-scoped service is not part of a plain
-  # `docker compose build`.
+  # only on db-internal, which has no route out. The image is built by the post_update hook
+  # itself (`run --build`): the relay runs pre_update on the tree from before the pull, a
+  # plain `docker compose build` skips a profile-scoped service, and `run` alone reuses an
+  # existing image, so any earlier build would bake in the previous commit's schema.
   migrate:
     profiles: ["tools"]
     build:
