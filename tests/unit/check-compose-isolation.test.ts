@@ -160,21 +160,21 @@ describeIfCompose('check-compose-isolation guard', () => {
         expect(result.status).toBe(1);
       });
 
-      it('accepts an explicit 2xx range test instead of r.ok', () => {
-        const result = runGuard(
-          fixture(
-            file,
-            replaceFirst('r.ok ? 0 : 1', 'r.status >= 200 && r.status < 300 ? 0 : 1'),
-          ),
-        );
+      it.each([
+        'r.status >= 200 && r.status < 300 ? 0 : 1',
+        'r.status >= 200 && r.status <= 299 ? 0 : 1',
+      ])('accepts the explicit 2xx test %s instead of r.ok', (test) => {
+        const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', `${test}`)));
         expect(result.stderr).toBe('');
         expect(result.status).toBe(0);
       });
 
-      it('rejects a range test that lacks its upper bound', () => {
-        const result = runGuard(
-          fixture(file, replaceFirst('r.ok ? 0 : 1', 'r.status >= 200 ? 0 : 1')),
-        );
+      it.each([
+        'r.status >= 200 ? 0 : 1',
+        'r.status >= 200 && r.status < 600 ? 0 : 1',
+        'r.status >= 200 && r.status <= 300 ? 0 : 1',
+      ])('rejects the range test %s that does not stop at 299', (test) => {
+        const result = runGuard(fixture(file, replaceFirst('r.ok ? 0 : 1', test)));
         expect(result.stderr).toContain(`${file}: app healthcheck does not fail on a non-2xx answer`);
         expect(result.status).toBe(1);
       });

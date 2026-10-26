@@ -105,7 +105,7 @@ const memoryLimit = (service) => {
 };
 
 // `.ok` (fetch's 2xx flag), or both bounds of an explicit test: status >= 200 and < 300.
-const ACCEPTS_ONLY_2XX = /\.ok\b|status\s*>=?\s*200\b[^;]*status\s*<=?\s*(299|300)\b/;
+const ACCEPTS_ONLY_2XX = /\.ok\b|status\s*>=\s*200\b[^;]*status\s*(<\s*300|<=\s*299)\b/;
 
 // Rotation and limits for every service (migrate included), and the app's healthcheck.
 // Without rotation the json-file driver grows one file per container for as long as it
