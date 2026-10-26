@@ -9,11 +9,13 @@
  * `dropSafe('vite', '7.3.5')` is true for the untouched fixture and each test
  * below breaks exactly ONE thing and expects it to turn false (the positive
  * control pins that the fixture really is droppable, so a negative test cannot
- * pass vacuously). Conditions: 4a tree walk complete, 4b no foreign lockfile,
- * 4c every declaring manifest narrow, 4d baseline version installed nowhere.
+ * pass vacuously). Conditions: tree walk complete, no foreign lockfile, every manifest
+ * has a lockfile of its own, every declaring manifest narrow, baseline version
+ * installed nowhere.
  */
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_LOCK_INDEX_NODES,
   resolveNarrowNpm,
   selectForeignLockfilePaths,
   type NarrowNpmInputs,
@@ -83,6 +85,14 @@ describe('resolveNarrowNpm: positive control and additions', () => {
     expect(versions(resolve(manifests(), l))).toEqual(['vite@7.3.7', 'vite@8.3.5']);
   });
 
+  it('keeps a name another local package is called, even when that package has a lockfile', () => {
+    const m = { ...manifests(), 'vite-fork/package.json': pkg({ name: 'vite' }) };
+    const l = { ...locks(), 'vite-fork/package-lock.json': v3({}) };
+    const r = resolve(m, l);
+    expect(versions(r)).toEqual([]);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+  });
+
   it('adds nothing for a name another local package is called (the baseline never queries it)', () => {
     const m = { ...manifests(), 'vite-fork/package.json': pkg({ name: 'vite' }) };
     const r = resolve(m);
@@ -95,7 +105,7 @@ describe('resolveNarrowNpm: positive control and additions', () => {
   });
 });
 
-describe('4a: tree walk complete', () => {
+describe('tree walk complete', () => {
   it('observed lockfile paths unknown (truncated tree / root-probe fallback): no narrow resolution at all', () => {
     const r = resolve(manifests(), locks(), { observedLockfilePaths: null });
     expect(r.additions).toEqual([]);
@@ -129,7 +139,7 @@ describe('4a: tree walk complete', () => {
   });
 });
 
-describe('4b: no other package manager lockfile in the tree', () => {
+describe('no other package manager lockfile in the tree', () => {
   for (const path of [
     'yarn.lock',
     'tools/yarn.lock',
@@ -156,7 +166,7 @@ describe('4b: no other package manager lockfile in the tree', () => {
   });
 });
 
-describe('4c: every manifest declaring the name is narrow for it', () => {
+describe('every manifest declaring the name is narrow for it', () => {
   it('a declaring manifest that was not read', () => {
     const m = manifests();
     const files = inputs(m, locks());
@@ -241,7 +251,8 @@ describe('4c: every manifest declaring the name is narrow for it', () => {
 
   it('an ancestor package.json without a workspaces key does not block', () => {
     const m = { ...manifests(), 'package.json': pkg({ name: 'root', private: true }) };
-    expect(droppable(m)).toBe(true);
+    const l = { ...locks(), 'package-lock.json': v3({}) };
+    expect(droppable(m, l)).toBe(true);
   });
 
   it('a workspaces key in a directory whose NAME merely starts like the manifest directory does not block', () => {
@@ -251,6 +262,7 @@ describe('4c: every manifest declaring the name is narrow for it', () => {
       'backend/package.json': pkg({ dependencies: { vite: '^8.3.0' } }),
     };
     const l = {
+      'app/package-lock.json': v3({}),
       'application/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     };
@@ -260,7 +272,8 @@ describe('4c: every manifest declaring the name is narrow for it', () => {
 
   it('a workspaces key in a SIBLING package.json does not block', () => {
     const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools', workspaces: ['x'] }) };
-    expect(droppable(m)).toBe(true);
+    const l = { ...locks(), 'tools/package-lock.json': v3({}) };
+    expect(droppable(m, l)).toBe(true);
   });
 
   it('a declaring manifest without a lockfile of its own', () => {
@@ -357,13 +370,165 @@ describe('4c: every manifest declaring the name is narrow for it', () => {
     expect(versions(resolve(m, l))).toEqual(['vite@7.1.0-beta.2', 'vite@8.3.5']);
   });
 
-  it('a manifest that does not declare the name, and has no lockfile, does not block', () => {
+  it('a manifest that does not declare the name, with a lockfile of its own, does not block', () => {
     const m = { ...manifests(), 'tools/package.json': pkg({ dependencies: { left: '^1.0.0' } }) };
-    expect(droppable(m)).toBe(true);
+    const l = { ...locks(), 'tools/package-lock.json': v3({ 'node_modules/left': '1.0.0' }) };
+    expect(droppable(m, l)).toBe(true);
   });
 });
 
-describe('4d: the baseline version is installed by no fetched lockfile', () => {
+describe('every manifest the scan reads has a readable lockfile of its own', () => {
+  it('positive control: with a lockfile for every manifest the floor may be dropped', () => {
+    expect(droppable()).toBe(true);
+  });
+
+  it('a manifest that does not declare the name and has no lockfile blocks every drop', () => {
+    const m = { ...manifests(), 'tools/package.json': pkg({ dependencies: { left: '^1.0.0' } }) };
+    expect(droppable(m)).toBe(false);
+  });
+
+  it('a manifest with only `overrides` and no lockfile blocks the drop (it can install vite@7.3.5)', () => {
+    const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools', overrides: { vite: '7.3.5' } }) };
+    expect(droppable(m)).toBe(false);
+  });
+
+  it('a root package.json without a lockfile blocks the drop', () => {
+    const m = { ...manifests(), 'package.json': pkg({ name: 'root' }) };
+    expect(droppable(m)).toBe(false);
+  });
+
+  it('a manifest whose own lockfile cannot be read blocks the drop', () => {
+    const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools' }) };
+    const files = inputs(m, { ...locks(), 'tools/package-lock.json': v3({}) });
+    files.lockfileFiles = files.lockfileFiles.filter((f) => f.path !== 'tools/package-lock.json');
+    expect(resolveNarrowNpm(files).dropSafe('vite', '7.3.5')).toBe(false);
+  });
+
+  it('a root lockfile without a root package.json that cannot be read blocks the drop (it could install the floor)', () => {
+    const files = inputs(manifests(), { ...locks(), 'package-lock.json': v3({ 'node_modules/vite': '7.3.5' }) });
+    files.lockfileFiles = files.lockfileFiles.filter((f) => f.path !== 'package-lock.json');
+    expect(resolveNarrowNpm(files).dropSafe('vite', '7.3.5')).toBe(false);
+  });
+
+  it('a root lockfile without a root package.json that is not valid JSON blocks the drop', () => {
+    expect(droppable(manifests(), { ...locks(), 'package-lock.json': '{ not json' })).toBe(false);
+  });
+
+  it('a manifest whose own lockfile is not valid JSON blocks the drop', () => {
+    const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools' }) };
+    expect(droppable(m, { ...locks(), 'tools/package-lock.json': '{ not json' })).toBe(false);
+  });
+
+  it('a lockfile only in an ancestor directory is not the manifest\'s own', () => {
+    const m = { ...manifests(), 'tools/sub/package.json': pkg({ name: 'sub' }) };
+    expect(droppable(m, { ...locks(), 'tools/package-lock.json': v3({}) })).toBe(false);
+  });
+
+  it('does not stop the additions: the narrow versions are still added', () => {
+    const m = { ...manifests(), 'tools/package.json': pkg({ name: 'tools' }) };
+    const r = resolve(m);
+    expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+  });
+});
+
+describe('optional, peer and bundled declarations are declarations of the name', () => {
+  // A third project that names vite in a field other than dependencies/devDependencies.
+  const withThird = (body: object, lock?: string) => ({
+    m: { ...manifests(), 'plugin/package.json': pkg({ name: 'plugin', ...body }) },
+    l: lock === undefined ? locks() : { ...locks(), 'plugin/package-lock.json': lock },
+  });
+
+  for (const field of ['optionalDependencies', 'peerDependencies'] as const) {
+    it(`${field} without a lockfile blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: { vite: '7.3.5' } });
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} with a lockfile that satisfies the range does not block, and adds nothing`, () => {
+      const { m, l } = withThird({ [field]: { vite: '>=7 <9' } }, v3({ 'node_modules/vite': '7.3.7' }));
+      const r = resolve(m, l);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(true);
+      expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} whose lockfile installs a version outside the range blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: { vite: '7.3.5' } }, v3({ 'node_modules/vite': '7.3.7' }));
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} that installs the baseline version blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: { vite: '7.3.5' } }, v3({ 'node_modules/vite': '7.3.5' }));
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} with an alias or a non-range spec blocks the drop`, () => {
+      for (const spec of ['npm:vite@7.3.7', 'github:vitejs/vite#v7.3.7', 'latest']) {
+        const { m, l } = withThird({ [field]: { vite: spec } }, v3({ 'node_modules/vite': '7.3.7' }));
+        expect(droppable(m, l)).toBe(false);
+      }
+    });
+
+    it(`${field} inside a workspaces project blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: { vite: '>=7' }, workspaces: ['x'] }, v3({ 'node_modules/vite': '7.3.7' }));
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} alone adds nothing, even with a matching lockfile`, () => {
+      const m = { 'plugin/package.json': pkg({ name: 'plugin', [field]: { vite: '>=7' } }) };
+      const l = { 'plugin/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }) };
+      expect(versions(resolve(m, l))).toEqual([]);
+    });
+
+    it(`${field} that is not an object makes the manifest unread and blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] }, v3({}));
+      expect(droppable(m, l)).toBe(false);
+    });
+  }
+
+  for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    it(`${field} naming the package without a lockfile blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] });
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} naming the package with a lockfile that installs another version does not block, and adds nothing`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] }, v3({ 'node_modules/vite': '7.3.7' }));
+      const r = resolve(m, l);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(true);
+      expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    });
+
+    it(`${field} naming the package where the lockfile does not list it at the top level blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] }, v3({ 'node_modules/x/node_modules/vite': '7.3.7' }));
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} naming the package that installs the baseline version blocks the drop`, () => {
+      const { m, l } = withThird({ [field]: ['vite'] }, v3({ 'node_modules/vite': '7.3.5' }));
+      expect(droppable(m, l)).toBe(false);
+    });
+
+    it(`${field} with a non-string entry or a non-list value makes the manifest unread and blocks the drop`, () => {
+      for (const value of [[1], 'vite', { vite: true }]) {
+        const { m, l } = withThird({ [field]: value }, v3({}));
+        expect(droppable(m, l)).toBe(false);
+      }
+    });
+
+    it(`${field} naming another package does not block the drop of vite`, () => {
+      const { m, l } = withThird({ [field]: ['left'] }, v3({ 'node_modules/left': '1.0.0' }));
+      expect(droppable(m, l)).toBe(true);
+    });
+  }
+
+  it('a boolean bundleDependencies is harmless', () => {
+    const { m, l } = withThird({ bundleDependencies: true }, v3({}));
+    expect(droppable(m, l)).toBe(true);
+  });
+});
+
+describe('the baseline version is installed by no fetched lockfile', () => {
   it('nested transitive copy in another lockfile', () => {
     const l = {
       ...locks(),
@@ -443,25 +608,59 @@ describe('4d: the baseline version is installed by no fetched lockfile', () => {
     expect(droppable(manifests(), l, undefined, '7.4')).toBe(true);
   });
 
-  it('a lockfile too large to scan completely counts as unknown (packages map)', () => {
-    const packages: Record<string, unknown> = { '': {}, 'node_modules/vite': { version: '8.3.5' } };
-    for (let i = 0; i < 200_001; i++) packages[`node_modules/p${i}`] = { version: '1.0.0' };
-    const l = { ...locks(), 'backend/package-lock.json': JSON.stringify({ lockfileVersion: 3, packages }) };
-    expect(droppable(manifests(), l)).toBe(false);
-  });
+  // The node budget is one total across all fetched lockfiles. `withNodes(total)`
+  // adds projects (no dependencies) whose lockfiles hold exactly `total` nodes
+  // together, in chunks far below the budget, on top of the 4 nodes of the base
+  // fixture. A `packages` map counts its root entry too; a v1 tree does not.
+  const CHUNK = 100_000;
+  const withNodes = (shape: 'packages' | 'dependencies', total: number) => {
+    const m = manifests();
+    const l = locks();
+    let left = total;
+    for (let i = 0; left > 0; i++) {
+      const nodes = Math.min(CHUNK, left);
+      left -= nodes;
+      m[`big${i}/package.json`] = pkg({ name: `big${i}` });
+      if (shape === 'packages') {
+        const packages: Record<string, unknown> = { '': {} };
+        for (let j = 0; j < nodes - 1; j++) packages[`node_modules/p${j}`] = { version: '1.0.0' };
+        l[`big${i}/package-lock.json`] = JSON.stringify({ lockfileVersion: 3, packages });
+      } else {
+        const dependencies: Record<string, unknown> = {};
+        for (let j = 0; j < nodes; j++) dependencies[`p${j}`] = { version: '1.0.0' };
+        l[`big${i}/package-lock.json`] = JSON.stringify({ lockfileVersion: 1, dependencies });
+      }
+    }
+    return { m, l };
+  };
+  const BASE_FIXTURE_NODES = 4;
 
-  it('a lockfile too large to scan completely counts as unknown (dependencies tree)', () => {
-    const dependencies: Record<string, unknown> = {};
-    for (let i = 0; i < 200_001; i++) dependencies[`p${i}`] = { version: '1.0.0' };
-    const legacy = JSON.stringify({ lockfileVersion: 1, dependencies });
-    const m = { ...manifests(), 'legacy/package.json': pkg({ dependencies: { left: '^1.0.0' } }) };
-    const l = { ...locks(), 'legacy/package-lock.json': legacy };
-    expect(droppable(m, l)).toBe(false);
-  });
+  for (const shape of ['packages', 'dependencies'] as const) {
+    it(`${shape}: lockfiles totalling exactly the node budget are indexed`, () => {
+      const { m, l } = withNodes(shape, MAX_LOCK_INDEX_NODES - BASE_FIXTURE_NODES);
+      expect(droppable(m, l)).toBe(true);
+    }, 30_000);
+
+    it(`${shape}: lockfiles totalling one node more than the budget make every name not provable`, () => {
+      const { m, l } = withNodes(shape, MAX_LOCK_INDEX_NODES - BASE_FIXTURE_NODES + 1);
+      const r = resolve(m, l);
+      expect(r.dropSafe('vite', '7.3.5')).toBe(false);
+      expect(r.dropSafe('vite', '1.2.3')).toBe(false);
+      expect(r.dropSafe('left-pad', '1.3.0')).toBe(false);
+      // The additions do not depend on the index.
+      expect(versions(r)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    }, 30_000);
+  }
 
   it('a version that is semver-equal but spelled differently (build metadata)', () => {
     const l = { ...locks(), 'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5', 'node_modules/x/node_modules/vite': '7.3.5+build.1' }) };
     expect(droppable(manifests(), l)).toBe(false);
+  });
+
+  it('a baseline version spelled with build metadata matches a plain install of it', () => {
+    const l = { ...locks(), 'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5', 'node_modules/x/node_modules/vite': '7.3.5' }) };
+    expect(droppable(manifests(), l, undefined, '7.3.5+sha.abc')).toBe(false);
+    expect(droppable(manifests(), locks(), undefined, '7.3.5+sha.abc')).toBe(true);
   });
 
   it('a lockfile elsewhere that was not read', () => {
@@ -501,6 +700,62 @@ describe('4d: the baseline version is installed by no fetched lockfile', () => {
     const l = { ...locks(), 'legacy/package-lock.json': v3({ 'node_modules/left': '7.3.5' }) };
     expect(droppable(m, l)).toBe(true);
   });
+});
+
+describe('cost: one index over all lockfiles, then lookups', () => {
+  // 100 separate projects, each declaring 1000 names and holding a lockfile with
+  // those 1000 names (100 000 nodes in total, under the node budget). Every name
+  // is asked about once. An implementation that rescans every lockfile for every
+  // question needs minutes here; the tight timeout (not an assertion on elapsed
+  // time) is what pins that the work is one pass plus lookups.
+  const PROJECTS = 100;
+  const NAMES = 1000;
+  const bigRepo = (fillerPerLock = 0) => {
+    const m: Files = {};
+    const l: Files = {};
+    for (let i = 0; i < PROJECTS; i++) {
+      const major = (i % 5) + 1;
+      const deps: Record<string, string> = {};
+      const entries: Record<string, string> = {};
+      for (let j = 0; j < NAMES; j++) {
+        deps[`pkg-${j}`] = `^${major}.0.0`;
+        entries[`node_modules/pkg-${j}`] = `${major}.2.3`;
+      }
+      for (let j = 0; j < fillerPerLock; j++) entries[`node_modules/filler-${j}`] = '1.0.0';
+      m[`p${i}/package.json`] = pkg({ name: `p${i}`, dependencies: deps });
+      l[`p${i}/package-lock.json`] = v3(entries);
+    }
+    return { m, l };
+  };
+
+  // The loop yields to the event loop now and then so that the test timeout can
+  // fire while a slow implementation is still working (a timer cannot interrupt
+  // synchronous code that never yields).
+  const yieldToEventLoop = () => new Promise<void>((resolveYield) => setImmediate(resolveYield));
+
+  it('answers every name of 100 projects x 1000 names (floor 1.0.0 is installed nowhere)', async () => {
+    const { m, l } = bigRepo();
+    const r = resolve(m, l);
+    let drops = 0;
+    for (let j = 0; j < NAMES; j++) {
+      if (r.dropSafe(`pkg-${j}`, '1.0.0')) drops++;
+      if (j % 20 === 0) await yieldToEventLoop();
+    }
+    expect(drops).toBe(NAMES);
+    // The version project 0 installs is installed: not droppable.
+    expect(r.dropSafe('pkg-0', '1.2.3')).toBe(false);
+  }, 4_000);
+
+  it('lockfiles beyond the node budget answer every name quickly with "not provable"', async () => {
+    const { m, l } = bigRepo(11_000); // 100 x 12 000 nodes, above the budget
+    const r = resolve(m, l);
+    let drops = 0;
+    for (let j = 0; j < NAMES; j++) {
+      if (r.dropSafe(`pkg-${j}`, '1.0.0')) drops++;
+      if (j % 20 === 0) await yieldToEventLoop();
+    }
+    expect(drops).toBe(0);
+  }, 20_000);
 });
 
 describe('resolveNarrowNpm never throws', () => {

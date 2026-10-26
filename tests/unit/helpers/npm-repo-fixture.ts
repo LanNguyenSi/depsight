@@ -25,6 +25,8 @@ export interface Scenario {
   truncated?: boolean;
   /** Test-only: the manifest list is cut at its cap (more than 100 manifests). */
   extraManifests?: number;
+  /** Test-only: give each extra manifest an (empty) package-lock.json of its own. */
+  lockedFillers?: boolean;
 }
 
 const state: { files: Record<string, string>; fail: Set<string>; truncated: boolean } = {
@@ -69,7 +71,9 @@ export function githubMockModule() {
 export function loadRepo(scenario: Scenario): void {
   const files = { ...scenario.files };
   for (let i = 0; i < (scenario.extraManifests ?? 0); i++) {
-    files[`pkg-${String(i).padStart(3, '0')}/package.json`] = JSON.stringify({ name: `filler-${i}` });
+    const dir = `pkg-${String(i).padStart(3, '0')}`;
+    files[`${dir}/package.json`] = JSON.stringify({ name: `filler-${i}` });
+    if (scenario.lockedFillers) files[`${dir}/package-lock.json`] = v3({});
   }
   state.files = files;
   state.fail = new Set(scenario.fail ?? []);

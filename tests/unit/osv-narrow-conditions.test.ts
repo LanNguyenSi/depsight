@@ -6,10 +6,11 @@
  * are mocked.
  *
  * Drop rule conditions (a baseline entry is removed only if all hold):
- *   4a  the tree walk was complete
- *   4b  no other package manager's lockfile exists anywhere
- *   4c  every manifest declaring the name is narrow for it
- *   4d  the baseline version is installed by no fetched lockfile, anywhere
+ *   - the tree walk was complete
+ *   - no other package manager's lockfile exists anywhere
+ *   - every manifest the scan reads has a readable lockfile of its own
+ *   - every manifest declaring the name is narrow for it
+ *   - the baseline version is installed by no fetched lockfile, anywhere
  *
  * In the negative tests the baseline floor `vite@7.3.5` must stay in the
  * result; where the violation leaves other manifests narrow, their installed
@@ -68,7 +69,7 @@ describe('regression: a name installed at different versions in separate project
   });
 });
 
-describe('drop rule 4a: tree walk complete', () => {
+describe('drop rule: tree walk complete', () => {
   it('truncated tree: result equals the baseline', async () => {
     expect(await scan('negTruncatedTree')).toEqual(['vite@7.3.5']);
   });
@@ -78,8 +79,17 @@ describe('drop rule 4a: tree walk complete', () => {
   });
 
   it('a manifest list exactly at its limit is complete: the narrow override applies', async () => {
-    const { queries } = await runScan(fetchOsvAdvisories, { ...SCENARIOS.viteTwoProjects, extraManifests: 98 });
+    const { queries } = await runScan(fetchOsvAdvisories, {
+      ...SCENARIOS.viteTwoProjects,
+      extraManifests: 98,
+      lockedFillers: true,
+    });
     expect(queries).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it('a complete manifest list with project manifests that have no lockfile adds the installed versions but keeps the baseline floor', async () => {
+    const { queries } = await runScan(fetchOsvAdvisories, { ...SCENARIOS.viteTwoProjects, extraManifests: 98 });
+    expect(queries).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('detectEcosystem records the cap and the foreign lockfiles, and nothing when the walk is incomplete', async () => {
@@ -110,7 +120,7 @@ describe('drop rule 4a: tree walk complete', () => {
   });
 });
 
-describe('drop rule 4b: no other package manager lockfile anywhere', () => {
+describe('drop rule: no other package manager lockfile anywhere', () => {
   for (const name of [
     'negYarnLockElsewhere',
     'negPnpmLockElsewhere',
@@ -124,7 +134,7 @@ describe('drop rule 4b: no other package manager lockfile anywhere', () => {
   }
 });
 
-describe('drop rule 4c: every declaring manifest is narrow for the name', () => {
+describe('drop rule: every declaring manifest is narrow for the name', () => {
   it('workspaces key in an ancestor package.json (even an empty array): result equals the baseline', async () => {
     expect(await scan('negWorkspacesKeyInAncestor')).toEqual(['vite@7.3.5']);
   });
@@ -183,7 +193,7 @@ describe('drop rule 4c: every declaring manifest is narrow for the name', () => 
   });
 });
 
-describe('drop rule 4d: the baseline version is installed nowhere', () => {
+describe('drop rule: the baseline version is installed nowhere', () => {
   it('installed as a nested copy in another lockfile', async () => {
     expect(await scan('negBaseVersionNestedInOtherLock')).toEqual([
       'vite@7.3.5',

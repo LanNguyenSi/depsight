@@ -11,6 +11,15 @@
  */
 import { pkg, v1, v2, v3, yarn, type Scenario } from './npm-repo-fixture';
 
+// Two separate projects in the narrow shape: frontend installs vite 7.3.7,
+// backend 8.3.5; the baseline floor is 7.3.5.
+const viteTwoProjectFiles = (): Record<string, string> => ({
+  'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
+  'frontend/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+  'backend/package.json': pkg({ dependencies: { vite: '^8.3.0' } }),
+  'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+});
+
 export const SCENARIOS: Record<string, Scenario> = {
   viteGoal: {
     files: {
@@ -618,7 +627,7 @@ export const SCENARIOS: Record<string, Scenario> = {
 
   // ---- negative: exactly one drop condition violated (vite fixture) ----
 
-  // 4a: the git tree comes back truncated.
+  // Incomplete tree: the git tree comes back truncated.
   negTruncatedTree: {
     truncated: true,
     files: {
@@ -628,7 +637,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4a: more manifests than the scan reads (cap of 100).
+  // Incomplete tree: more manifests than the scan reads (cap of 100).
   negManifestListCapped: {
     extraManifests: 100,
     files: {
@@ -638,7 +647,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4b: another package manager's lockfile somewhere in the tree.
+  // Other package manager: another package manager's lockfile somewhere in the tree.
   negYarnLockElsewhere: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -684,7 +693,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'tools/npm-shrinkwrap.json': v3({ 'node_modules/left-pad': '1.3.0' }),
     },
   },
-  // 4c: a `workspaces` key (here an empty array, which still counts) in an
+  // Declaring manifest not narrow: a `workspaces` key (here an empty array, which still counts) in an
   // ancestor package.json.
   negWorkspacesKeyInAncestor: {
     files: {
@@ -695,7 +704,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: a `workspaces` key in the declaring manifest itself.
+  // Declaring manifest not narrow: a `workspaces` key in the declaring manifest itself.
   negWorkspacesKeyInSelf: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' }, workspaces: false }),
@@ -704,7 +713,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: an ancestor package.json cannot be read (HTTP 500).
+  // Declaring manifest not narrow: an ancestor package.json cannot be read (HTTP 500).
   negAncestorManifestReadError: {
     fail: ['package.json'],
     files: {
@@ -715,7 +724,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: an ancestor package.json is not valid JSON.
+  // Declaring manifest not narrow: an ancestor package.json is not valid JSON.
   negAncestorManifestUnparsable: {
     files: {
       'package.json': '{ "name": "root", "workspaces": ',
@@ -725,7 +734,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: a manifest elsewhere in the tree cannot be read; it might declare vite.
+  // Declaring manifest not narrow: a manifest elsewhere in the tree cannot be read; it might declare vite.
   negUnrelatedManifestReadError: {
     fail: ['tools/package.json'],
     files: {
@@ -736,7 +745,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'tools/package.json': pkg({ dependencies: { vite: '^6.0.0' } }),
     },
   },
-  // 4c: a declaring manifest without a lockfile of its own.
+  // Declaring manifest not narrow: a declaring manifest without a lockfile of its own.
   negDeclarerWithoutOwnLock: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -746,7 +755,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'ops/package-lock.json': v3({ 'node_modules/vite': '8.3.6' }),
     },
   },
-  // 4c: a declaring manifest's own lockfile is not valid JSON.
+  // Declaring manifest not narrow: a declaring manifest's own lockfile is not valid JSON.
   negDeclarerLockUnparsable: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -757,7 +766,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'ops/package-lock.json': v3({ 'node_modules/vite': '8.3.6' }),
     },
   },
-  // 4c: a declaring manifest's own lockfile cannot be read (HTTP 500).
+  // Declaring manifest not narrow: a declaring manifest's own lockfile cannot be read (HTTP 500).
   negDeclarerLockReadError: {
     fail: ['frontend/package-lock.json'],
     files: {
@@ -769,7 +778,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'ops/package-lock.json': v3({ 'node_modules/vite': '8.3.6' }),
     },
   },
-  // 4c: a declaring manifest's own lockfile is lockfileVersion 1.
+  // Declaring manifest not narrow: a declaring manifest's own lockfile is lockfileVersion 1.
   negDeclarerLockV1: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -778,7 +787,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: the name is only nested in a declaring manifest's own lockfile (no
+  // Declaring manifest not narrow: the name is only nested in a declaring manifest's own lockfile (no
   // top-level key): no walking down or up.
   negDeclarerLockOnlyNestedKey: {
     files: {
@@ -791,7 +800,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: the version in the lockfile has no digit.
+  // Declaring manifest not narrow: the version in the lockfile has no digit.
   negDeclarerLockVersionWithoutDigit: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -802,7 +811,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'ops/package-lock.json': v3({ 'node_modules/vite': '8.3.6' }),
     },
   },
-  // 4c: one declaration is an npm: alias.
+  // Declaring manifest not narrow: one declaration is an npm: alias.
   negDeclarationIsAlias: {
     files: {
       'frontend/package.json': pkg({ dependencies: { bundler: 'npm:vite@^7.3.5' } }),
@@ -811,7 +820,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: one declaration is not a plain semver range (a git spec).
+  // Declaring manifest not narrow: one declaration is not a plain semver range (a git spec).
   negDeclarationNotAPlainRange: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: 'github:vitejs/vite#v7.3.5' } }),
@@ -820,7 +829,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4c: the lockfile version does not satisfy the declared range (stale lock).
+  // Declaring manifest not narrow: the lockfile version does not satisfy the declared range (stale lock).
   negLockVersionOutsideDeclaredRange: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -829,7 +838,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'backend/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
     },
   },
-  // 4d: the baseline version (7.3.5) is installed as a nested transitive copy
+  // Baseline version installed elsewhere: the baseline version (7.3.5) is installed as a nested transitive copy
   // in a lockfile of another project.
   negBaseVersionNestedInOtherLock: {
     files: {
@@ -843,7 +852,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       }),
     },
   },
-  // 4d: the baseline version is installed under an aliased key of another lockfile.
+  // Baseline version installed elsewhere: the baseline version is installed under an aliased key of another lockfile.
   negBaseVersionAliasedInOtherLock: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -855,7 +864,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       }),
     },
   },
-  // 4d: the baseline version is installed in a lockfile with no manifest
+  // Baseline version installed elsewhere: the baseline version is installed in a lockfile with no manifest
   // declaring it (a third project's v1 tree, nested).
   negBaseVersionInOtherV1Lock: {
     files: {
@@ -870,7 +879,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       }),
     },
   },
-  // 4d: a lockfile elsewhere cannot be read (HTTP 500); it could install the
+  // Baseline version installed elsewhere: a lockfile elsewhere cannot be read (HTTP 500); it could install the
   // baseline version.
   negOtherLockReadError: {
     fail: ['legacy/package-lock.json'],
@@ -883,7 +892,7 @@ export const SCENARIOS: Record<string, Scenario> = {
       'legacy/package-lock.json': v3({ 'node_modules/left': '1.0.0' }),
     },
   },
-  // 4d: a lockfile elsewhere is not valid JSON.
+  // Baseline version installed elsewhere: a lockfile elsewhere is not valid JSON.
   negOtherLockUnparsable: {
     files: {
       'frontend/package.json': pkg({ dependencies: { vite: '^7.3.5' } }),
@@ -902,6 +911,87 @@ export const SCENARIOS: Record<string, Scenario> = {
       'package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
       ['packages/' + 'a'.repeat(30) + '/package.json']: pkg({ name: 'member', dependencies: { vite: '^7.3.5' } }),
       ['packages/' + 'a'.repeat(30) + '/package-lock.json']: v3({ 'node_modules/vite': '7.3.7' }),
+    },
+  },
+
+  // ---- projects that name the package in a field the baseline does not query,
+  // or that have no lockfile (vite fixture: frontend 7.3.7, backend 8.3.5) ----
+
+  // An optional dependency on the exact floor, in a project without a lockfile:
+  // it installs vite@7.3.5, which the drop proof cannot see.
+  negOptionalExactNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', optionalDependencies: { vite: '7.3.5' } }),
+    },
+  },
+  negPeerExactNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', peerDependencies: { vite: '7.3.5' } }),
+    },
+  },
+  negBundledNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', bundleDependencies: ['vite'] }),
+    },
+  },
+  // The project has a lockfile that installs the floor: the baseline entry stays.
+  negOptionalExactWithLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', optionalDependencies: { vite: '7.3.5' } }),
+      'plugin/package-lock.json': v3({ 'node_modules/vite': '7.3.5' }),
+    },
+  },
+  // A project without a lockfile that only pins vite through `overrides` while
+  // depending on something that pulls it in.
+  negOverridesNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({
+        name: 'plugin',
+        dependencies: { vitest: '^3.0.0' },
+        overrides: { vite: '7.3.5' },
+      }),
+    },
+  },
+  // A project that does not mention vite at all and has no lockfile.
+  negUnrelatedProjectNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'tools/package.json': pkg({ name: 'tools', dependencies: { left: '^1.0.0' } }),
+    },
+  },
+  // A root package.json without a lockfile next to two locked projects.
+  negRootManifestNoLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'package.json': pkg({ name: 'root', private: true }),
+    },
+  },
+  // The same project with a lockfile of its own: nothing blocks the drop.
+  optionalSatisfiedWithLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', optionalDependencies: { vite: '>=7 <9' } }),
+      'plugin/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
+    },
+  },
+  peerSatisfiedWithLock: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'plugin/package.json': pkg({ name: 'plugin', peerDependencies: { vite: '^7.0.0 || ^8.0.0' } }),
+      'plugin/package-lock.json': v3({ 'node_modules/vite': '8.3.5' }),
+    },
+  },
+  // An excluded directory (build output) is not read at all, so its manifest
+  // does not count as a lockless project.
+  vendoredManifestNotRead: {
+    files: {
+      ...viteTwoProjectFiles(),
+      'node_modules/vite-fork/package.json': pkg({ name: 'vite-fork', dependencies: { vite: '7.3.5' } }),
     },
   },
 };

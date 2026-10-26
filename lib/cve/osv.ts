@@ -360,8 +360,8 @@ interface DepEntry {
 /**
  * The repo-wide npm chain: the entries `collectDeps` produced for npm before
  * the narrow override existed, moved here unchanged. One entry per declared
- * dependency name (`unionNpmDeps` dedupes by name); resolution order per
- * D-006: merged lockfile `resolved` > usable manifest floor (exact or
+ * dependency name (`unionNpmDeps` dedupes by name); resolution order:
+ * merged lockfile `resolved` > usable manifest floor (exact or
  * range-derived) > `ambiguous` > dropped. See the `collectDeps` doc comment
  * for the rationale of each step.
  */
@@ -409,8 +409,8 @@ function repoWideNpmEntries(
  * The narrow override on top of `repoWideNpmEntries` (see the banner above
  * `resolveNarrowNpm` in manifest-discovery.ts): every narrow-resolved
  * (name, version) is added, and a baseline entry is removed only when
- * `narrowDropSafe` (`narrow.dropSafe`) proves its version is installed
- * nowhere. Nothing else removes or replaces an entry, so the result is the
+ * `narrowDropSafe` (`narrow.dropSafe`) proves that no package-lock.json the
+ * scan reads installs its version. Nothing else removes or replaces an entry, so the result is the
  * baseline plus additions, minus the provably safe drops. May hold several
  * entries for one name (one per installed version); consumers key by
  * (name, version) pair, not by name.
@@ -489,9 +489,11 @@ function applyNarrowOverride(baseEntries: DepEntry[], narrow: NarrowNpmResolutio
  * (`repoWideNpmEntries`, one entry per name). `applyNarrowOverride` then
  * adds, for repos of separate projects each with its own package-lock.json,
  * the version each manifest's own lockfile installs, and removes a chain
- * entry only when `resolveNarrowNpm` proves its version is installed in no
- * fetched lockfile (every declaring manifest narrow, complete tree, no other
- * package manager's lockfile; conditions in manifest-discovery.ts). The result
+ * entry only when `resolveNarrowNpm` proves its version is installed by no
+ * package-lock.json the scan reads (every declaring manifest narrow, every
+ * manifest with a lockfile of its own, complete tree, no other package
+ * manager's lockfile; conditions in manifest-discovery.ts; vendored, build and
+ * fixture directories are not read). The result
  * can therefore hold several entries for one name, one per installed version.
  * Npm workspaces (any `workspaces` key), repos with a yarn.lock, pnpm-lock.yaml,
  * bun lockfile or npm-shrinkwrap.json, and trees or manifest lists that could

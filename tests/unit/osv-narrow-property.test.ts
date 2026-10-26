@@ -7,8 +7,9 @@
  * v3 conflicting with it, v1, malformed, read error 500), a transitive copy of
  * the baseline version in some lockfile, the root package.json (none, plain,
  * with `workspaces`, read error, malformed), a foreign lockfile (kind and
- * location: own directory, ancestor, sibling), a truncated tree and a capped
- * manifest list.
+ * location: own directory, ancestor, sibling), a truncated tree, a capped
+ * manifest list, and an extra project that names vite in an optional, peer or
+ * bundled declaration or only in `overrides`, with or without a lockfile.
  *
  * Every case runs the real pipeline twice: with the narrow override (head) and
  * with the tree facts withheld, which switches the override off and leaves the
@@ -24,6 +25,9 @@
  *   P5  with a truncated tree, a capped manifest list or a foreign lockfile,
  *       head equals base
  *   P6  names other than vite are untouched
+ *   P7  the head set of vite versions is exactly the baseline ones that were
+ *       not dropped plus the versions installed for narrow dependencies and
+ *       devDependencies; optional, peer and bundled declarations never add
  */
 import { describe, it, expect, vi } from 'vitest';
 import semver from 'semver';
@@ -71,8 +75,20 @@ interface ModelManifest {
   nestedCopy?: string; // an extra nested vite install in this lockfile
 }
 
+type ExtraField = 'optionalDependencies' | 'peerDependencies' | 'bundleDependencies' | 'overrides';
+
+// A further project in `x/`: it names vite in a field the baseline does not
+// query, with or without a lockfile of its own.
+interface ModelExtra {
+  field: ExtraField;
+  spec: string;
+  hasLock: boolean;
+  lockVersion: string;
+}
+
 interface Model {
   manifests: ModelManifest[];
+  extra?: ModelExtra;
   root: RootState; // package.json at '' when no manifest sits there
   foreign: string[]; // foreign lockfile paths
   truncated: boolean;
@@ -137,7 +153,16 @@ function generate(rand: () => number): Model {
     const dirs = ['', 'a', 'b', 'a/sub', 'tools'];
     foreign.push(path(pick(dirs), pick(FOREIGN)));
   }
-  return { manifests, root, foreign, truncated: rand() < 0.08, capped: rand() < 0.05 };
+  const extra: ModelExtra | undefined =
+    rand() < 0.35
+      ? {
+          field: pick<ExtraField>(['optionalDependencies', 'peerDependencies', 'bundleDependencies', 'overrides']),
+          spec: pick(SPECS),
+          hasLock: rand() < 0.6,
+          lockVersion: pick(VERSIONS),
+        }
+      : undefined;
+  return { manifests, extra, root, foreign, truncated: rand() < 0.08, capped: rand() < 0.05 };
 }
 
 function toScenario(model: Model): Scenario {
@@ -160,6 +185,15 @@ function toScenario(model: Model): Scenario {
       files[lockPath] = v3(entries);
       if (m.lock === 'error') fail.push(lockPath);
     }
+  }
+  if (model.extra) {
+    const e = model.extra;
+    const body: Record<string, unknown> = { name: 'm-x' };
+    if (e.field === 'bundleDependencies') body.bundleDependencies = ['vite'];
+    else if (e.field === 'overrides') body.overrides = { vite: e.spec };
+    else body[e.field] = { vite: e.spec };
+    files['x/package.json'] = pkg(body);
+    if (e.hasLock) files['x/package-lock.json'] = v3({ 'node_modules/vite': e.lockVersion });
   }
   if (!model.manifests.some((m) => m.dir === '')) {
     if (model.root === 'plain') files['package.json'] = pkg({ name: 'root', private: true });
@@ -186,6 +220,7 @@ function installedVersions(model: Model): Set<string> {
       if (m.lock === 'v3' && m.nestedCopy) out.add(m.nestedCopy);
     }
   }
+  if (model.extra?.hasLock) out.add(model.extra.lockVersion);
   return out;
 }
 
@@ -193,33 +228,55 @@ function hasUnknownLock(model: Model): boolean {
   return model.manifests.some((m) => m.lock === 'malformed' || m.lock === 'error');
 }
 
+// No `workspaces` key in the manifest at `dir` or in any package.json above it.
+function standaloneInModel(model: Model, dir: string): boolean {
+  for (const other of model.manifests) {
+    if (isAncestorOrSelf(other.dir, dir) && other.workspaces !== undefined) return false;
+  }
+  if (!rootManifestInLayout(model) && model.root !== 'none') {
+    if (model.root !== 'plain') return false; // workspaces / error / unparsable
+  }
+  return true;
+}
+
+const rootManifestInLayout = (model: Model) => model.manifests.some((x) => x.dir === '');
+
 // Is `m` narrow for vite in the model?
 function narrowInModel(model: Model, m: ModelManifest): boolean {
   if (m.lock !== 'v3') return false;
   if (m.spec.startsWith('npm:')) return false;
   if (semver.validRange(m.spec) === null) return false;
   if (!semver.satisfies(m.lockVersion, m.spec, { includePrerelease: true })) return false;
-  // workspaces in itself or in any ancestor package.json
-  for (const other of model.manifests) {
-    if (isAncestorOrSelf(other.dir, m.dir) && other.workspaces !== undefined) return false;
-  }
-  if (!model.manifests.some((x) => x.dir === '') && model.root !== 'none') {
-    if (model.root !== 'plain') return false; // workspaces / error / unparsable
-  }
-  return true;
+  return standaloneInModel(model, m.dir);
+}
+
+// Is the extra project narrow for the vite it names? An `overrides` entry is no
+// declaration (the lockfile reflects it), and a bundled name carries no range.
+function extraNarrowInModel(model: Model, e: ModelExtra): boolean {
+  if (!e.hasLock) return false;
+  if (!standaloneInModel(model, 'x')) return false;
+  if (e.field === 'overrides') return true;
+  if (e.field === 'bundleDependencies') return true;
+  if (semver.validRange(e.spec) === null) return false;
+  return semver.satisfies(e.lockVersion, e.spec, { includePrerelease: true });
 }
 
 function dropOracle(model: Model, baseVersion: string): boolean {
   if (model.truncated || model.capped || model.foreign.length > 0) return false;
   if (model.root === 'error' || model.root === 'unparsable') return false;
   if (hasUnknownLock(model)) return false;
+  // A project without a lockfile of its own can install anything: nothing is dropped.
+  if (!rootManifestInLayout(model) && model.root !== 'none') return false;
+  if (model.manifests.some((m) => m.lock === 'none')) return false;
+  if (model.extra && !model.extra.hasLock) return false;
+  if (model.extra && !extraNarrowInModel(model, model.extra)) return false;
   if (!model.manifests.every((m) => narrowInModel(model, m))) return false;
   return !installedVersions(model).has(baseVersion);
 }
 
 // ---- the test ----------------------------------------------------------------
 
-const CASES = 600;
+const CASES = 2000;
 
 describe('narrow override properties (seeded, generated repositories)', () => {
   it(`holds for ${CASES} generated repositories`, async () => {
@@ -272,13 +329,25 @@ describe('narrow override properties (seeded, generated repositories)', () => {
         additionsSeen++;
       }
 
+      // P7: the head set is the kept baseline entries plus the narrow additions, nothing else.
+      {
+        const incomplete = model.truncated || model.capped || model.foreign.length > 0;
+        const expectedAdds = incomplete
+          ? []
+          : model.manifests.filter((m) => m.key === 'vite' && narrowInModel(model, m)).map((m) => m.lockVersion);
+        const kept = baseVite.filter((v) => !dropped.includes(`vite@${v}`));
+        const expected = [...new Set([...kept, ...expectedAdds])].sort();
+        const actual = head.filter((q) => q.startsWith('vite@')).map((q) => q.slice(5)).sort();
+        if (JSON.stringify(expected) !== JSON.stringify(actual)) fail(`P7 head vite set ${actual} != expected ${expected}`);
+      }
+
       // Determinism.
       const again = (await runScan(fetchOsvAdvisories, scenario)).queries;
       if (JSON.stringify(again) !== JSON.stringify(head)) fail('non-deterministic head');
     }
 
     // The generator reaches both outcomes (not vacuous).
-    expect(narrowDrops).toBeGreaterThan(10);
+    expect(narrowDrops).toBeGreaterThan(20);
     expect(keptBase).toBeGreaterThan(50);
     expect(additionsSeen).toBeGreaterThan(50);
     expect(failures.slice(0, 3).join('\n\n')).toBe('');

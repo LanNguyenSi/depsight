@@ -309,6 +309,69 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.7', 'vite@8.3.5'],
     why: 'legacy/ lockfile is not valid JSON: baseline stays; both narrow versions added',
   }),
+
+  // ---- projects that name the package in a field the baseline does not query,
+  // or that have no lockfile of their own ----
+  negOptionalExactNoLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has no lockfile and an optional dependency on vite 7.3.5, which it can install: baseline stays; the two narrow versions are added',
+  }),
+  negPeerExactNoLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has no lockfile and a peer dependency on vite 7.3.5: baseline stays; the two narrow versions are added',
+  }),
+  negBundledNoLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has no lockfile and bundles vite: baseline stays; the two narrow versions are added',
+  }),
+  negOptionalExactWithLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has a lockfile that installs vite 7.3.5 (optional dependency): baseline stays; it adds nothing itself',
+  }),
+  negOverridesNoLock: narrow({
+    base: ['vite@7.3.5', 'vitest@3.0.0'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has no lockfile and pins vite 7.3.5 through overrides: baseline stays; the two narrow versions are added',
+  }),
+  negUnrelatedProjectNoLock: narrow({
+    base: ['left@1.0.0', 'vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'tools/ does not mention vite but has no lockfile, so it could install anything: baseline stays; the two narrow versions are added',
+  }),
+  negRootManifestNoLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: [],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a root package.json without a lockfile: baseline stays; the two narrow versions are added',
+  }),
+  optionalSatisfiedWithLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ declares vite optionally (>=7 <9) and its own lockfile installs 7.3.7; it blocks nothing and adds nothing; floor 7.3.5 installed nowhere',
+  }),
+  peerSatisfiedWithLock: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'plugin/ has a peer range ^7.0.0 || ^8.0.0 and its own lockfile installs 8.3.5; it blocks nothing and adds nothing; floor 7.3.5 installed nowhere',
+  }),
+  vendoredManifestNotRead: narrow({
+    base: ['vite@7.3.5'],
+    dropped: ['vite@7.3.5'],
+    added: ['vite@7.3.7', 'vite@8.3.5'],
+    why: 'a manifest under node_modules is never read, so it is not a project without a lockfile; floor 7.3.5 installed in no lockfile the scan reads',
+  }),
 };
 
 describe('narrow npm lockfile override: end-to-end OSV query scenarios', () => {
