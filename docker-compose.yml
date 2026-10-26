@@ -3,6 +3,14 @@
 # project name and database volume, and `make dev*` pins it with -p.
 name: depsight
 
+# Rotating container logs for every service: without it the json-file driver keeps one
+# unbounded file per container. Three files of 10 MB each is about 30 MB per service.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   app:
     build:
@@ -20,6 +28,26 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    # Fails on any non-2xx answer, so /api/health's 503 (database unreachable) marks the
+    # container unhealthy. The runner image has neither curl nor wget, hence inline Node.
+    # start_period covers a cold Next start: probes inside it never count as failures.
+    # Plain compose does not restart an unhealthy container; this is a status that
+    # `docker ps` and `docker compose ps` show, not a self-healing mechanism.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health', { signal: AbortSignal.timeout(4000) }).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # Memory cap for the running server and its scan cycles (the image build runs before
+    # the container exists and is not under this limit). Sizing: docs/configuration.md,
+    # Resource limits and log rotation.
+    mem_limit: 1g
+    logging: *default-logging
 
   db:
     image: postgres:16-alpine
@@ -39,6 +67,8 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    mem_limit: 512m
+    logging: *default-logging
 
 volumes:
   postgres_data:

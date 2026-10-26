@@ -3,7 +3,10 @@
 // edge network (and, in the hosted file, only on internal networks), its port must
 // not be published on every interface, one variable must carry its password, a routed
 // service on several networks must name the edge network for Traefik, and the dev
-// and production stacks must not share a project name or a database volume.
+// and production stacks must not share a project name or a database volume. It also
+// holds the operational invariants of the same files: every service rotates its logs and
+// has a memory limit, and the app has a healthcheck on /api/health that waits for the
+// database to be healthy.
 //
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
@@ -93,6 +96,49 @@ const routedByTraefik = (labels) =>
       ROUTER_LABEL.test(key),
   );
 
+// A resolved memory limit: mem_limit or deploy.resources.limits.memory, bytes as a
+// number or a numeric string. Anything else counts as not set.
+const memoryLimit = (service) => {
+  const raw = service.mem_limit ?? service.deploy?.resources?.limits?.memory;
+  const bytes = Number(raw);
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+};
+
+// Rotation and limits for every service (migrate included), and the app's healthcheck.
+// Without rotation the json-file driver grows one file per container for as long as it
+// runs; without a memory limit one service can take the host's memory from the database.
+function checkOperations(file, cfg) {
+  for (const [name, service] of Object.entries(cfg.services)) {
+    const logging = service.logging;
+    if (logging?.driver !== 'json-file') {
+      fail(
+        file,
+        `${name} has no json-file logging block (driver is ${logging?.driver ?? 'unset'})`,
+      );
+    } else if (!logging.options?.['max-size'] || !logging.options?.['max-file']) {
+      fail(file, `${name} logging has no max-size and max-file, so its log is never rotated`);
+    }
+    if (memoryLimit(service) === 0) fail(file, `${name} has no memory limit (mem_limit)`);
+  }
+
+  const app = cfg.services.app;
+  const check = app.healthcheck;
+  const command = Array.isArray(check?.test) ? check.test.join(' ') : String(check?.test ?? '');
+  if (!check || check.disable === true || check.test?.[0] === 'NONE') {
+    fail(file, 'app has no healthcheck');
+  } else {
+    if (!command.includes('/api/health')) fail(file, 'app healthcheck does not probe /api/health');
+    if (!check.start_period || /^0+(\.0+)?[a-z]*$/.test(String(check.start_period))) {
+      fail(file, 'app healthcheck has no start_period, so a cold start counts as failures');
+    }
+    if (!(Number(check.retries) >= 1)) fail(file, 'app healthcheck sets no retries');
+  }
+  if (app.depends_on?.db?.condition !== 'service_healthy') {
+    fail(file, 'app does not wait for db with depends_on condition service_healthy');
+  }
+  if (!cfg.services.db.healthcheck) fail(file, 'db has no healthcheck');
+}
+
 function checkProd(file) {
   const cfg = resolveCompose(file);
   if (cfg.name !== PROD_PROJECT) {
@@ -165,6 +211,8 @@ function checkProd(file) {
       fail(file, `${name} sets no DATABASE_URL`);
     }
   }
+
+  checkOperations(file, cfg);
 
   // One variable carries the password everywhere.
   if (db.environment?.POSTGRES_PASSWORD !== SENTINEL) {
