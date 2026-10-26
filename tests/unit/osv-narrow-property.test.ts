@@ -67,6 +67,10 @@
  * Non-vacuity: the generator reaches drops, kept floors and additions, and for
  * each varied dimension there are cases where only that dimension keeps the
  * floor (the oracle with that dimension blinded would drop it).
+ *
+ * A second test runs the dependency-age report over the same generated
+ * repositories and checks the row it shows for vite against the same oracle
+ * (see the comment above it).
  */
 import { describe, it, expect, vi } from 'vitest';
 import semver from 'semver';
@@ -86,7 +90,8 @@ vi.mock('@/lib/manifest-discovery', async (importOriginal) => {
 });
 
 import { fetchOsvAdvisories } from '@/lib/cve/osv';
-import { pkg, runScan, yarn, type Scenario } from './helpers/npm-repo-fixture';
+import { analyzeDepAge } from '@/lib/deps/age-checker';
+import { loadRepo, pkg, runScan, yarn, type Scenario } from './helpers/npm-repo-fixture';
 
 // ---- seeded generator --------------------------------------------------------
 
@@ -852,4 +857,178 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     expect(failures.slice(0, 3).join('\n\n')).toBe('');
     expect(failures).toEqual([]);
   }, 180_000);
+});
+
+// ---- the dependency-age report row --------------------------------------------
+//
+// For every generated repository the report's `vite` row is compared with the
+// base row (the spec of the lowest declared range with its range operator
+// stripped, which is what the report showed before it read lockfiles) under the
+// rule "the row is the base row, except that it is the lowest version the
+// declaring projects' own lockfiles install when every declaration is in
+// `dependencies` or `devDependencies`, every declaring project is proven by its
+// own lockfile (the oracle's drop rule for the base floor) and that version is
+// not below the floor". Properties:
+//
+//   R1  the row is never below the base row
+//   R2  a row that differs from the base row has no declarer outside
+//       `dependencies` and `devDependencies`, every declarer proven by the
+//       oracle, and equals the lowest version the declarers' own lockfiles install
+//   R3  a lockless, aliased, lockfileVersion 1, unreadable or unparsable lockfile,
+//       workspaces, foreign lockfile, `.npmrc`, truncated or capped tree
+//       dimension, or a project declaring vite in `optionalDependencies`,
+//       `peerDependencies` or `bundleDependencies` (the extra project; an
+//       `overrides` entry is no declaration), forces the base row
+//   R4  the row equals the oracle's row exactly
+//
+// Non-vacuity: raised rows exist, kept rows exist, and each varied dimension,
+// the extra declarer included, is in some cases the only thing that keeps the
+// base row.
+
+const stripSpec = (spec: string) => spec.replace(/^[^0-9]*/, '');
+// The ranges the model declares for vite, as the report sees them (an alias
+// declares its target's range).
+const declaredSpecs = (model: Model) => model.manifests.map((m) => (m.key === 'vite' ? m.spec : m.spec.slice('npm:vite@'.length)));
+// The lowest of the plain ranges (the report's union keeps the lowest one), or null.
+function lowestPlainSpec(model: Model): string | null {
+  let best: string | null = null;
+  for (const spec of declaredSpecs(model)) {
+    if (!plainRange(spec)) continue;
+    if (best === null || semver.lt(semver.minVersion(spec)!, semver.minVersion(best)!)) best = spec;
+  }
+  return best;
+}
+
+const DEAD_LOCKS: LockKind[] = ['none', 'v1', 'v4', 'nover', 'v3nopackages', 'malformed', 'error'];
+// The extra project declares vite outside `dependencies` and `devDependencies`
+// (optional, peer or bundled): its own lockfile's version is never among the
+// versions the row is the lowest of, so it keeps the base row. An `overrides`
+// entry is no declaration.
+const extraDeclares = (model: Model) => model.extra !== undefined && model.extra.field !== 'overrides';
+function forcesBaseRow(model: Model): boolean {
+  return (
+    model.manifests.some((m) => DEAD_LOCKS.includes(m.lock) || m.key !== 'vite' || m.workspaces !== undefined) ||
+    extraDeclares(model) ||
+    model.foreign.length > 0 ||
+    model.npmrc.some((p) => !excludedDir(p)) ||
+    model.truncated ||
+    model.capped
+  );
+}
+
+// May the row rise above `floor`: no declarer outside `dependencies` and
+// `devDependencies`, and the oracle proves every declarer.
+const raiseOracle = (model: Model, floor: string) => !extraDeclares(model) && dropOracle(model, floor);
+
+function oracleReportRow(model: Model, baseRow: string): string {
+  const spec = lowestPlainSpec(model);
+  if (spec === null) return baseRow;
+  const floor = stripSpec(spec);
+  if (!raiseOracle(model, floor)) return floor;
+  let lowest = model.manifests[0].lockVersion;
+  for (const m of model.manifests) if (semver.lt(m.lockVersion, lowest)) lowest = m.lockVersion;
+  return semver.lt(lowest, floor) ? floor : lowest;
+}
+
+// The row's blinders: the drop rule's dimensions, each with the extra declarer
+// left as it is, plus the extra declarer itself (the drop rule with the
+// declarer ignored, as the row rule before it read that field).
+type RowBlinder = Blinder | 'extraDeclarer';
+const ROW_BLINDERS: RowBlinder[] = [...BLINDERS, 'extraDeclarer'];
+function raisableBlinded(model: Model, what: RowBlinder, floor: string): boolean {
+  if (what === 'extraDeclarer') return extraDeclares(model) && dropOracle(model, floor);
+  return !extraDeclares(model) && droppableBlinded(model, what, floor);
+}
+
+describe('dependency-age report row properties (seeded, generated repositories)', () => {
+  it(`holds for ${CASES} generated repositories`, async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          'dist-tags': { latest: '99.0.0' },
+          time: new Proxy({}, { get: (_t, k) => (typeof k === 'string' && /^\d/.test(k) ? '2026-01-01T00:00:00Z' : undefined) }),
+        }),
+      })),
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const rowOf = async (scenario: Scenario): Promise<string | null> => {
+      loadRepo(scenario);
+      const result = await analyzeDepAge('t', 'o', 'r', 'main');
+      return result.dependencies.find((d) => d.name === 'vite')?.installedVersion ?? null;
+    };
+    try {
+      const rand = mulberry32(20261026);
+      let raised = 0;
+      let keptRow = 0;
+      let forced = 0;
+      const soleBlocker = Object.fromEntries(ROW_BLINDERS.map((b) => [b, 0])) as Record<RowBlinder, number>;
+      const failures: string[] = [];
+
+      for (let i = 0; i < CASES; i++) {
+        const model = generate(rand);
+        const scenario = toScenario(model);
+        // The base row: the tree facts withheld switch the narrow proof off, so
+        // the report shows the manifest floor strip only.
+        STRIP_TREE_FACTS = true;
+        const base = await rowOf(scenario);
+        STRIP_TREE_FACTS = false;
+        const head = await rowOf(scenario);
+        const note = `case ${i}: ${JSON.stringify(model)}\n  base=${base} head=${head}`;
+        const fail = (msg: string) => failures.push(`${msg}\n${note}`);
+        if (base === null || head === null) {
+          if (base !== head) fail('the vite row is present in only one of the runs');
+          continue;
+        }
+
+        // The base row is the one-line strip of the lowest declared plain range
+        // (with a truncated tree or a capped manifest list the scan reads only
+        // some manifests, so the declared ranges are not all known).
+        const lowest = lowestPlainSpec(model);
+        const seesEveryManifest = !model.truncated && !model.capped;
+        if (seesEveryManifest && lowest !== null && base !== stripSpec(lowest)) {
+          fail(`base row ${base} is not the strip of ${lowest}`);
+        }
+
+        // R1
+        const comparable = semver.valid(base) !== null && semver.valid(head) !== null;
+        if (comparable ? semver.lt(head, base) : head !== base) fail(`R1 row ${head} is below the base row ${base}`);
+
+        // R2
+        if (head !== base) {
+          raised++;
+          if (extraDeclares(model)) fail(`R2 row raised to ${head} beside a ${model.extra!.field} declarer`);
+          if (!dropOracle(model, base)) fail(`R2 row raised to ${head} but the oracle does not prove every declarer`);
+          const own = model.manifests.map((m) => m.lockVersion).sort(semver.compare)[0];
+          if (head !== own) fail(`R2 row ${head} is not the lowest own-lockfile version ${own}`);
+        } else keptRow++;
+
+        // R3
+        if (forcesBaseRow(model)) {
+          forced++;
+          if (head !== base) fail(`R3 a dimension that forces the base row ${base} gave ${head}`);
+        }
+
+        // R4
+        const expected = oracleReportRow(model, base);
+        if (seesEveryManifest && head !== expected) fail(`R4 row ${head} != oracle row ${expected}`);
+
+        // Each dimension alone can be what keeps the base row.
+        if (head === base && !raiseOracle(model, base)) {
+          for (const b of ROW_BLINDERS) if (raisableBlinded(model, b, base)) soleBlocker[b]++;
+        }
+      }
+
+      expect(raised, 'raised rows').toBeGreaterThan(300);
+      expect(keptRow, 'kept rows').toBeGreaterThan(1000);
+      expect(forced, 'cases with a forcing dimension').toBeGreaterThan(1000);
+      for (const b of ROW_BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
+      expect(failures.slice(0, 3).join('\n\n')).toBe('');
+      expect(failures).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  }, 240_000);
 });
