@@ -334,7 +334,7 @@ const EXPECTED: Record<string, Expectation> = {
     base: ['vite@7.3.5'],
     dropped: [],
     added: ['vite@7.3.7', 'vite@8.3.5'],
-    why: 'plugin/ has a lockfile that installs vite 7.3.5 (optional dependency): baseline stays; it adds nothing itself',
+    why: 'plugin/ has a lockfile that installs vite 7.3.5 (optional dependency): baseline stays; the 7.3.5 it adds is the kept baseline entry',
   }),
   negOverridesNoLock: narrow({
     base: ['vite@7.3.5', 'vitest@3.0.0'],
