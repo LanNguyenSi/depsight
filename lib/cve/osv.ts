@@ -384,8 +384,8 @@ function manifestFloor(versionSpec: string): string | null {
  * for the rationale of each step.
  *
  * The chain answers with one version per name, taken for the repo as a whole,
- * so it can stand in for a declarer that installs something else. Two kinds of
- * declarer are covered by additional entries (nothing the chain returns is
+ * so it can stand in for a declarer that installs something else. Three cases
+ * are covered by additional entries (nothing the chain returns is
  * ever removed; the result is the chain plus these):
  *
  * - A declarer with a plain semver range that the merged `resolved` version

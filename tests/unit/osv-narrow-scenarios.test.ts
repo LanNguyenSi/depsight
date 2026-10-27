@@ -139,7 +139,7 @@ const EXPECTED: Record<string, Expectation> = {
     base: ['foo@1.0.0', 'glob@7.0.0'],
     dropped: ['glob@7.0.0'],
     added: ['glob@7.2.3'],
-    why: 'single project; glob installed at 7.2.3 (top level) and 7.1.0 (nested under foo); floor 7.0.0 installed nowhere; the nested copy under foo is a transitive install, queried neither before nor after the narrow override, but it is a lockfile copy of a declared name that has no single resolution (see WIDENED), and another package installs it',
+    why: 'single project; glob installed at 7.2.3 (top level) and 7.1.0 (nested under foo); floor 7.0.0 installed nowhere; the nested copy under foo (7.1.0) is not a narrow addition; it is queried through WIDENED, as a lockfile copy of a declared name without a single resolution that another package installs',
   }),
   depAbsentFromOwnLockButOtherManifestResolves: narrow({
     base: ['lodash@4.0.0'],

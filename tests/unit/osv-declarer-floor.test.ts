@@ -261,6 +261,11 @@ describe('no single resolution: ambiguous or unresolved name', () => {
     ['satisfied by the higher observed version: no floor', ['^6.0.0', '^8.3.0'], ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5']],
     ['satisfied by the lower observed version: no floor', ['^6.0.0', '^7.3.0'], ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5']],
     [
+      'a || union satisfied only by its higher alternative: no floor of the lower one',
+      ['^6.0.0', '^7.5.0 || ^8.3.0'],
+      ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5'],
+    ],
+    [
       'satisfied by no observed version: floor',
       ['^8.3.0', '^9.0.0'],
       ['vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5', 'vite@9.0.0'],

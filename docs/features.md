@@ -125,7 +125,10 @@ A complete list of what depsight does today, beyond the headline value props in 
     and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries vite 6.0.0, 7.3.7 and
     8.3.5; plain range: a spec `semver.validRange` accepts that is not a
     wildcard, floor: the exact version after the operator, else the lowest
-    version the range admits). A project that declares a range the
+    version the range admits). A recorded version counts no matter which
+    package or project installs it (there is no per-declarer provenance), so
+    a declarer whose range one recorded copy satisfies is not queried at its
+    floor even if it installs another version. A project that declares a range the
     resolved version satisfies but installs another version, and a name
     declared only in `optionalDependencies`, `peerDependencies` or
     `bundleDependencies` without a lockfile, are not covered. It is not a
