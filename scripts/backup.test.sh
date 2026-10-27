@@ -336,7 +336,7 @@ done
   had_backups=0; [ -e "$repo/backups" ] && had_backups=1
   sub="$repo/backups/.backup-test-$$"
   run_backup "$sub"; r5=$rc; sub_files="$(count_sql "$sub")"
-  rm -rf "$sub"; [ "$had_backups" = 1 ] || rmdir "$repo/backups" 2>/dev/null || true
+  rm -rf "$stray" "$sub"; [ "$had_backups" = 1 ] || rmdir "$repo/backups" 2>/dev/null || true
   run_backup "$WORKDIR/outside"; r6=$rc
   if [ "$r1" = 2 ] && [ "$created" = 0 ] && [ "$docker_used" = 0 ] && [ "$r2" = 2 ] && [ "$r3" = 2 ] && [ "$r4" = 2 ] \
     && [ "$r5" = 0 ] && [ "$sub_files" = 1 ] && [ "$r6" = 0 ]; then
