@@ -13,15 +13,25 @@
 # so a failed run never leaves a truncated or empty depsight-*.sql behind.
 #
 # Usage:   scripts/backup.sh
-# Cron:    17 3 * * * /path/to/depsight/scripts/backup.sh >> /var/log/depsight-backup.log 2>&1
+# Cron:    17 3 * * * cd /path/to/depsight && scripts/backup.sh >> "$HOME/depsight-backup.log" 2>&1
+#          (the log lives under $HOME: /var/log is not writable for the docker-group
+#          user that runs the job, and a redirect that cannot open its file means the
+#          script never runs at all)
 #
 # Environment (all optional):
 #   BACKUP_COMPOSE_FILE  compose file of the stack (default: <repo>/docker-compose.traefik.yml)
 #   BACKUP_DB_SERVICE    compose service that runs Postgres (default: db)
-#   BACKUP_DIR           target directory (default: <repo>/backups, mode 700)
+#   BACKUP_DIR           target directory (default: <repo>/backups, mode 700). Inside
+#                        the checkout only <repo>/backups is allowed: it is in
+#                        .dockerignore, so the dumps (every user's OAuth token in
+#                        clear text) never enter a docker build context; any other
+#                        directory under the checkout is refused (exit 2)
 #   PG_USER / PG_DB      database user and name (default: depsight / depsight)
 #   KEEP_FILES           keep at most this many dumps (default: 14)
 #   KEEP_DAYS            delete dumps older than this many days (default: 14)
+#   BACKUP_SKIP_ROTATION set to a non-empty value to skip the rotation (scripts/restore.sh
+#                        does this for its pre-restore dump, so that dump can never age
+#                        out the file that is being restored)
 #   BACKUP_OFFHOST_HOOK  executable that copies the finished dump off this host;
 #                        called with the dump path as its only argument. The dump
 #                        holds every user's GitHub OAuth token in clear text:
@@ -30,8 +40,8 @@
 # Exit codes:
 #   0  dump written and validated (hook, if set, succeeded; rotation done)
 #   1  pg_dump failed or the dump failed validation (nothing published)
-#   2  refused before dumping: bad configuration, compose file missing, or the
-#      db service is not running
+#   2  refused before dumping: bad configuration, BACKUP_DIR inside the checkout but
+#      outside backups/, compose file missing, or the db service is not running
 #   3  dump is published and valid, but the off-host hook failed (rotation is
 #      skipped so a broken off-host copy never pushes older dumps out)
 set -euo pipefail
@@ -46,6 +56,7 @@ PG_DB="${PG_DB:-depsight}"
 KEEP_FILES="${KEEP_FILES:-14}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 OFFHOST_HOOK="${BACKUP_OFFHOST_HOOK:-}"
+SKIP_ROTATION="${BACKUP_SKIP_ROTATION:-}"
 
 refuse() { echo "backup: $*" >&2; exit 2; }
 
@@ -57,6 +68,24 @@ case "$KEEP_DAYS" in ''|*[!0-9]*) refuse "KEEP_DAYS must be a positive integer, 
 if [ -n "$OFFHOST_HOOK" ] && { [ ! -f "$OFFHOST_HOOK" ] || [ ! -x "$OFFHOST_HOOK" ]; }; then
   refuse "BACKUP_OFFHOST_HOOK is not an executable file: $OFFHOST_HOOK"
 fi
+
+# A dump inside the checkout but outside backups/ would be sent to the docker daemon
+# with every build (Dockerfile `COPY . .`); only backups/ is in .dockerignore. Resolve
+# through the nearest existing ancestor so symlinks and a not yet created directory
+# are judged by where they really are.
+case "$BACKUP_DIR" in /*) abs_dir="$BACKUP_DIR" ;; *) abs_dir="$PWD/$BACKUP_DIR" ;; esac
+anc="$abs_dir"
+while [ ! -d "$anc" ]; do anc="$(dirname "$anc")"; done
+missing="${abs_dir#"$anc"}"
+case "$missing/" in
+  */../*) refuse "BACKUP_DIR $BACKUP_DIR has a '..' in a part that does not exist yet; give a plain path" ;;
+esac
+phys_dir="$(cd "$anc" && pwd -P)$missing"
+phys_repo="$(cd "$REPO_ROOT" && pwd -P)"
+case "$phys_dir/" in
+  "$phys_repo/backups/"*) ;;
+  "$phys_repo/"*) refuse "BACKUP_DIR $BACKUP_DIR is inside the checkout but not backups/; dumps there would enter docker build contexts (only backups/ is in .dockerignore). Use $phys_repo/backups or a directory outside the checkout" ;;
+esac
 
 DC=(docker compose -f "$COMPOSE_FILE")
 
@@ -75,6 +104,9 @@ chmod 700 "$BACKUP_DIR"
 find "$BACKUP_DIR" -maxdepth 1 -name '.depsight-*.sql.tmp' -mtime +1 -delete
 tmp="$BACKUP_DIR/.depsight-$ts.$$.sql.tmp"
 out="$BACKUP_DIR/depsight-$ts.sql"
+# Two runs in the same second (a cron job and a pre-restore dump) must not overwrite
+# each other.
+if [ -e "$out" ]; then out="$BACKUP_DIR/depsight-$ts-$$.sql"; fi
 
 cleanup() { rm -f "$tmp"; }
 trap cleanup EXIT
@@ -90,7 +122,8 @@ if [ "$size" -lt 1024 ]; then
 fi
 # Whole file, not a tail window: pg_dump 16.10+ appends a \unrestrict block after
 # the marker, which pushes it off a fixed-size tail.
-if ! grep -q "PostgreSQL database dump complete" "$tmp"; then
+# The whole line, so a data row that merely contains the text is not a marker.
+if ! grep -qx -- '-- PostgreSQL database dump complete' "$tmp"; then
   echo "backup: dump is missing the completion marker, refusing to keep it" >&2
   exit 1
 fi
@@ -105,6 +138,11 @@ if [ -n "$OFFHOST_HOOK" ]; then
     echo "backup: off-host hook failed; the local dump is kept, rotation skipped" >&2
     exit 3
   fi
+fi
+
+if [ -n "$SKIP_ROTATION" ]; then
+  echo "backup: rotation skipped (BACKUP_SKIP_ROTATION)"
+  exit 0
 fi
 
 # Rotation: keep at most KEEP_FILES dumps and nothing older than KEEP_DAYS days.

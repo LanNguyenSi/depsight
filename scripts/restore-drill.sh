@@ -7,7 +7,10 @@
 # SQL, then `prisma db push`), seeds a few rows, runs the REAL scripts/backup.sh,
 # restores the dump with the REAL scripts/restore.sh into a second, freshly
 # created database, and asserts row counts, one row's content and the Advisory
-# unique index. The scripts see a `docker` shim that maps
+# unique index. Then it restores the same dump into that now populated database
+# after a newer release's table (with a foreign key into a dumped table) and a row
+# written after the dump were added: both must be gone afterwards, the pre-restore
+# dump must hold them, and `prisma db push` must find the schema in sync. The scripts see a `docker` shim that maps
 # `docker compose -f <file> exec -T db <cmd>` onto `docker exec -i <container> <cmd>`,
 # so every pg_dump and psql option comes from the scripts themselves: if their
 # options drift, this drill fails.
@@ -90,8 +93,11 @@ dump="$(find "$WORK/backups" -maxdepth 1 -name 'depsight-*.sql')"
 echo "drill: restore.sh into a fresh database"
 sql postgres "DROP DATABASE IF EXISTS $DST_DB" > /dev/null
 sql postgres "CREATE DATABASE $DST_DB OWNER depsight" > /dev/null
-PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" RESTORE_APP_SERVICE='' \
-  PG_DB="$DST_DB" "$REPO_ROOT/scripts/restore.sh" --yes "$dump"
+# A fresh database is below backup.sh's size floor, so no pre-restore dump here; the
+# shim has no `run`, so the migrate step is skipped (the next case runs prisma itself).
+PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" \
+  RESTORE_APP_SERVICE='' RESTORE_MIGRATE_SERVICE='' PG_DB="$DST_DB" \
+  "$REPO_ROOT/scripts/restore.sh" --yes --no-pre-backup "$dump"
 
 echo "drill: asserting the restored database"
 expect "restored users" "$(sql "$DST_DB" 'SELECT count(*) FROM "User"')" "$EXPECT_USERS"
@@ -103,13 +109,42 @@ expect "restored token" "$(sql "$DST_DB" "SELECT \"githubToken\" FROM \"User\" W
 expect "advisory unique index" \
   "$(sql "$DST_DB" "SELECT count(*) FROM pg_indexes WHERE tablename = 'Advisory' AND indexdef LIKE '%UNIQUE%scanId%ghsaId%packageName%'")" 1
 
+echo "drill: restore into a populated database whose schema is newer than the dump"
+DST_URL="${DRILL_DATABASE_URL%/"$SRC_DB"}/$DST_DB"
+[ "$DST_URL" != "$DRILL_DATABASE_URL" ] || fail "DRILL_DATABASE_URL must end in /$SRC_DB"
+cp "$dump" "$WORK/first.sql"
+sql "$DST_DB" 'CREATE TABLE drill_extra (id text PRIMARY KEY, "repoId" text NOT NULL REFERENCES "Repo"(id))' > /dev/null
+sql "$DST_DB" "INSERT INTO drill_extra VALUES ('x1', 'drill-r1')" > /dev/null
+sql "$DST_DB" "INSERT INTO \"User\" (id, \"githubId\", \"githubLogin\", \"githubToken\", \"updatedAt\") VALUES ('drill-post', '9003', 'written-after-dump', 'tok-post', now())" > /dev/null
+expect "users before the second restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "User"')" 3
+PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" \
+  RESTORE_APP_SERVICE='' RESTORE_MIGRATE_SERVICE='' PG_DB="$DST_DB" \
+  "$REPO_ROOT/scripts/restore.sh" --yes "$WORK/first.sql"
+expect "users after the second restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "User"')" "$EXPECT_USERS"
+expect "row written after the dump" "$(sql "$DST_DB" "SELECT count(*) FROM \"User\" WHERE id = 'drill-post'")" 0
+expect "table of the newer schema" "$(sql "$DST_DB" "SELECT coalesce(to_regclass('public.drill_extra')::text, 'gone')")" gone
+expect "repos after the second restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
+expect "public schema owner" "$(sql "$DST_DB" "SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'public'")" pg_database_owner
+pre=""
+for f in "$WORK"/backups/depsight-*.sql; do [ "$f" = "$dump" ] || pre="$f"; done
+[ -n "$pre" ] || fail "no pre-restore dump was written"
+grep -q 'drill_extra' "$pre" || fail "the pre-restore dump lacks the newer table"
+grep -q 'written-after-dump' "$pre" || fail "the pre-restore dump lacks the row written after the dump"
+echo "drill: ok: pre-restore dump holds the replaced state"
+# The migrate step: the schema must already match what prisma db push would build.
+push_out="$(DATABASE_URL="$DST_URL" HOME="$WORK" npx prisma db push --skip-generate --schema=prisma/schema.prisma 2>&1)" \
+  || fail "prisma db push failed on the restored database: $push_out"
+grep -q 'already in sync' <<< "$push_out" || fail "restored schema is not in sync with prisma/schema.prisma: $push_out"
+echo "drill: ok: prisma db push finds the restored schema in sync"
+
 echo "drill: a failing restore must leave the database unchanged"
 # The statements before the failure would be committed (and the rows gone) if the
 # restore were not one transaction.
 awk '/^-- PostgreSQL database dump complete/ { print "DELETE FROM public.\"Repo\";"; print "SELECT 1/0;" } { print }' \
   "$dump" > "$WORK/broken.sql"
-if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" RESTORE_APP_SERVICE='' \
-  PG_DB="$DST_DB" "$REPO_ROOT/scripts/restore.sh" --yes "$WORK/broken.sql" 2> "$WORK/broken.err"; then
+if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" \
+  RESTORE_APP_SERVICE='' RESTORE_MIGRATE_SERVICE='' PG_DB="$DST_DB" \
+  "$REPO_ROOT/scripts/restore.sh" --yes --no-pre-backup "$WORK/broken.sql" 2> "$WORK/broken.err"; then
   fail "restore.sh accepted a dump that fails half way"
 fi
 grep -q 'division by zero' "$WORK/broken.err" || fail "broken dump failed for another reason: $(cat "$WORK/broken.err")"

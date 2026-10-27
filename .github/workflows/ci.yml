@@ -131,13 +131,11 @@ jobs:
           cache: 'npm'
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
       - name: Back up, restore into a fresh database, compare
-        run: |
-          # The job's only postgres:16-alpine container is the service above.
-          ids="$(docker ps --filter ancestor=postgres:16-alpine --format '{{.ID}}')"
-          test "$(wc -l <<< "$ids")" -eq 1
-          DRILL_PG_CONTAINER="$ids" \
-          DRILL_DATABASE_URL=postgresql://depsight:depsight@localhost:5432/depsight \
-            bash scripts/restore-drill.sh
+        env:
+          # The id of the job's own postgres service container, not a docker ps guess.
+          DRILL_PG_CONTAINER: ${{ job.services.postgres.id }}
+          DRILL_DATABASE_URL: postgresql://depsight:depsight@localhost:5432/depsight
+        run: bash scripts/restore-drill.sh
 
   mcp-test:
     name: MCP Test

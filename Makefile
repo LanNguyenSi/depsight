@@ -47,8 +47,8 @@ prod-down: ## Stop production containers
 backup: ## Dump the hosted Postgres into backups/ (see docs/configuration.md, Backup and restore)
 	scripts/backup.sh
 
-restore: ## Restore a dump: make restore FILE=backups/depsight-<ts>.sql CONFIRM=yes (destructive)
-	scripts/restore.sh $(if $(filter yes,$(CONFIRM)),--yes) $(FILE)
+restore: ## Restore a dump: make restore FILE=backups/depsight-<ts>.sql CONFIRM=yes [NO_PRE_BACKUP=yes] (destructive)
+	scripts/restore.sh $(if $(filter yes,$(CONFIRM)),--yes) $(if $(filter yes,$(NO_PRE_BACKUP)),--no-pre-backup) $(FILE)
 
 # ── Run commands inside dev container ───────────────────────────────
 

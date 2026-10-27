@@ -11,3 +11,6 @@ dist
 build
 coverage
 *.log
+
+# Postgres dumps written by scripts/backup.sh (OAuth tokens in clear text): never part of a build context
+backups
