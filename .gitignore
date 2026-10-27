@@ -15,3 +15,6 @@ __pycache__/
 *.tsbuildinfo
 coverage/
 next-env.d.ts
+
+# Postgres dumps written by scripts/backup.sh
+/backups/
