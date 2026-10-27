@@ -1175,9 +1175,11 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     const otherLock = lockOf({ '': { name: 'other' }, 'node_modules/a': { resolved: '../mono/packages/a', link: true }, 'node_modules/ra': { version: '1.2.0' }, '../mono/packages/a': { name: 'a', version: '1.0.0' } });
     const r = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': otherLock }));
     expect(r.dropSafe('ra', '1.0.0')).toBe(false);
-    // control: the same repository without the outside spec proves the member
-    delete files['other/package.json'];
-    const control = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock }));
+    // control: the same repository, the outside project naming another folder, proves the member
+    const elsewhere = 'file:../mono/packages/zzz';
+    files['other/package.json'] = pkg({ name: 'other', version: '1.0.0', dependencies: { a: elsewhere } });
+    const elsewhereLock = lockOf({ '': { name: 'other', version: '1.0.0', dependencies: { a: elsewhere } }, 'node_modules/a': { version: '1.0.0', resolved: '../mono/packages/zzz', link: true } });
+    const control = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': elsewhereLock }));
     expect(control.dropSafe('ra', '1.0.0')).toBe(true);
   });
 
@@ -1204,24 +1206,29 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     expect(r.dropSafe('ra', '1.0.0')).toBe(true);
   });
   it('a workspace root in a folder with capital letters: the comparison is case-insensitive on both sides', () => {
-    const run = (withSpec: boolean) => {
+    // The workspace in Mono/ is untouched; a standalone project beside it names
+    // Mono/tools/t, spelled with capitals, in a file: spec the root lockfile does not hold.
+    const run = (spec: string) => {
       const files: Files = {
-        'Mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'], ...(withSpec ? { dependencies: { t: 'file:tools/t' } } : {}) }),
+        'Mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] }),
         'Mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
         'Mono/tools/t/package.json': pkg({ name: 't', version: '1.0.0' }),
+        'Other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { x: spec } }),
       };
       const lock = lockOf({
-        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'], ...(withSpec ? { dependencies: { t: 'file:tools/t' } } : {}) },
+        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] },
         'node_modules/a': { resolved: 'packages/a', link: true },
         'node_modules/t': { resolved: 'tools/t', link: true },
         'node_modules/ra': { version: '1.2.0' },
         'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
         'tools/t': { name: 't', version: '1.0.0' },
       });
-      return resolveNarrowNpm(inputs(files, { 'Mono/package-lock.json': lock }));
+      const otherLock = lockOf({ '': { name: 'other', version: '1.0.0', dependencies: { x: spec } }, 'node_modules/x': { version: '1.0.0', resolved: spec, link: true } });
+      return resolveNarrowNpm(inputs(files, { 'Mono/package-lock.json': lock, 'Other/package-lock.json': otherLock }));
     };
-    expect(run(false).dropSafe('ra', '1.0.0')).toBe(true);
-    expect(run(true).dropSafe('ra', '1.0.0')).toBe(false);
+    expect(run('file:../Mono/tools/zzz').dropSafe('ra', '1.0.0')).toBe(true); // control: another folder
+    expect(run('file:../Mono/tools/t').dropSafe('ra', '1.0.0')).toBe(false);
+    expect(run('file:../mono/TOOLS/T').dropSafe('ra', '1.0.0')).toBe(false);
   });
 });
 
