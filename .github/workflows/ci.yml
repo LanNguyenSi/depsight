@@ -94,6 +94,49 @@ jobs:
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx prisma generate
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx vitest run tests/unit/advisory-dedupe-db.test.ts
 
+  backup-scripts:
+    name: Backup scripts (shellcheck, stub tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      - name: backup.sh against a stubbed docker
+        run: bash scripts/backup.test.sh
+      - name: restore.sh against a stubbed docker
+        run: bash scripts/restore.test.sh
+
+  restore-drill:
+    name: Restore drill (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: depsight
+          POSTGRES_PASSWORD: depsight
+          POSTGRES_DB: depsight
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U depsight"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
+      - name: Back up, restore into a fresh database, compare
+        env:
+          # The id of the job's own postgres service container, not a docker ps guess.
+          DRILL_PG_CONTAINER: ${{ job.services.postgres.id }}
+          DRILL_DATABASE_URL: postgresql://depsight:depsight@localhost:5432/depsight
+        run: bash scripts/restore-drill.sh
+
   mcp-test:
     name: MCP Test
     runs-on: ubuntu-latest
