@@ -103,5 +103,17 @@ expect "restored token" "$(sql "$DST_DB" "SELECT \"githubToken\" FROM \"User\" W
 expect "advisory unique index" \
   "$(sql "$DST_DB" "SELECT count(*) FROM pg_indexes WHERE tablename = 'Advisory' AND indexdef LIKE '%UNIQUE%scanId%ghsaId%packageName%'")" 1
 
+echo "drill: a failing restore must leave the database unchanged"
+# The statements before the failure would be committed (and the rows gone) if the
+# restore were not one transaction.
+awk '/^-- PostgreSQL database dump complete/ { print "DELETE FROM public.\"Repo\";"; print "SELECT 1/0;" } { print }' \
+  "$dump" > "$WORK/broken.sql"
+if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" RESTORE_APP_SERVICE='' \
+  PG_DB="$DST_DB" "$REPO_ROOT/scripts/restore.sh" --yes "$WORK/broken.sql" 2> "$WORK/broken.err"; then
+  fail "restore.sh accepted a dump that fails half way"
+fi
+grep -q 'division by zero' "$WORK/broken.err" || fail "broken dump failed for another reason: $(cat "$WORK/broken.err")"
+expect "repos after failed restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
+
 sql postgres "DROP DATABASE $DST_DB" > /dev/null
 echo "drill: PASSED"
