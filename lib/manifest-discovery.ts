@@ -2239,19 +2239,15 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // read manifest and of every workspace root's own lockfile is a registry spec
   // (`repoHasOnlyRegistrySpecs`): any other spec may install a folder as a
   // project of its own, with the lockfile shape of a member. One pass over all
-  // specs, on the first workspace root.
-  let onlyRegistrySpecs: boolean | undefined;
-  const workspacesProvable = (): boolean => {
-    if (onlyRegistrySpecs === undefined) {
-      const rootLockPackages: JsonObject[] = [];
-      for (const m of manifests) {
-        const lock = hasOwn(m.data, 'workspaces') ? lockByPath.get(ownLockfilePath(m.dir)) : null;
-        if (lock) rootLockPackages.push(lock.packages);
-      }
-      onlyRegistrySpecs = repoHasOnlyRegistrySpecs(manifests.map((m) => m.data), rootLockPackages);
-    }
-    return onlyRegistrySpecs;
-  };
+  // specs, here and only in a repository with a `workspaces` key.
+  const workspaceRoots = manifests.filter((m) => hasOwn(m.data, 'workspaces'));
+  const rootLockPackages: JsonObject[] = [];
+  for (const root of workspaceRoots) {
+    const lock = lockByPath.get(ownLockfilePath(root.dir));
+    if (lock) rootLockPackages.push(lock.packages);
+  }
+  const workspacesProvable =
+    workspaceRoots.length > 0 && repoHasOnlyRegistrySpecs(manifests.map((m) => m.data), rootLockPackages);
 
   // The members a root's own lockfile proves, by folder; computed once per root.
   const membersByRoot = new Map<string, Map<string, NarrowManifest> | null>();
@@ -2259,7 +2255,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     if (membersByRoot.has(root.path)) return membersByRoot.get(root.path) ?? null;
     let members: Map<string, NarrowManifest> | null = null;
     const lock = lockByPath.get(ownLockfilePath(root.dir));
-    if (lock && workspacesProvable()) {
+    if (lock && workspacesProvable) {
       const below = manifests.filter((m) => m !== root && isSelfOrAncestorDir(root.dir, m.dir));
       const candidates = below.map((m) => ({ folder: folderBelow(root.dir, m.dir), name: m.data.name, manifest: m }));
       const folders = provenWorkspaceFolders(root.data.workspaces, lock.data, candidates);
