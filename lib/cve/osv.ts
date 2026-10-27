@@ -810,7 +810,11 @@ function raisedNpmVersion(
  * (`file:`, `link:`, `workspace:`, a path, git, a URL, a tarball) can install a
  * folder as a project of its own with the lockfile shape of a member, so one
  * anywhere leaves every workspace root unproven. The rule does not close the
- * class of a folder that is no member: a folder the root lockfile still links after it left the `workspaces` patterns, or after a `file:` spec became a registry range, counts as a member; `npm ci` at the root installs it from the root lockfile, but `npm run` inside that folder installs it on its own without a lockfile. The proof needs everything to be
+ * class of a folder that is no member: a folder the root lockfile still links
+ * after it left the `workspaces` patterns, or after a `file:` spec became a
+ * registry range, counts as a member; `npm ci` at the root installs it from the
+ * root lockfile, but `npm run` inside that folder installs it on its own
+ * without a lockfile. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
  * tree; no other package manager's lockfile (yarn.lock, pnpm-lock.yaml,
  * bun.lock, bun.lockb, npm-shrinkwrap.json, deno.lock), no `.npmrc`, no

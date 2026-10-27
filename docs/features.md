@@ -105,7 +105,11 @@ A complete list of what depsight does today, beyond the headline value props in 
     member, so one anywhere leaves every workspace root unproven; the specs
     that go through `semver` share one budget of 2,000,000 characters, beyond
     which no root is proven; this does
-    not close the case of a folder that is no member: a folder the root lockfile still links after it left the `workspaces` patterns, or after a `file:` spec became a registry range, counts as a member; `npm ci` at the root installs it from the root lockfile, but `npm run` inside that folder installs it on its own without a lockfile), and a
+    not close the case of a folder that is no member: a folder the root
+    lockfile still links after it left the `workspaces` patterns, or after a
+    `file:` spec became a registry range, counts as a member; `npm ci` at the
+    root installs it from the root lockfile, but `npm run` inside that folder
+    installs it on its own without a lockfile), and a
     link that satisfies a declared range only where the member's package.json
     version (equal to its folder entry's) is in that range; in a workspace only
     `dependencies` and `devDependencies` declarations that resolve the root's
