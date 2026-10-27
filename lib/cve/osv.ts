@@ -619,8 +619,9 @@ export interface NpmReportVersion {
   strip: string;
   /**
    * The version the row shows instead of `strip`, or null to keep `strip`. Set
-   * only where every project declaring the package has its own
-   * package-lock.json proving a higher version (the CVE scan's narrow proof).
+   * only where every project declaring the package is proven by the
+   * package-lock.json that installs it (its own, or for an npm workspace member
+   * its root's) to hold a higher version (the CVE scan's narrow proof).
    */
   raisedTo: string | null;
 }
@@ -632,11 +633,12 @@ export interface NpmReportVersion {
  * name only when every declaration of the name is in `dependencies` or
  * `devDependencies` and that scan's proof holds for the name's manifest floor
  * (`narrow.dropSafe`: every manifest declaring the name is individually proven
- * by its own lockfile, and no lockfile installs the floor). In every other case
+ * by the lockfile that installs it, its own or for a workspace member the
+ * root's, and no lockfile installs the floor). In every other case
  * (a declaration outside those two fields, no proof, no addition, a floor that
  * is not a usable version, a lowest addition below the floor) `raisedTo` is
  * null and the row stays the floor strip, so the row is never lower than the
- * floor and rises above it only where each declarer's own lockfile proves the
+ * floor and rises above it only where each declarer's lockfile proves the
  * higher version and that version is among the additions.
  *
  * The row is raised only from declarations in `dependencies` and
@@ -793,9 +795,26 @@ function raisedNpmVersion(
  * `applyNarrowOverride` then
  * adds, for repos of separate projects each with its own package-lock.json,
  * the version each manifest's own lockfile installs (for a dependency, dev, optional or
- * peer declaration; a bundled name never adds), and removes a chain
+ * peer declaration; a bundled name never adds), and for an npm workspace the
+ * top-level version the root's package-lock.json installs for a root or
+ * member `dependencies` / `devDependencies` declaration, and removes a chain
  * entry only when `resolveNarrowNpm` proves its version is installed by no
- * package-lock.json the scan reads. The proof needs everything to be
+ * package-lock.json the scan reads. Workspace membership comes from the root's
+ * lockfile, never from the `workspaces` patterns: the lockfile (version 2 or
+ * 3) records the root's `workspaces` value unchanged, has an entry for the
+ * member's folder and a `node_modules/<member name>` `link: true` entry that
+ * resolves to exactly that folder, and every link entry it has resolves to
+ * such a member. A workspace is narrowed only when every dependency spec of
+ * every read manifest and of every entry of a workspace root's lockfile is a
+ * registry range, version, dist-tag or `npm:` alias: any other spec
+ * (`file:`, `link:`, `workspace:`, a path, git, a URL, a tarball) can install a
+ * folder as a project of its own with the lockfile shape of a member, so one
+ * anywhere leaves every workspace root unproven. The rule does not close the
+ * class of a folder that is no member: a folder the root lockfile still links
+ * after it left the `workspaces` patterns, or after a `file:` spec became a
+ * registry range, counts as a member; `npm ci` at the root installs it from the
+ * root lockfile, but `npm install` inside that folder installs it on its own
+ * without a lockfile. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
  * tree; no other package manager's lockfile (yarn.lock, pnpm-lock.yaml,
  * bun.lock, bun.lockb, npm-shrinkwrap.json, deno.lock), no `.npmrc`, no
@@ -803,7 +822,13 @@ function raisedNpmVersion(
  * `devEngines.packageManager` field; every manifest locked (an own lockfile
  * of lockfileVersion 2 or 3 that lists each declared dependency, dev, optional
  * and non-optional peer dependency in range, judged as npm does, and reflects
- * every plain string `overrides` entry); every declaring manifest narrow; and
+ * every plain string `overrides` entry; for a workspace member the root's
+ * lockfile at the entry the member resolves each one from, a member without
+ * `overrides`, and a `link` to another member only where that member's
+ * version satisfies the range); every declaring manifest narrow (in a
+ * workspace: a `dependencies` or `devDependencies` declaration that resolves
+ * the root's top-level entry, so a copy under a member's own folder, an
+ * optional, peer or bundled declaration, or an alias keeps the entry); and
  * every lockfile entry that names a package readable as a semver version (an
  * unreadable one makes the name unknown, so it is never removed). A
  * lockfileVersion 1 lockfile anywhere keeps every entry (npm takes each
@@ -823,11 +848,20 @@ function raisedNpmVersion(
  * that the lockfile was written without unpacking (on another platform),
  * command line flags, a user or global npmrc, the environment and the state of the registry.
  *
- * Vendored, build and fixture directories are not read. The result can
+ * Vendored, build and fixture directories are not read. A workspace member in
+ * one of them leaves a link in the root lockfile that no read manifest proves,
+ * so that root proves nothing and the whole workspace keeps every chain entry.
+ * The result can
  * therefore hold several entries for one name, one per installed version.
- * Npm workspaces (any `workspaces` key), repos with another package manager's
- * lockfile, and trees or manifest lists that could not be read completely keep
- * the chain result as it was.
+ * A workspace manifest the root lockfile does not prove (a lockfileVersion 1,
+ * missing or unreadable root lockfile, a `workspaces` value the lockfile does
+ * not record, a member it does not list, a member that is a workspace root
+ * itself, a dependency spec other than a registry spec anywhere the scan reads
+ * for it, a member folder nested deeper than 16 folders or longer
+ * than 256 characters) adds nothing, and one below the root keeps every chain
+ * entry of the repository. Repos with another package
+ * manager's lockfile, and trees or manifest lists that could not be read
+ * completely keep the chain result as it was.
  */
 async function collectDeps(
   eco: string,

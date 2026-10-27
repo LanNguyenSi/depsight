@@ -7,7 +7,7 @@ A complete list of what depsight does today, beyond the headline value props in 
 - **CVE scanning** per repository: severity breakdown, risk scores, vulnerability timeline, risk score history.
 - **License detection** and copyleft compliance checking for npm, Python, Java, Rust and PHP. Go modules are listed with license `UNKNOWN` and flagged for review (see Known limitations).
 - **Per-finding triage.** A finding of the CVE list can be acknowledged or ignored for its repository, with the user and time that set it and an optional note (`AdvisoryState`, `PUT`/`DELETE /api/advisory-state`). The state is keyed by advisory id plus package, so it survives the next scan, and clearing it ("Reopen") makes the finding open again. It is informational: the CVE counts, the risk score, policies, notifications and the MCP `depsight_get_cves` counts still include ignored findings (the MCP advisory list carries the `state` object, so an agent can filter on it). The CVE list can hide ignored findings. One scan holds a given advisory and package once: repeated Dependabot alerts for it (one per manifest in a monorepo) count once. The key is the advisory id plus the package name, not the ecosystem, so the same advisory id on the same package name in two ecosystems collapses into the first row seen.
-- **Dependency age tracking** and outdated alerts. For npm, the version shown for a package is the manifest floor (the lowest declared spec with its range operator stripped), raised to the lowest of the top-level versions the declaring projects' own `package-lock.json` files install for their declarations, only where every declaration is in `dependencies` or `devDependencies`, every declaring project's own lockfile proves a higher version and no lockfile installs the floor (the CVE scan's proof); its age and status are computed for the shown version. A declaration in `optionalDependencies`, `peerDependencies` or `bundleDependencies`, yarn-only repositories, lockfileVersion 1, workspaces and partially locked repositories keep the floor. A copy installed only as a dependency of another package (nested, or hoisted in a project that does not declare it) is not reflected in the row; a copy of the floor anywhere keeps the floor.
+- **Dependency age tracking** and outdated alerts. For npm, the version shown for a package is the manifest floor (the lowest declared spec with its range operator stripped), raised to the lowest of the top-level versions the declaring projects' `package-lock.json` files install for their declarations (a project's own, or for an npm workspace member the root's), only where every declaration is in `dependencies` or `devDependencies`, every declaring project's lockfile proves a higher version and no lockfile installs the floor (the CVE scan's proof); its age and status are computed for the shown version. A declaration in `optionalDependencies`, `peerDependencies` or `bundleDependencies`, yarn-only repositories, lockfileVersion 1, workspaces whose root lockfile does not prove the membership and partially locked repositories keep the floor. A copy installed only as a dependency of another package (nested, or hoisted in a project that does not declare it) is not reflected in the row; a copy of the floor anywhere keeps the floor.
 - **Multi-ecosystem support:** npm, Python, Go, Java, Rust, PHP.
 - **Per-scanner failure marker.** The CVE, license and dependency-age scanners each keep their own last-success time and last failure message per repository. The repository overview table and the dashboard header show a warning when a scanner is failing, naming the scanner, its error and its last success, so a scanner that keeps failing is no longer hidden behind a fresh "last scanned" time. A scanner that ran but could not read its data source (a revoked GitHub token, a GitHub or OSV outage) is shown with the same marker, and its last-success time does not advance. `lastScannedAt` now means the last time any scanner succeeded (the auto-scan cron no longer sets it after a failed attempt). `GET /api/overview`, and therefore the MCP overview tool, carries an additive `scannerStatus` field per repository.
 
@@ -62,7 +62,10 @@ A complete list of what depsight does today, beyond the headline value props in 
     versions, dev and prod alike (`lib/manifest-discovery.ts`). For npm, a
     repository of separate projects that each carry their own
     `package-lock.json` is also queried at the version each manifest's own
-    lockfile installs: a package installed at different versions in different
+    lockfile installs, and so is an npm workspace whose root
+    `package-lock.json` proves its members (see below) at the top-level
+    version that lockfile installs for a root or member `dependencies` or
+    `devDependencies` declaration: a package installed at different versions in different
     projects is queried at each installed version (a project's `dependencies`,
     `devDependencies`, `optionalDependencies` and `peerDependencies` all count,
     since `npm ci` installs them; a peer marked optional in
@@ -82,8 +85,37 @@ A complete list of what depsight does today, beyond the headline value props in 
     declared range, judged as npm judges a lockfile, and in which every entry of
     an overridden name satisfies a plain string override; a project with a
     stale or missing lockfile, or an override that is not a plain string,
-    installs something the lockfile does not show); no `workspaces` key in or
-    above any declaring manifest (dependencies, dev, optional, peer or bundled);
+    installs something the lockfile does not show; a workspace member is
+    locked by the root's lockfile instead, at the entry it resolves each
+    declaration from, its own `<folder>/node_modules/<name>` else the root's
+    `node_modules/<name>`, and only without `overrides` of its own); for a
+    manifest with a `workspaces` key in or above it, a root lockfile that
+    proves the membership: lockfileVersion 2 or 3, its root entry recording the
+    `workspaces` value of the root package.json unchanged (the patterns are
+    compared, never evaluated), an entry for each member's folder and a
+    `node_modules/<member name>` `link: true` entry resolving to exactly that
+    folder, every link entry of the lockfile resolving to such a member, every
+    dependency spec the scan reads (the four dependency maps and every value
+    inside `overrides`, and the spec after the package name in an `overrides`
+    key such as `t@file:tools/t`, of every `package.json`, and the same maps of
+    every entry of a workspace root's lockfile) a registry range, version,
+    dist-tag or `npm:` alias (any other spec, such as `file:`,
+    `link:`, `workspace:`, a path in any spelling, git, a URL or a tarball, can
+    install a folder as a project of its own with the lockfile shape of a
+    member, so one anywhere leaves every workspace root unproven; the specs
+    that go through `semver` share one budget of 2,000,000 characters, beyond
+    which no root is proven; this does
+    not close the case of a folder that is no member: a folder the root
+    lockfile still links after it left the `workspaces` patterns, or after a
+    `file:` spec became a registry range, counts as a member; `npm ci` at the
+    root installs it from the root lockfile, but `npm install` inside that folder
+    installs it on its own without a lockfile), and a
+    link that satisfies a declared range only where the member's package.json
+    version (equal to its folder entry's) is in that range; in a workspace only
+    `dependencies` and `devDependencies` declarations that resolve the root's
+    top-level entry are narrow, so an optional, peer, bundled or aliased
+    declaration, a copy under a member's own folder (members installing
+    different versions) or under a folder between keeps the floor;
     every declaring manifest's lockfile satisfying its declared range; and every
     lockfile entry that names a package carrying a semver version (a git,
     tarball or `file:` version makes the name unknown, and an unknown name is
@@ -103,9 +135,17 @@ A complete list of what depsight does today, beyond the headline value props in 
     without updating the lockfile, the contents of a bundling optional package
     that the lockfile was written without unpacking (on another platform),
     command line flags, a user or global npmrc, the environment and the state
-    of the registry. Npm workspace
-    monorepos, repositories with another package manager's lockfile and
-    truncated trees keep the
+    of the registry. A workspace
+    member in a vendored, build or fixture directory is not read, so the root
+    lockfile's link to it is unproven and the whole workspace keeps every
+    repository-wide entry. A workspace manifest the root lockfile does not
+    prove (lockfileVersion 1, a missing root lockfile, a `workspaces` value it
+    does not record, a member it does not list, a member that is a workspace
+    root itself, a dependency spec that is no registry spec anywhere the scan
+    reads, a member folder nested deeper than 16 folders or longer than 256
+    characters) adds nothing, and one below the root keeps every
+    repository-wide entry; repositories with another
+    package manager's lockfile and truncated trees keep the
     repository-wide result. The repository-wide query for a name is one
     version, so it is widened for declarations it may not stand for (nothing
     already queried is removed): a `dependencies` or `devDependencies`
