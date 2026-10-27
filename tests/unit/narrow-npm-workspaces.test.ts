@@ -262,7 +262,7 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
   });
 
   it('a name that does not address one node_modules entry is never proven', () => {
-    for (const name of [undefined, null, 1, '', '.a', '..', '../a', 'a/b', '@scope', '@/a', '@scope/', '@scope/.a', '@scope/a/b', 'a\\b', 'node_modules', '@node_modules/a']) {
+    for (const name of [undefined, null, 1, '', '.a', '..', '../a', 'a/b', 'ab/c', '@scope', '@/a', '@scope/', '@scope/.a', '@scope/a/b', 'a\\b', 'node_modules', '@node_modules/a']) {
       const packages: Packages = {
         '': { name: 'root', workspaces: ['packages/*'] },
         [`node_modules/${String(name)}`]: { resolved: 'packages/a', link: true },
@@ -586,6 +586,15 @@ describe('workspace: what the root lockfile cannot prove keeps the floor', () =>
     expect(resolveNarrowNpm(rootUnread).dropSafe('vite', '7.0.0')).toBe(false);
     expect(resolveNarrowNpm(rootUnread).additions).toEqual([]);
   });
+
+  it('below an unread root package.json, members with lockfiles of their own are not standalone projects', () => {
+    const own = lockOf({ '': {}, 'node_modules/vite': { version: '7.3.7' }, 'node_modules/b': { version: '1.0.0' } });
+    const files = inputs(manifests(), { ...locks(), 'packages/a/package-lock.json': own, 'packages/b/package-lock.json': own });
+    files.manifestFiles = files.manifestFiles.filter((f) => f.path !== 'package.json');
+    const r = resolveNarrowNpm(files);
+    expect(r.additions).toEqual([]);
+    expect(r.dropSafe('vite', '7.0.0')).toBe(false);
+  });
 });
 
 describe('workspace: declarations the drop proof does not vouch for keep the floor', () => {
@@ -723,6 +732,21 @@ describe('workspace: adversarial lockfiles never widen a drop', () => {
       p['node_modules/b'] = { resolved: 'packages/a\\b', link: true };
     });
     expect(droppable(m, l)).toBe(false);
+  });
+
+  it('a lockfile key spelled `null` is never taken for an entry a member does not resolve', () => {
+    const m = {
+      ...manifests(),
+      'packages/group/c/package.json': pkg({ name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } }),
+    };
+    const l = withPackages((p) => {
+      p['node_modules/c'] = { resolved: 'packages/group/c', link: true };
+      p['packages/group/c'] = { name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } };
+      p['packages/group/node_modules/vite'] = { version: '7.3.6' };
+      p['null'] = { version: '7.3.6' };
+    });
+    // c's vite has a copy in the folder between: c is not locked, whatever the key `null` holds
+    expect(resolve(m, l).dropSafe('vitest', '3.2.0')).toBe(false);
   });
 
   it('links outside the repository or to the root', () => {
