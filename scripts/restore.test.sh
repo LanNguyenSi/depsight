@@ -15,6 +15,9 @@ mkdir -p "$HOME"
 
 export FAKE_DOCKER_LOG="$WORKDIR/docker.log"
 export FAKE_PSQL_STDIN="$WORKDIR/psql_stdin"
+# restore.sh keeps its private copy of the dump here; the tests check it is gone afterwards
+TMPD="$WORKDIR/tmp"
+mkdir -p "$TMPD"
 COMPOSE_FILE="$WORKDIR/compose.yml"
 : > "$COMPOSE_FILE"
 BACKUPS="$WORKDIR/backups"
@@ -43,7 +46,11 @@ case "\$*" in
     cat > "\$FAKE_PSQL_STDIN"
     [ "\${FAKE_PSQL_FAIL:-0}" = 1 ] && { echo "psql: ERROR" >&2; exit 3; }
     exit 0 ;;
-  *" stop "*) [ "\${FAKE_STOP_FAIL:-0}" = 1 ] && { echo "stop: error" >&2; exit 5; }; exit 0 ;;
+  *" stop "*)
+    # FAKE_STOP_RM: files (glob allowed) that disappear while the app is being stopped
+    # shellcheck disable=SC2086
+    [ -z "\${FAKE_STOP_RM:-}" ] || rm -f \$FAKE_STOP_RM
+    [ "\${FAKE_STOP_FAIL:-0}" = 1 ] && { echo "stop: error" >&2; exit 5; }; exit 0 ;;
   *" start "*) [ "\${FAKE_START_FAIL:-0}" = 1 ] && { echo "start: error" >&2; exit 5; }; exit 0 ;;
   *" run "*) [ "\${FAKE_MIGRATE_FAIL:-0}" = 1 ] && { echo "migrate: error" >&2; exit 5; }; exit 0 ;;
   *) echo "fake docker: unexpected call: \$*" >&2; exit 9 ;;
@@ -58,19 +65,23 @@ run_restore() {
   shift
   : > "$FAKE_DOCKER_LOG"; rm -f "$FAKE_PSQL_STDIN"; rm -rf "$BACKUPS"
   rc=0
-  out_text="$(env PATH="$FAKE_BIN:$PATH" BACKUP_COMPOSE_FILE="$COMPOSE_FILE" BACKUP_DIR="$BACKUPS" ${envs[@]+"${envs[@]}"} "$RESTORE_SCRIPT" "$@" 2>&1)" || rc=$?
+  out_text="$(env PATH="$FAKE_BIN:$PATH" BACKUP_COMPOSE_FILE="$COMPOSE_FILE" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" ${envs[@]+"${envs[@]}"} "$RESTORE_SCRIPT" "$@" 2>&1)" || rc=$?
 }
 no_db_calls() { ! grep -q -E ' (exec|stop|start|run) ' "$FAKE_DOCKER_LOG"; }
 line_of() { grep -n -- "$1" "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true; }
 count_dumps() { find "$BACKUPS" -maxdepth 1 -name 'depsight-*.sql' 2>/dev/null | wc -l | tr -d ' '; }
-# the stdin psql saw must be the schema reset followed by the dump, byte for byte
+# the stdin psql saw must be BEGIN, the schema reset, the dump byte for byte, then COMMIT
 stdin_is_reset_plus_dump() {
   local n; n="$(wc -l < "$DUMP" | tr -d ' ')"
-  [ "$(sed -n 2p "$FAKE_PSQL_STDIN")" = "DROP SCHEMA public CASCADE;" ] \
+  [ "$(sed -n 1p "$FAKE_PSQL_STDIN")" = "BEGIN;" ] \
+    && [ "$(sed -n 3p "$FAKE_PSQL_STDIN")" = "DROP SCHEMA public CASCADE;" ] \
     && grep -q '^CREATE SCHEMA public AUTHORIZATION pg_database_owner;$' "$FAKE_PSQL_STDIN" \
     && grep -q '^GRANT USAGE ON SCHEMA public TO PUBLIC;$' "$FAKE_PSQL_STDIN" \
-    && tail -n "$n" "$FAKE_PSQL_STDIN" | cmp -s - "$DUMP"
+    && sed -n "7,$((6 + n))p" "$FAKE_PSQL_STDIN" | cmp -s - "$DUMP" \
+    && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] \
+    && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = "$((7 + n))" ]
 }
+no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
 
 # (a) success: stop app, pre-restore dump, schema reset + dump in one transaction, migrate, start app
 {
@@ -78,7 +89,8 @@ stdin_is_reset_plus_dump() {
   l_stop="$(line_of ' stop app')"; l_dump="$(line_of ' pg_dump ')"; l_psql="$(line_of 'psql -v ON_ERROR_STOP=1')"
   l_mig="$(line_of ' run --rm -T --build migrate')"; l_start="$(line_of ' start app')"
   if [ "$rc" -eq 0 ] && stdin_is_reset_plus_dump \
-    && grep -q "exec -T db psql -v ON_ERROR_STOP=1 --single-transaction -q -U depsight -d depsight" "$FAKE_DOCKER_LOG" \
+    && grep -q "exec -T db psql -v ON_ERROR_STOP=1 -q -U depsight -d depsight" "$FAKE_DOCKER_LOG" \
+    && ! grep -q -- "--single-transaction" "$FAKE_DOCKER_LOG" && no_tmp_left \
     && [ "$l_stop" -lt "$l_dump" ] && [ "$l_dump" -lt "$l_psql" ] && [ "$l_psql" -lt "$l_mig" ] && [ "$l_mig" -lt "$l_start" ] \
     && [ "$(count_dumps)" = 1 ]; then
     pass "(a) success: stop app, pre-backup, reset + dump, migrate, start app, in that order"
@@ -160,7 +172,7 @@ stdin_is_reset_plus_dump() {
 {
   run_restore FAKE_PSQL_FAIL=1 -- --yes "$DUMP"
   if [ "$rc" -eq 1 ] && ! grep -q ' start app' "$FAKE_DOCKER_LOG" && ! grep -q ' run ' "$FAKE_DOCKER_LOG" \
-    && grep -q "still stopped" <<< "$out_text" && grep -q "start app" <<< "$out_text"; then
+    && grep -q "still stopped" <<< "$out_text" && grep -q "start app" <<< "$out_text" && no_tmp_left; then
     pass "(i) psql failure -> exit 1, app left stopped"
   else
     fail "(i) psql failure: rc=$rc"
@@ -269,6 +281,65 @@ stdin_is_reset_plus_dump() {
   { printf -- '-- PostgreSQL database dump\n'; for i in $(seq 1 80); do printf -- 'INSERT INTO t VALUES (%d);\n' "$i"; done; printf -- 'x -- PostgreSQL database dump complete\n'; } > "$WORKDIR/rowmarker.sql"
   run_restore -- --yes "$WORKDIR/rowmarker.sql"
   if [ "$rc" -eq 1 ] && no_db_calls; then pass "(s) marker text inside a row is not a marker"; else fail "(s) row marker: rc=$rc"; fi
+}
+
+# (t) the given file disappears while the app is being stopped: the private copy is
+# what gets loaded, so the whole dump is restored and committed
+{
+  cp "$DUMP" "$WORKDIR/vanish.sql"
+  run_restore FAKE_STOP_RM="$WORKDIR/vanish.sql" -- --yes "$WORKDIR/vanish.sql"
+  if [ "$rc" -eq 0 ] && [ ! -e "$WORKDIR/vanish.sql" ] && stdin_is_reset_plus_dump && no_tmp_left; then
+    pass "(t) file removed after validation: the snapshot is restored in full and committed"
+  else
+    fail "(t) vanishing file: rc=$rc"
+  fi
+}
+
+# (u) the private copy itself becomes unreadable after validation: psql gets BEGIN and the
+# reset but no COMMIT, the script exits 1 and says nothing was committed
+{
+  run_restore FAKE_STOP_RM="$TMPD/restore-dump.*" -- --yes "$DUMP"
+  if [ "$rc" -eq 1 ] && [ -e "$FAKE_PSQL_STDIN" ] && ! grep -q 'COMMIT' "$FAKE_PSQL_STDIN" \
+    && [ "$(sed -n 1p "$FAKE_PSQL_STDIN")" = "BEGIN;" ] \
+    && grep -q "nothing was committed" <<< "$out_text" && ! grep -q "rolled back" <<< "$out_text" \
+    && ! grep -q ' run ' "$FAKE_DOCKER_LOG" && ! grep -q ' start app' "$FAKE_DOCKER_LOG" \
+    && grep -q "still stopped" <<< "$out_text" && no_tmp_left; then
+    pass "(u) unreadable copy -> exit 1, no COMMIT sent, app left stopped"
+  else
+    fail "(u) unreadable copy: rc=$rc"
+  fi
+}
+
+# (v) the temporary copy is removed on every exit path: success, refusal, invalid dump,
+# stop failure, pre-backup failure, psql failure, migrate failure
+{
+  bad=0
+  for envs in "" FAKE_STOP_FAIL=1 FAKE_PGDUMP_FAIL=1 FAKE_PSQL_FAIL=1 FAKE_MIGRATE_FAIL=1 FAKE_RUNNING=app; do
+    run_restore ${envs:+"$envs"} -- --yes "$DUMP"; no_tmp_left || { bad=1; echo "  leftover after '$envs'"; }
+  done
+  run_restore -- --yes "$WORKDIR/tiny.sql"; no_tmp_left || { bad=1; echo "  leftover after tiny dump"; }
+  run_restore -- "$DUMP"; no_tmp_left || { bad=1; echo "  leftover after refusal"; }
+  if [ "$bad" = 0 ]; then pass "(v) no temporary copy is left behind on any exit path"; else fail "(v) leftover temporary copy"; fi
+}
+
+# (w) a dump with transaction control statements is refused before anything is touched
+{
+  for stmt in 'COMMIT;' 'begin;' 'END;'; do
+    { cat "$DUMP"; } | awk -v s="$stmt" '/^-- PostgreSQL database dump complete/ { print s } { print }' > "$WORKDIR/txn.sql"
+    run_restore -- --yes "$WORKDIR/txn.sql"
+    if [ "$rc" -ne 1 ] || ! no_db_calls || ! grep -q "transaction control" <<< "$out_text"; then bad_w="$stmt"; fi
+  done
+  if [ -z "${bad_w:-}" ]; then pass "(w) transaction control statement in the dump -> exit 1 before touching anything"; else fail "(w) txn statement not refused: $bad_w"; fi
+}
+
+# (x) the migrate failure message names the step, not only newer code
+{
+  run_restore FAKE_MIGRATE_FAIL=1 -- --yes "$DUMP"
+  if [ "$rc" -eq 4 ] && grep -q "migrate step (image build or schema push) failed; see the output above" <<< "$out_text"; then
+    pass "(x) migrate failure message names the step and points at the output"
+  else
+    fail "(x) migrate message: rc=$rc"
+  fi
 }
 
 echo "restore tests: $pass_count passed, $fail_count failed"

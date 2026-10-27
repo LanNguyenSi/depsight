@@ -12,16 +12,22 @@
 # pasted command cannot restore by accident.
 #
 # What it does, in order:
-#   1. checks the file argument and the dump (size and "dump complete" marker),
+#   1. checks the file argument, copies the dump into a private temporary file and
+#      checks THAT copy (size, "dump complete" marker, no transaction control
+#      statements); everything below uses the copy, so a file that is rotated away,
+#      truncated or replaced meanwhile cannot change what is loaded,
 #   2. checks that the db service is running,
 #   3. stops the app service when it is running (the app holds connections that
 #      would block the DROPs and write rows while the schema is replaced),
 #   4. takes a dump of the CURRENT state with scripts/backup.sh into BACKUP_DIR
 #      (rotation skipped), unless --no-pre-backup; a failure ends the run before
 #      anything is changed and the app is started again,
-#   5. pipes `DROP SCHEMA public CASCADE; CREATE SCHEMA public ...` and the dump into
-#      psql with ON_ERROR_STOP=1 and --single-transaction: any error rolls everything
-#      back and the database keeps its old content,
+#   5. pipes `BEGIN;`, `DROP SCHEMA public CASCADE; CREATE SCHEMA public ...`, the
+#      dump and, only when the whole dump was read successfully, `COMMIT;` into psql
+#      with ON_ERROR_STOP=1. psql is not given --single-transaction because that
+#      commits at end of input: an input that ends early (the copy unreadable) would
+#      commit a dropped, empty schema. Without the final COMMIT the session ends in
+#      a rollback, so any error or short input leaves the database with its old content,
 #   6. runs the migrate service (RESTORE_MIGRATE_SERVICE), so a dump that predates a
 #      schema change gets the columns and tables the deployed code expects, exactly
 #      as every deploy does (`prisma db push`),
@@ -42,8 +48,8 @@
 #
 # Exit codes:
 #   0  restored (migrated, app started)
-#   1  dump invalid, the app could not be stopped (nothing changed), or psql failed
-#      (rolled back, database unchanged, app left stopped)
+#   1  dump invalid, the app could not be stopped (nothing changed), or psql failed or
+#      the dump could not be read (not committed, database unchanged, app left stopped)
 #   2  refused: no file, file missing, no --yes, compose file missing, db not running
 #   3  the pre-restore dump failed; nothing was changed (use --no-pre-backup to go on)
 #   4  the dump is restored, but the migrate step or the app start failed; the app is
@@ -67,6 +73,12 @@ DROP SCHEMA public CASCADE;
 CREATE SCHEMA public AUTHORIZATION pg_database_owner;
 COMMENT ON SCHEMA public IS '"'"'standard public schema'"'"';
 GRANT USAGE ON SCHEMA public TO PUBLIC;'
+
+# Private copy of the dump, removed on every exit path.
+tmp=""
+cleanup() { [ -z "$tmp" ] || rm -f "$tmp"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 usage="usage: restore.sh --yes [--no-pre-backup] <dump.sql>"
 refuse() { echo "restore: $*" >&2; exit 2; }
@@ -95,13 +107,29 @@ if [ "$confirmed" -ne 1 ]; then
   refuse "this destroys everything not in the dump, including rows written after it; run again with --yes to proceed"
 fi
 
-size="$(wc -c < "$file" | tr -d ' ')"
+# Work on a private snapshot: the later steps (stopping the app, the pre-restore dump)
+# take time, and the file may be rotated away or truncated in between.
+tmp="$(umask 077 && mktemp "${TMPDIR:-/tmp}/restore-dump.XXXXXX")" \
+  || { echo "restore: could not create a temporary file" >&2; exit 1; }
+if ! cp -- "$file" "$tmp"; then
+  echo "restore: could not read $file; nothing was changed" >&2
+  exit 1
+fi
+
+size="$(wc -c < "$tmp" | tr -d ' ')"
 if [ "$size" -lt 1024 ]; then
   echo "restore: $file is too small ($size bytes) to be a dump" >&2
   exit 1
 fi
-if ! grep -qx -- '-- PostgreSQL database dump complete' "$file"; then
+if ! grep -qx -- '-- PostgreSQL database dump complete' "$tmp"; then
   echo "restore: $file is missing the completion marker (truncated dump?)" >&2
+  exit 1
+fi
+# The restore runs inside the transaction opened here; a COMMIT or similar line in the
+# dump would end it early and make the later error handling a lie. Plain pg_dump output
+# has none at the start of a line.
+if grep -q -i -E '^(BEGIN|START TRANSACTION|COMMIT|END|ROLLBACK|ABORT)[[:space:]]*;' "$tmp"; then
+  echo "restore: $file contains transaction control statements; refusing to load it" >&2
   exit 1
 fi
 
@@ -138,9 +166,13 @@ if [ "$pre_backup" -eq 1 ]; then
 fi
 
 echo "restore: restoring $file into database '$PG_DB'"
-if ! { printf '%s\n' "$RESET_SQL"; cat "$file"; } | "${DC[@]}" exec -T "$DB_SERVICE" psql -v ON_ERROR_STOP=1 --single-transaction -q \
-  -U "$PG_USER" -d "$PG_DB" > /dev/null; then
-  echo "restore: psql failed; the transaction was rolled back, the database is unchanged" >&2
+# COMMIT is sent only when the whole copy was read: if cat fails, psql sees end of
+# input inside the open transaction and rolls it back (pipefail turns the failure of
+# the left side into the failure of the pipeline).
+if ! { printf 'BEGIN;\n%s\n' "$RESET_SQL"; cat "$tmp" && printf 'COMMIT;\n'; } \
+  | "${DC[@]}" exec -T "$DB_SERVICE" psql -v ON_ERROR_STOP=1 -q \
+    -U "$PG_USER" -d "$PG_DB" > /dev/null; then
+  echo "restore: psql failed or the dump could not be read; nothing was committed, the database is unchanged" >&2
   [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; start it with: $start_hint" >&2
   exit 1
 fi
@@ -148,7 +180,7 @@ fi
 if [ -n "$MIGRATE_SERVICE" ]; then
   echo "restore: applying the current schema ($MIGRATE_SERVICE)"
   if ! "${DC[@]}" run --rm -T --build "$MIGRATE_SERVICE"; then
-    echo "restore: the dump is restored, but the $MIGRATE_SERVICE step failed (a dump taken from newer code than the deployed code can fail here)." >&2
+    echo "restore: the dump is restored, but the $MIGRATE_SERVICE step (image build or schema push) failed; see the output above (a dump taken from newer code than the deployed code is one example)." >&2
     [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; after fixing it run: $start_hint" >&2
     exit 4
   fi

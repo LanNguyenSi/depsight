@@ -48,6 +48,11 @@ if [ "\$1" = compose ] && [ "\$2" = -f ]; then
       shift
       [ "\$1" = -T ] && shift
       shift # service name
+      # DRILL_RM_ON_DUMP: files (glob allowed) removed when a pg_dump runs, i.e. between
+      # restore.sh validating its copy of the dump and loading it
+      case "\$*" in
+        *pg_dump*) [ -z "\${DRILL_RM_ON_DUMP:-}" ] || rm -f \$DRILL_RM_ON_DUMP ;;
+      esac
       exec "$REAL_DOCKER" exec -i "$DRILL_PG_CONTAINER" "\$@"
       ;;
   esac
@@ -139,7 +144,7 @@ echo "drill: ok: prisma db push finds the restored schema in sync"
 
 echo "drill: a failing restore must leave the database unchanged"
 # The statements before the failure would be committed (and the rows gone) if the
-# restore were not one transaction.
+# restore were not one transaction that commits only at the end.
 awk '/^-- PostgreSQL database dump complete/ { print "DELETE FROM public.\"Repo\";"; print "SELECT 1/0;" } { print }' \
   "$dump" > "$WORK/broken.sql"
 if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" \
@@ -149,6 +154,28 @@ if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$W
 fi
 grep -q 'division by zero' "$WORK/broken.err" || fail "broken dump failed for another reason: $(cat "$WORK/broken.err")"
 expect "repos after failed restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
+
+echo "drill: a dump that becomes unreadable after validation must leave the database unchanged"
+# restore.sh loads a private copy. The shim deletes that copy when the pre-restore
+# pg_dump runs (after validation, before the load), so psql receives the schema reset
+# but no dump; the transaction must not be committed.
+tables_before="$(sql "$DST_DB" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")"
+[ "$tables_before" -gt 0 ] || fail "expected tables before the vanish case, got $tables_before"
+mkdir -p "$WORK/tmp"
+if PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" TMPDIR="$WORK/tmp" \
+  DRILL_RM_ON_DUMP="$WORK/tmp/restore-dump.*" RESTORE_APP_SERVICE='' RESTORE_MIGRATE_SERVICE='' PG_DB="$DST_DB" \
+  "$REPO_ROOT/scripts/restore.sh" --yes "$WORK/first.sql" 2> "$WORK/vanish.err"; then
+  fail "restore.sh reported success although its copy of the dump vanished"
+fi
+grep -q 'nothing was committed' "$WORK/vanish.err" || fail "vanish case: unexpected message: $(cat "$WORK/vanish.err")"
+expect "tables after the vanished-dump restore" \
+  "$(sql "$DST_DB" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")" "$tables_before"
+expect "repos after the vanished-dump restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
+[ -z "$(find "$WORK/tmp" -mindepth 1)" ] || fail "temporary copy of the dump was left behind"
+
+echo "drill: the dump holds no transaction control statements"
+! grep -q -i -E '^(BEGIN|START TRANSACTION|COMMIT|END|ROLLBACK|ABORT)[[:space:]]*;' "$dump" \
+  || fail "the dump contains transaction control statements"
 
 sql postgres "DROP DATABASE $DST_DB" > /dev/null
 echo "drill: PASSED"
