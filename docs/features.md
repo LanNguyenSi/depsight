@@ -120,14 +120,17 @@ A complete list of what depsight does today, beyond the headline value props in 
     without updating the lockfile, the contents of a bundling optional package
     that the lockfile was written without unpacking (on another platform),
     command line flags, a user or global npmrc, the environment and the state
-    of the registry. Also outside it: a workspace member in a vendored, build
-    or fixture directory (its lockfile entries count as installed, its
-    package.json is not read) and a lockfile edited by hand so that its member
-    entries disagree with its own `workspaces` patterns. A workspace manifest
-    the root lockfile does not prove (lockfileVersion 1, a missing root
-    lockfile, a `workspaces` value it does not record, a member it does not
-    list, a member that is a workspace root itself) adds nothing, and one below
-    the root keeps every repository-wide entry; repositories with another
+    of the registry. Also outside it: a lockfile edited by hand so that its
+    member entries disagree with its own `workspaces` patterns. A workspace
+    member in a vendored, build or fixture directory is not read, so the root
+    lockfile's link to it is unproven and the whole workspace keeps every
+    repository-wide entry. A workspace manifest the root lockfile does not
+    prove (lockfileVersion 1, a missing root lockfile, a `workspaces` value it
+    does not record, a member it does not list, a member that is a workspace
+    root itself, a folder named by a `file:`, `link:` or path dependency spec,
+    a member folder nested deeper than 16 folders or longer than 256
+    characters) adds nothing, and one below the root keeps every
+    repository-wide entry; repositories with another
     package manager's lockfile and truncated trees keep the
     repository-wide result. The repository-wide query for a name is one
     version, so it is widened for declarations it may not stand for (nothing

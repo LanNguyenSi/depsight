@@ -1383,15 +1383,19 @@ export async function fetchNpmManifests(
 // root's lockfile, never evaluated. Whatever a check cannot establish (a read or parse error, an
 // unknown shape, an exhausted budget) keeps the baseline entry: under-reporting
 // is worse than over-reporting. "Installed nowhere" means in no package-lock.json
-// the scan reads; vendored, build and fixture directories are not read, and a
-// workspace member in one of them is not checked against its package.json (its
-// lockfile entries still count as installed). A lockfile edited by hand so
-// that its member entries disagree with its own `workspaces` patterns is
-// outside the guarantee. A workspace manifest the root lockfile does not prove
-// (a lockfileVersion 1, missing or unreadable root lockfile, a `workspaces`
-// value the lockfile does not record, a member it does not list, a member that
-// is a workspace root itself) adds nothing, and one below the root keeps every
-// baseline entry of the repository. Repos with another package
+// the scan reads; vendored, build and fixture directories are not read. A
+// workspace member in one of them leaves a link in the root lockfile that no
+// read manifest proves, so that root proves nothing and the whole workspace
+// keeps every baseline entry (its lockfile entries still count as installed).
+// A lockfile edited by hand so that its member entries disagree with its own
+// `workspaces` patterns is outside the guarantee. A workspace manifest the root
+// lockfile does not prove (a lockfileVersion 1, missing or unreadable root
+// lockfile, a `workspaces` value the lockfile does not record, a member it does
+// not list, a member that is a workspace root itself, a folder some read
+// manifest or lockfile entry names in a `file:`, `link:` or path spec, which
+// npm installs as a project of its own, a member folder nested deeper than 16
+// folders or longer than 256 characters) adds nothing, and one below the root
+// keeps every baseline entry of the repository. Repos with another package
 // manager's lockfile and repos whose tree could not be read completely keep
 // the baseline result.
 
@@ -1680,14 +1684,91 @@ function hasWorkspacePatterns(value: unknown): boolean {
   return Array.isArray(list) && list.length > 0 && list.every((p) => typeof p === 'string');
 }
 
+// Bounds on a member folder. `workspaceMemberLockKey` builds and looks up one
+// key per parent folder for every declaration of a member, so its cost grows
+// with the declarations of a manifest (up to its 1 MB size) times the folder's
+// depth times its length; a folder past either bound is never a proven member
+// (fail closed: the workspace keeps the floor), which keeps that cost
+// independent of how deep a repository nests. Real monorepos nest members two
+// to five folders deep with short names; 16 segments and 256 characters leave
+// room for any layout a team would keep, and cap the work at a few hundred
+// million character comparisons for the largest manifest.
+export const MAX_MEMBER_FOLDER_SEGMENTS = 16;
+export const MAX_MEMBER_FOLDER_CHARS = 256;
+
 // A folder path relative to a workspace root, as npm writes it into a
 // lockfile: `/`-separated segments, none empty, `.`, `..` or `node_modules`,
-// and no backslash. Anything else is never a proven member folder.
+// and no backslash, at most `MAX_MEMBER_FOLDER_SEGMENTS` segments and
+// `MAX_MEMBER_FOLDER_CHARS` characters. Anything else is never a proven member
+// folder.
 function isMemberFolder(folder: string): boolean {
-  if (folder.includes('\\')) return false;
-  return folder
-    .split('/')
-    .every((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment.toLowerCase() !== 'node_modules');
+  if (folder.length > MAX_MEMBER_FOLDER_CHARS || folder.includes('\\')) return false;
+  const segments = folder.split('/');
+  return (
+    segments.length <= MAX_MEMBER_FOLDER_SEGMENTS &&
+    segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment.toLowerCase() !== 'node_modules')
+  );
+}
+
+// ---- dependency specs that name a folder ------------------------------------
+
+const PATH_SPEC_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+
+/**
+ * Pure: the folder a dependency spec points to when it names one, relative to
+ * the repository root and lower-cased (a case-insensitive file system maps
+ * `Tools/T` to `tools/t`): a `file:` or `link:` spec, or a bare path npm reads
+ * as a folder (`./x`, `../x`, `/x`, `~/x`, `C:\x`), resolved from `baseDir`
+ * (the declaring package's folder, `''` for the repository root). `undefined`
+ * when the spec names no folder (a range, a tag, a git or `npm:` spec). `null`
+ * when it names one this scan cannot place: an absolute, home or Windows path,
+ * a `file://` URL, a backslash. A path leaving the repository yields `..`,
+ * which is no member folder.
+ */
+export function pathSpecTarget(spec: unknown, baseDir: string): string | null | undefined {
+  if (typeof spec !== 'string') return undefined;
+  const text = spec.trim();
+  const prefix = /^(?:file|link):/i.exec(text);
+  let rest: string;
+  if (prefix) rest = text.slice(prefix[0].length);
+  else if (/^(?:\.|~[/\\]|[/\\]|[a-zA-Z]:[/\\])/.test(text)) rest = text;
+  else return undefined;
+  if (/^[/~]|^[a-zA-Z]:|\\/.test(rest)) return null;
+  const stack = baseDir === '' ? [] : baseDir.split('/');
+  for (const segment of rest.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (stack.length === 0) return '..';
+      stack.pop();
+    } else stack.push(segment);
+  }
+  return stack.join('/').toLowerCase();
+}
+
+/**
+ * Pure: add to `into` every folder a dependency spec of one package.json (or
+ * lockfile entry) names (`pathSpecTarget`): the four dependency maps and every
+ * string inside `overrides`, resolved from `baseDir`. Returns false when a spec
+ * names a folder that cannot be placed, true otherwise.
+ */
+export function collectPathSpecTargets(data: JsonObject, baseDir: string, into: Set<string>): boolean {
+  let placeable = true;
+  const take = (spec: unknown): void => {
+    const target = pathSpecTarget(spec, baseDir);
+    if (target === null) placeable = false;
+    else if (target !== undefined) into.add(target);
+  };
+  for (const field of PATH_SPEC_FIELDS) {
+    const map = ownValue(data, field);
+    if (isPlainObject(map)) for (const spec of Object.values(map)) take(spec);
+  }
+  const pending: unknown[] = [ownValue(data, 'overrides')];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === 'string') take(value);
+    else if (isPlainObject(value)) for (const inner of Object.values(value)) pending.push(inner);
+  }
+  return placeable;
 }
 
 // A package name that addresses exactly one `node_modules/<name>` entry: one
@@ -1732,17 +1813,26 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
  *   - every entry with a `link` value is `link: true` and resolves to a proven
  *     folder, so no linked package is left unread (a link outside the root,
  *     to a folder whose package.json the scan did not read, or to the root);
+ *   - no dependency spec of a lockfile entry names a folder this scan cannot
+ *     place (`pathSpecTarget`), and `manifestPathTargets` (the folders the read
+ *     manifests' `file:`/`link:`/path specs point to, relative to the root,
+ *     lower-cased; null when one of them cannot be placed) is not null;
  *   - at most `MAX_LOCK_INDEX_NODES` entries.
  *
  * A candidate is proven when the lockfile has an entry for its folder and
- * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`).
- * The patterns are never evaluated and nothing is built from them.
+ * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`),
+ * and no manifest or lockfile entry names the folder in a `file:`, `link:` or
+ * path spec: npm installs such a folder as a project of its own, with the same
+ * lockfile shape as a member, so it is never a member. The patterns are never
+ * evaluated and nothing is built from them.
  */
 export function provenWorkspaceFolders(
   rootWorkspaces: unknown,
   rootLock: unknown,
   candidates: ReadonlyArray<{ folder: string; name: unknown }>,
+  manifestPathTargets: ReadonlySet<string> | null,
 ): Set<string> | null {
+  if (manifestPathTargets === null) return null;
   if (!isPlainObject(rootLock)) return null;
   const version = rootLock.lockfileVersion;
   const packages = rootLock.packages;
@@ -1751,13 +1841,17 @@ export function provenWorkspaceFolders(
   if (!isPlainObject(rootEntry)) return null;
   if (!hasWorkspacePatterns(rootWorkspaces)) return null;
   if (JSON.stringify(ownValue(rootEntry, 'workspaces')) !== JSON.stringify(rootWorkspaces)) return null;
+  const pathTargets = new Set(manifestPathTargets);
+  let visited = 0;
+  for (const [key, entry] of Object.entries(packages)) {
+    if (++visited > MAX_LOCK_INDEX_NODES) return null;
+    if (isPlainObject(entry) && !collectPathSpecTargets(entry, key, pathTargets)) return null;
+  }
   const proven = new Set<string>();
   for (const { folder, name } of candidates) {
-    if (lockfileLinksFolder(packages, folder, name)) proven.add(folder);
+    if (lockfileLinksFolder(packages, folder, name) && !pathTargets.has(folder.toLowerCase())) proven.add(folder);
   }
-  let visited = 0;
   for (const entry of Object.values(packages)) {
-    if (++visited > MAX_LOCK_INDEX_NODES) return null;
     if (!isPlainObject(entry) || !entry.link) continue;
     if (entry.link !== true || !proven.has(entry.resolved as string)) return null;
   }
@@ -1770,9 +1864,12 @@ export function provenWorkspaceFolders(
  * own `<folder>/node_modules/<key>` when the lockfile has it, else the root's
  * `node_modules/<key>`. Null when a folder between them has a
  * `<parent>/node_modules/<key>` entry (a member nested in another member):
- * this scan does not follow such a chain.
+ * this scan does not follow such a chain. Also null for a folder that is no
+ * member folder (`isMemberFolder`: nested past `MAX_MEMBER_FOLDER_SEGMENTS`
+ * or `MAX_MEMBER_FOLDER_CHARS` included), so the cost of one call is bounded.
  */
 export function workspaceMemberLockKey(packages: Record<string, unknown>, folder: string, key: string): string | null {
+  if (!isMemberFolder(folder)) return null;
   const own = `${folder}/${NODE_MODULES}${key}`;
   if (hasOwn(packages, own)) return own;
   for (let i = folder.lastIndexOf('/'); i > 0; i = folder.lastIndexOf('/', i - 1)) {
@@ -2070,6 +2167,21 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // A member's folder relative to its root's directory.
   const folderBelow = (rootDir: string, dir: string): string => (rootDir === '' ? dir : dir.slice(rootDir.length + 1));
 
+  // The folders the read manifests' `file:`, `link:` and path specs point to
+  // (`collectPathSpecTargets`), as repository paths; null when one of them
+  // cannot be placed. Such a folder is installed as a project of its own, never
+  // as a workspace member.
+  let pathTargets: Set<string> | null = new Set();
+  for (const m of manifests) {
+    if (pathTargets !== null && !collectPathSpecTargets(m.data, m.dir, pathTargets)) pathTargets = null;
+  }
+  // The same, relative to the workspace root in `rootDir`.
+  const pathTargetsBelow = (rootDir: string): Set<string> | null => {
+    if (pathTargets === null) return null;
+    const prefix = rootDir === '' ? '' : `${rootDir.toLowerCase()}/`;
+    return new Set([...pathTargets].filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length)));
+  };
+
   // The members a root's own lockfile proves, by folder; computed once per root.
   const membersByRoot = new Map<string, Map<string, NarrowManifest> | null>();
   const provenMembersOf = (root: NarrowManifest): Map<string, NarrowManifest> | null => {
@@ -2079,7 +2191,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     if (lock) {
       const below = manifests.filter((m) => m !== root && isSelfOrAncestorDir(root.dir, m.dir));
       const candidates = below.map((m) => ({ folder: folderBelow(root.dir, m.dir), name: m.data.name, manifest: m }));
-      const folders = provenWorkspaceFolders(root.data.workspaces, lock.data, candidates);
+      const folders = provenWorkspaceFolders(root.data.workspaces, lock.data, candidates, pathTargetsBelow(root.dir));
       if (folders) members = new Map(candidates.filter((c) => folders.has(c.folder)).map((c) => [c.folder, c.manifest]));
     }
     membersByRoot.set(root.path, members);

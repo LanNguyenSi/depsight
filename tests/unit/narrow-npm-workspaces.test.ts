@@ -21,10 +21,19 @@
  * Part 3 feeds adversarial lockfiles (huge maps, `..` keys, absolute paths,
  * backslashes, links outside the repository, duplicate names) and bounds the
  * time.
+ *
+ * Part 4 covers the folder bounds (depth and length of a member folder), the
+ * folders that `file:`, `link:` and path specs name (never members), a member
+ * in a directory the scan does not read, and a surviving-mutant scenario for
+ * the root-containment check of the candidate list.
  */
 import { describe, it, expect } from 'vitest';
 import {
   MAX_LOCK_INDEX_NODES,
+  MAX_MEMBER_FOLDER_CHARS,
+  MAX_MEMBER_FOLDER_SEGMENTS,
+  collectPathSpecTargets,
+  pathSpecTarget,
   provenWorkspaceFolders,
   resolveNarrowNpm,
   workspaceMemberLockKey,
@@ -34,6 +43,9 @@ import { pkg } from './helpers/npm-repo-fixture';
 
 type Files = Record<string, string>;
 type Packages = Record<string, unknown>;
+
+// No manifest names a folder through a file:, link: or path spec.
+const NO_TARGETS: ReadonlySet<string> = new Set();
 
 // ---- part 1: truth tables of the pure predicates ------------------------------
 
@@ -96,7 +108,7 @@ describe('provenWorkspaceFolders: truth table', () => {
     let empty = 0;
     for (const on of combos) {
       const { pkgWorkspaces, lock, folder, name } = build(on);
-      const got = provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }]);
+      const got = provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }], NO_TARGETS);
       const want = expected(on);
       const gotList = got === null ? null : [...got];
       if (JSON.stringify(gotList) !== JSON.stringify(want)) mismatches.push(`${JSON.stringify(on)} got ${JSON.stringify(gotList)} want ${JSON.stringify(want)}`);
@@ -112,11 +124,11 @@ describe('provenWorkspaceFolders: truth table', () => {
   it('each condition alone, with all others true, decides the outcome', () => {
     const all = Object.fromEntries(DIMENSIONS.map((d) => [d, true])) as Record<Dim, boolean>;
     const { pkgWorkspaces, lock, folder, name } = build(all);
-    expect([...(provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }]) ?? [])]).toEqual(['packages/a']);
+    expect([...(provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }], NO_TARGETS) ?? [])]).toEqual(['packages/a']);
     for (const d of DIMENSIONS) {
       const on = { ...all, [d]: false };
       const b = build(on);
-      const got = provenWorkspaceFolders(b.pkgWorkspaces, b.lock, [{ folder: b.folder, name: b.name }]);
+      const got = provenWorkspaceFolders(b.pkgWorkspaces, b.lock, [{ folder: b.folder, name: b.name }], NO_TARGETS);
       expect(got === null ? null : [...got], d).toEqual(expected(on));
       expect(got === null || got.size === 0, `${d} false must not prove the member`).toBe(true);
     }
@@ -129,17 +141,20 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
     'node_modules/a': { resolved: 'packages/a', link: true },
     'packages/a': { name: 'a', version: '1.0.0' },
   });
-  const prove = (packages: Packages, extra: { workspaces?: unknown; folder?: string; name?: unknown; lock?: unknown } = {}) => {
+  const prove = (packages: Packages, extra: { workspaces?: unknown; folder?: string; name?: unknown; lock?: unknown; targets?: ReadonlySet<string> | null } = {}) => {
     const lock = 'lock' in extra ? extra.lock : { lockfileVersion: 3, packages };
-    const got = provenWorkspaceFolders('workspaces' in extra ? extra.workspaces : ['packages/*'], lock, [
-      { folder: extra.folder ?? 'packages/a', name: 'name' in extra ? extra.name : 'a' },
-    ]);
+    const got = provenWorkspaceFolders(
+      'workspaces' in extra ? extra.workspaces : ['packages/*'],
+      lock,
+      [{ folder: extra.folder ?? 'packages/a', name: 'name' in extra ? extra.name : 'a' }],
+      'targets' in extra ? extra.targets! : NO_TARGETS,
+    );
     return got === null ? null : [...got];
   };
 
   it('positive control, version 2 and 3', () => {
     expect(prove(okPackages())).toEqual(['packages/a']);
-    expect(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 2, packages: okPackages(), dependencies: {} }, [{ folder: 'packages/a', name: 'a' }])).toEqual(new Set(['packages/a']));
+    expect(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 2, packages: okPackages(), dependencies: {} }, [{ folder: 'packages/a', name: 'a' }], NO_TARGETS)).toEqual(new Set(['packages/a']));
   });
 
   it('a lockfile of another shape proves nothing', () => {
@@ -280,9 +295,9 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
 
   it('own properties only: __proto__ and constructor keys are not looked up on the prototype', () => {
     const packages = JSON.parse('{"": {"workspaces": ["packages/*"]}, "__proto__": {"version": "1.0.0"}, "node_modules/__proto__": {"resolved": "__proto__", "link": true}}');
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }]) ?? [])]).toEqual(['__proto__']);
+    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }], NO_TARGETS) ?? [])]).toEqual(['__proto__']);
     const missing = { '': { workspaces: ['packages/*'] } };
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }]) ?? ['x'])]).toEqual([]);
+    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }], NO_TARGETS) ?? ['x'])]).toEqual([]);
   });
 
   it('a lockfile above the entry budget proves nothing', () => {
@@ -446,7 +461,9 @@ describe('workspace: positive control', () => {
     expect(droppable(withManifest('packages/a/package.json', memberA({ dependencies: { vite: '^7.3.5', b: '^2.0.0' } })))).toBe(false);
     expect(droppable(withManifest('packages/a/package.json', memberA({ dependencies: { vite: '^7.3.5', b: '*' } })))).toBe(true);
     // a spec that is no range only needs the entry
-    expect(droppable(withManifest('packages/a/package.json', memberA({ dependencies: { vite: '^7.3.5', b: 'file:../b' } })))).toBe(true);
+    expect(droppable(withManifest('packages/a/package.json', memberA({ dependencies: { vite: '^7.3.5', b: 'latest' } })))).toBe(true);
+    // ... unless it is a file: spec to a folder: npm installs that folder as a project of its own, so b is no member
+    expect(droppable(withManifest('packages/a/package.json', memberA({ dependencies: { vite: '^7.3.5', b: 'file:../b' } })))).toBe(false);
   });
 
   it('the linked member version comes from its package.json and must equal the lockfile folder entry', () => {
@@ -809,4 +826,445 @@ describe('workspace: adversarial lockfiles never widen a drop', () => {
     expect(r.dropSafe('vite', '7.0.0')).toBe(false);
     expect(versions(r)).toEqual([]);
   }, 30_000);
+});
+
+// ---- part 4: folder bounds, folder specs, unread members -----------------------
+
+const deepFolder = (segments: number, segmentChars = 1) => Array.from({ length: segments }, () => 'a'.repeat(segmentChars)).join('/');
+
+describe('member folder bounds', () => {
+  const lockFor = (folder: string): unknown => ({
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'root', workspaces: ['**'] },
+      [folder]: { name: 'm', version: '1.0.0' },
+      'node_modules/m': { resolved: folder, link: true },
+    },
+  });
+  const proves = (folder: string) => provenWorkspaceFolders(['**'], lockFor(folder), [{ folder, name: 'm' }], NO_TARGETS)?.has(folder) ?? false;
+
+  it('the limits are the documented ones', () => {
+    expect([MAX_MEMBER_FOLDER_SEGMENTS, MAX_MEMBER_FOLDER_CHARS]).toEqual([16, 256]);
+  });
+
+  it('a folder of up to the segment limit is proven, one segment more is not (and takes the whole root with it)', () => {
+    expect(proves(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS))).toBe(true);
+    expect(proves(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1))).toBe(false);
+    expect(provenWorkspaceFolders(['**'], lockFor(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1)), [{ folder: deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1), name: 'm' }], NO_TARGETS)).toBeNull();
+  });
+
+  it('a folder of up to the character limit is proven, one character more is not', () => {
+    const at = `${'b'.repeat(127)}/${'c'.repeat(128)}`; // 256 characters
+    expect(at.length).toBe(MAX_MEMBER_FOLDER_CHARS);
+    expect(proves(at)).toBe(true);
+    expect(proves(`${at}d`)).toBe(false);
+  });
+
+  it('workspaceMemberLockKey answers null past either limit, whatever the lockfile holds', () => {
+    const tooDeep = deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1);
+    const tooLong = `${'b'.repeat(128)}/${'c'.repeat(128)}`;
+    const atLimit = deepFolder(MAX_MEMBER_FOLDER_SEGMENTS);
+    expect(workspaceMemberLockKey({}, atLimit, 'vite')).toBe('node_modules/vite');
+    expect(workspaceMemberLockKey({ [`${atLimit}/node_modules/vite`]: {} }, atLimit, 'vite')).toBe(`${atLimit}/node_modules/vite`);
+    expect(workspaceMemberLockKey({}, tooDeep, 'vite')).toBeNull();
+    expect(workspaceMemberLockKey({ [`${tooDeep}/node_modules/vite`]: {} }, tooDeep, 'vite')).toBeNull();
+    expect(tooLong.length).toBe(MAX_MEMBER_FOLDER_CHARS + 1);
+    expect(workspaceMemberLockKey({}, tooLong, 'vite')).toBeNull();
+  });
+
+  // The cost of the proof and of one lookup per declaration must not grow with
+  // the depth of the folder: a proven member nested 16 folders deep and a
+  // member nested 2000 deep (unproven, fail closed) both answer 80000
+  // declarations quickly. Before the bound, depth 2000 took about 25 seconds.
+  const costOf = (folder: string, declarations: number) => {
+    const deps: Record<string, string> = {};
+    for (let i = 0; i < declarations; i++) deps[`p${i}`] = '*';
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces: ['**'] },
+      [folder]: { name: 'm', version: '1.0.0' },
+      'node_modules/m': { resolved: folder, link: true },
+      'node_modules/p1': { version: '1.2.0' },
+    });
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['**'] }),
+      [`${folder}/package.json`]: pkg({ name: 'm', version: '1.0.0', dependencies: deps }),
+    };
+    const started = performance.now();
+    const r = resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+    const dropped = r.dropSafe('p1', '1.0.0');
+    return { elapsed: performance.now() - started, dropped };
+  };
+
+  it('depth x declarations stays bounded: 80000 declarations in a member 16 folders deep', () => {
+    const { elapsed } = costOf(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS, 15), 80_000);
+    // measured at under a quarter of a second locally; the bound only has to
+    // sit far below the quadratic cost (tens of seconds)
+    expect(elapsed).toBeLessThan(8_000);
+  }, 30_000);
+
+  it('depth x declarations stays bounded: 80000 declarations in a member 2000 folders deep', () => {
+    const { elapsed, dropped } = costOf(deepFolder(2000), 80_000);
+    expect(dropped).toBe(false); // an unproven member keeps the floor
+    expect(elapsed).toBeLessThan(8_000);
+  }, 30_000);
+
+  it('a member at the limit is narrowed like any other; one past it keeps the floor', () => {
+    const run = (segments: number) => {
+      const folder = deepFolder(segments);
+      const files: Files = {
+        'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['**'] }),
+        [`${folder}/package.json`]: pkg({ name: 'm', version: '1.0.0', dependencies: { left: '^1.0.0' } }),
+      };
+      const lock = lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ['**'] },
+        [folder]: { name: 'm', version: '1.0.0', dependencies: { left: '^1.0.0' } },
+        'node_modules/m': { resolved: folder, link: true },
+        'node_modules/left': { version: '1.4.0' },
+      });
+      return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+    };
+    expect(run(MAX_MEMBER_FOLDER_SEGMENTS).dropSafe('left', '1.0.0')).toBe(true);
+    expect(run(MAX_MEMBER_FOLDER_SEGMENTS + 1).dropSafe('left', '1.0.0')).toBe(false);
+  });
+});
+
+describe('pathSpecTarget', () => {
+  it.each([
+    ['file:tools/t', 'packages/a', 'packages/a/tools/t'],
+    ['file:../b', 'packages/a', 'packages/b'],
+    ['file:./x/', '', 'x'],
+    ['file:', 'packages/a', 'packages/a'],
+    ['link:../b', 'packages/a', 'packages/b'],
+    ['LINK:Tools/T', '', 'tools/t'],
+    ['  file:x  ', '', 'x'],
+    ['../b', 'packages/a', 'packages/b'],
+    ['./b', 'packages/a', 'packages/a/b'],
+    ['file:a/./b/../c', '', 'a/c'],
+    ['file:../..', 'packages/a', ''],
+    ['file:../../out', 'packages/a', 'out'],
+    ['file:../../../out', 'packages/a', '..'],
+    ['../x', '', '..'],
+  ])('%s from %j names %j', (spec, base, want) => {
+    expect(pathSpecTarget(spec, base)).toBe(want);
+  });
+
+  it.each(['^1.0.0', '*', 'latest', '', '1.2.3', '~1.2.3', '>=1 <2', 'npm:left@^1.0.0', 'git+https://example.com/x.git', 'github:a/b', 'workspace:*', 'https://example.com/x.tgz', 'x/y'])(
+    '%j names no folder',
+    (spec) => {
+      expect(pathSpecTarget(spec, 'packages/a')).toBeUndefined();
+    },
+  );
+
+  it.each([1, null, undefined, {}, ['file:x']])('a non-string (%j) names no folder', (spec) => {
+    expect(pathSpecTarget(spec, '')).toBeUndefined();
+  });
+
+  it.each(['file:/abs/x', 'file:///abs/x', 'file:~/x', 'file:C:\\x', 'file:a\\b', '/abs/x', '~/x', 'C:\\x', 'C:/x', '.\\x', '\\x'])('%j cannot be placed', (spec) => {
+    expect(pathSpecTarget(spec, 'packages/a')).toBeNull();
+  });
+
+  it('collectPathSpecTargets reads the four dependency maps and every string of overrides', () => {
+    const into = new Set<string>();
+    const placeable = collectPathSpecTargets(
+      {
+        dependencies: { a: 'file:../a' },
+        devDependencies: { b: 'link:../b' },
+        optionalDependencies: { c: './c' },
+        peerDependencies: { d: 'file:d', e: '^1.0.0' },
+        overrides: { f: 'file:../f', g: { h: 'file:../h', i: '1.0.0' } },
+        bundleDependencies: ['file:../ignored'],
+        description: 'file:../ignored-too',
+      },
+      'packages/x',
+      into,
+    );
+    expect(placeable).toBe(true);
+    expect([...into].sort()).toEqual(['packages/a', 'packages/b', 'packages/f', 'packages/h', 'packages/x/c', 'packages/x/d']);
+  });
+
+  it('collectPathSpecTargets reports a spec it cannot place, in each place it reads', () => {
+    for (const data of [
+      { dependencies: { a: 'file:/abs' } },
+      { devDependencies: { a: 'file:/abs' } },
+      { optionalDependencies: { a: '/abs' } },
+      { peerDependencies: { a: '~/abs' } },
+      { overrides: { a: { b: 'file:/abs' } } },
+    ]) {
+      expect(collectPathSpecTargets(data, '', new Set()), JSON.stringify(data)).toBe(false);
+    }
+    expect(collectPathSpecTargets({ dependencies: 'file:/abs', overrides: 7 }, '', new Set())).toBe(true);
+  });
+
+  it('collectPathSpecTargets reads own properties only', () => {
+    const data = JSON.parse('{"__proto__": {"dependencies": {"a": "file:/abs"}}}');
+    expect(collectPathSpecTargets(data, '', new Set())).toBe(true);
+  });
+});
+
+describe('provenWorkspaceFolders: a folder named by a file:, link: or path spec is never a member', () => {
+  const okPackages = (): Packages => ({
+    '': { name: 'root', workspaces: ['packages/*'] },
+    'node_modules/a': { resolved: 'packages/a', link: true },
+    'packages/a': { name: 'a', version: '1.0.0' },
+  });
+  const prove = (packages: Packages, targets: ReadonlySet<string> | null, folder = 'packages/a') => {
+    const got = provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder, name: 'a' }], targets);
+    return got === null ? null : [...got];
+  };
+
+  it('positive control, and a target elsewhere changes nothing', () => {
+    expect(prove(okPackages(), NO_TARGETS)).toEqual(['packages/a']);
+    expect(prove(okPackages(), new Set(['packages/other', 'packages', 'packages/a/sub', '..']))).toEqual(['packages/a']);
+  });
+
+  it('a manifest target on the folder leaves its link unresolved: the root proves nothing', () => {
+    expect(prove(okPackages(), new Set(['packages/a']))).toBeNull();
+  });
+
+  it('the comparison ignores case, as a case-insensitive file system does', () => {
+    const packages: Packages = {
+      '': { name: 'root', workspaces: ['packages/*'] },
+      'node_modules/a': { resolved: 'Packages/A', link: true },
+      'Packages/A': { name: 'a', version: '1.0.0' },
+    };
+    expect(prove(packages, NO_TARGETS, 'Packages/A')).toEqual(['Packages/A']);
+    expect(prove(packages, new Set(['packages/a']), 'Packages/A')).toBeNull();
+  });
+
+  it('a manifest spec that cannot be placed (null targets) proves nothing', () => {
+    expect(prove(okPackages(), null)).toBeNull();
+  });
+
+  it('a lockfile entry that declares a spec naming the folder, from the entry it sits in', () => {
+    for (const [entryKey, spec] of [
+      ['', 'file:packages/a'],
+      ['', 'link:./packages/a'],
+      ['', './packages/a/'],
+      ['packages/b', 'file:../a'],
+      ['node_modules/x', 'file:../../packages/a'],
+      ['packages/b/node_modules/x', 'file:../../../a'],
+    ] as const) {
+      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+        const packages = okPackages();
+        packages[entryKey] = { ...(packages[entryKey] as object), name: 'x', [field]: { t: spec } };
+        expect(prove(packages, NO_TARGETS), `${entryKey} ${field} ${spec}`).toBeNull();
+      }
+    }
+  });
+
+  it('a lockfile entry spec that names another folder, or no folder, changes nothing', () => {
+    const packages = okPackages();
+    packages[''] = { name: 'root', workspaces: ['packages/*'], dependencies: { t: 'file:tools/t', u: '^1.0.0', v: 'file:packages/a/sub' } };
+    expect(prove(packages, NO_TARGETS)).toEqual(['packages/a']);
+  });
+
+  it('a lockfile entry spec that cannot be placed proves nothing', () => {
+    const packages = okPackages();
+    packages['packages/a'] = { name: 'a', version: '1.0.0', dependencies: { t: 'file:/abs/t' } };
+    expect(prove(packages, NO_TARGETS)).toBeNull();
+  });
+
+  it('a lockfile above the entry budget still proves nothing (the spec pass counts entries)', () => {
+    const packages = okPackages();
+    for (let i = 0; i <= MAX_LOCK_INDEX_NODES; i++) packages[`node_modules/f${i}`] = { version: '1.0.0' };
+    expect(prove(packages, NO_TARGETS)).toBeNull();
+  }, 30_000);
+});
+
+describe('workspace: a file: dependency on a folder (npm installs it as a project of its own)', () => {
+  // root + packages/a + tools/t. tools/t is a member only where the workspace
+  // patterns say so; a file: dependency on it records the same lockfile shape
+  // (a folder entry and a link) without making it one.
+  type Spec = { rootDeps?: Record<string, string>; aDeps?: Record<string, string>; workspaces: string[] };
+  const build = ({ rootDeps, aDeps, workspaces }: Spec) => {
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces, ...(rootDeps ? { dependencies: rootDeps } : {}) }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0', ...aDeps } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces, ...(rootDeps ? { dependencies: rootDeps } : {}) },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/t': { resolved: 'tools/t', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'node_modules/rb': { version: '1.3.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0', ...aDeps } },
+      'tools/t': { name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+    });
+    return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+  };
+
+  it('control: tools/t is a workspace member (pattern lists it), nothing declares a file: spec', () => {
+    const r = build({ workspaces: ['packages/*', 'tools/*'] });
+    expect(r.dropSafe('ra', '1.0.0')).toBe(true);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toEqual(['ra@1.2.0', 'rb@1.3.0']);
+  });
+
+  it('the root depends on tools/t through file: and the patterns do not list it: the root proves nothing', () => {
+    const r = build({ workspaces: ['packages/*'], rootDeps: { t: 'file:tools/t' } });
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+
+  it('each spelling of the spec, declared by the root or by a member', () => {
+    for (const spec of ['file:tools/t', 'file:./tools/t/', 'link:tools/t', 'LINK:Tools/T', './tools/t', 'file:packages/../tools/t']) {
+      const root = build({ workspaces: ['packages/*'], rootDeps: { t: spec } });
+      expect(root.dropSafe('ra', '1.0.0'), `root ${spec}`).toBe(false);
+      expect(root.additions, `root ${spec}`).toEqual([]);
+    }
+    for (const spec of ['file:../../tools/t', 'link:../../tools/t', '../../tools/t']) {
+      const member = build({ workspaces: ['packages/*'], aDeps: { t: spec } });
+      expect(member.dropSafe('ra', '1.0.0'), `member ${spec}`).toBe(false);
+      expect(member.additions, `member ${spec}`).toEqual([]);
+    }
+  });
+
+  it('a member that is listed by the patterns and also named by file: is no member either', () => {
+    const r = build({ workspaces: ['packages/*', 'tools/*'], aDeps: { t: 'file:../../tools/t' } });
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+
+  it('a file: spec for another folder, a tarball, or a range does not stop the proof', () => {
+    for (const spec of ['file:tools/other', 'file:tools/t.tgz', 'file:../../..', '^1.0.0', 'git+https://example.com/t.git']) {
+      const r = build({ workspaces: ['packages/*', 'tools/*'], aDeps: { t: spec } });
+      // tools/t stays a member: only a spec that names its folder takes it out
+      expect(r.dropSafe('rb', '1.0.0'), spec).toBe(true);
+    }
+  });
+
+  it('a spec that cannot be placed anywhere in the repository leaves every root unproven', () => {
+    const r = build({ workspaces: ['packages/*', 'tools/*'], aDeps: { t: 'file:/srv/t' } });
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+
+  it('a spec only the lockfile declares (the manifest was edited afterwards) counts too', () => {
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'] }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0' }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { t: 'file:tools/t' } },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/t': { resolved: 'tools/t', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+      'tools/t': { name: 't', version: '1.0.0' },
+    });
+    const r = resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+  });
+
+  it('a manifest outside the workspace root can name a folder of it', () => {
+    const files: Files = {
+      'mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'] }),
+      'mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { a: 'file:../mono/packages/a' } }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'] },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+    });
+    const otherLock = lockOf({ '': { name: 'other' }, 'node_modules/a': { resolved: '../mono/packages/a', link: true }, 'node_modules/ra': { version: '1.2.0' }, '../mono/packages/a': { name: 'a', version: '1.0.0' } });
+    const r = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': otherLock }));
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    // control: the same repository without the outside spec proves the member
+    delete files['other/package.json'];
+    const control = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock }));
+    expect(control.dropSafe('ra', '1.0.0')).toBe(true);
+  });
+
+  it('the folder is compared from the workspace root, not from the repository root', () => {
+    // mono/ holds the workspace; a sibling manifest names `tools/t` from the repository root,
+    // which is not mono/tools/t
+    const files: Files = {
+      'mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] }),
+      'mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'mono/tools/t/package.json': pkg({ name: 't', version: '1.0.0' }),
+      'other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { x: 'file:tools/t' } }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/t': { resolved: 'tools/t', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+      'tools/t': { name: 't', version: '1.0.0' },
+    });
+    const otherLock = lockOf({ '': { name: 'other' }, 'node_modules/x': { version: '1.0.0' } });
+    const r = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': otherLock }));
+    expect(r.dropSafe('ra', '1.0.0')).toBe(true);
+  });
+});
+
+describe('workspace: a member in a directory the scan does not read', () => {
+  // `vendor/` (like build, dist and fixture directories) is not read, so
+  // vendor/v has no manifest here; the lockfile still links it. The root then
+  // proves nothing, so no entry of the workspace is dropped or added.
+  const build = (withVendor: boolean) => {
+    const workspaces = withVendor ? ['packages/*', 'vendor/*'] : ['packages/*'];
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+    };
+    const packages: Packages = {
+      '': { name: 'root', version: '1.0.0', workspaces },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/rb': { version: '1.2.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+    };
+    if (withVendor) {
+      packages['node_modules/v'] = { resolved: 'vendor/v', link: true };
+      packages['vendor/v'] = { name: 'v', version: '1.0.0', dependencies: { rc: '^0.1.0' } };
+      packages['node_modules/rc'] = { version: '0.1.4' };
+    }
+    return resolveNarrowNpm(inputs(files, { 'package-lock.json': lockOf(packages) }));
+  };
+
+  it('control: the same workspace without the unread member proves its members', () => {
+    const r = build(false);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toEqual(['rb@1.2.0']);
+  });
+
+  it('the unread member leaves the root unproven: the other members keep their entries too', () => {
+    const r = build(true);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.dropSafe('rc', '0.1.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+});
+
+describe('workspace: a manifest outside the root does not prove a link of that root', () => {
+  // Without the root-containment check, `xxxxxdist/pkg` cut at the length of
+  // `mono/` reads as the folder `dist/pkg` of the workspace in `mono/`, and the
+  // root lockfile's link to `dist/pkg` (a member of an excluded directory, never
+  // read) would look proven.
+  it('a path that only looks like a folder below the root proves no link', () => {
+    const rootPkg = { name: 'mono', version: '1.0.0', workspaces: ['dist/*'], dependencies: { ra: '^2.0.0' } };
+    const outside = { name: 'pkg', version: '1.0.0' };
+    const files: Files = {
+      'mono/package.json': pkg(rootPkg),
+      'xxxxxdist/pkg/package.json': pkg(outside),
+    };
+    const lockFiles: Files = {
+      'mono/package-lock.json': lockOf({
+        '': { name: 'mono', version: '1.0.0', workspaces: ['dist/*'], dependencies: { ra: '^2.0.0' } },
+        'dist/pkg': { name: 'pkg', version: '1.0.0' },
+        'node_modules/pkg': { resolved: 'dist/pkg', link: true },
+        'node_modules/ra': { version: '2.1.0' },
+      }),
+      'xxxxxdist/pkg/package-lock.json': lockOf({ '': outside }),
+    };
+    const r = resolveNarrowNpm(inputs(files, lockFiles));
+    expect(r.dropSafe('ra', '2.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
 });

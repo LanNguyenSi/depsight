@@ -838,16 +838,19 @@ function raisedNpmVersion(
  * that the lockfile was written without unpacking (on another platform),
  * command line flags, a user or global npmrc, the environment and the state of the registry.
  *
- * Vendored, build and fixture directories are not read, and a workspace
- * member in one of them is not checked against its package.json. A lockfile
- * edited by hand so that its member entries disagree with its own
+ * Vendored, build and fixture directories are not read. A workspace member in
+ * one of them leaves a link in the root lockfile that no read manifest proves,
+ * so that root proves nothing and the whole workspace keeps every chain entry.
+ * A lockfile edited by hand so that its member entries disagree with its own
  * `workspaces` patterns is outside the guarantee. The result can
  * therefore hold several entries for one name, one per installed version.
  * A workspace manifest the root lockfile does not prove (a lockfileVersion 1,
  * missing or unreadable root lockfile, a `workspaces` value the lockfile does
  * not record, a member it does not list, a member that is a workspace root
- * itself) adds nothing, and one below the root keeps every chain entry of the
- * repository. Repos with another package
+ * itself, a folder named by a `file:`, `link:` or path spec of a read manifest
+ * or lockfile entry, a member folder nested deeper than 16 folders or longer
+ * than 256 characters) adds nothing, and one below the root keeps every chain
+ * entry of the repository. Repos with another package
  * manager's lockfile, and trees or manifest lists that could not be read
  * completely keep the chain result as it was.
  */
