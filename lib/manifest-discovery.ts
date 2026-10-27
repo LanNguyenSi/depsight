@@ -1932,8 +1932,8 @@ function indexHas(index: InstalledIndex, name: string, version: string): boolean
 function lockfileListsDeclaration(
   lock: NarrowLockfile,
   decl: NarrowDeclaration,
-  entryKey: string = `node_modules/${decl.key}`,
-  linkSatisfies: (entry: JsonObject, decl: NarrowDeclaration) => boolean = () => false,
+  entryKey: string,
+  linkSatisfies: (entry: JsonObject, decl: NarrowDeclaration) => boolean,
 ): boolean {
   const entry = ownValue(lock.packages, entryKey);
   if (!isPlainObject(entry)) return false;
@@ -2163,7 +2163,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     return (
       m.overridesPlain &&
       lockfileHonoursOverrides(lock, m.overrides) &&
-      m.declarations.every((d) => !d.lockRequired || lockfileListsDeclaration(lock, d, undefined, linkSatisfies))
+      m.declarations.every((d) => !d.lockRequired || lockfileListsDeclaration(lock, d, `${NODE_MODULES}${d.key}`, linkSatisfies))
     );
   };
   let everyManifestLockedMemo: boolean | undefined;
