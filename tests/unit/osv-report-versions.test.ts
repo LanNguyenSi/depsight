@@ -139,10 +139,10 @@ describe('collectNpmReportVersions: the floor the proof is asked about', () => {
     expect(narrowStub.dropSafe).toHaveBeenCalledWith('vite', '7.3.0');
   });
 
-  it('an exclusive lower bound (`>7.3.5`): the floor is the stripped 7.3.5, not the range minimum 7.3.6', async () => {
+  it('an exclusive lower bound (`>7.3.5`): the strip stays 7.3.5, the proof is asked about the range minimum 7.3.6, which the range admits', async () => {
     narrowStub.additions = [{ name: 'vite', version: '7.4.0' }];
     expect(await vite('>7.3.5')).toEqual({ name: 'vite', strip: '7.3.5', raisedTo: '7.4.0' });
-    expect(narrowStub.dropSafe).toHaveBeenCalledWith('vite', '7.3.5');
+    expect(narrowStub.dropSafe).toHaveBeenCalledWith('vite', '7.3.6');
   });
 
   it('a spec with no usable floor (`latest`): null, the proof is not asked', async () => {
@@ -257,11 +257,11 @@ describe('collectNpmReportVersions: a declaration outside dependencies and devDe
 });
 
 describe('the floor is the same one the CVE scan queries when nothing is resolved', () => {
-  it('`>7.3.5` without a lockfile is queried at 7.3.5 (the stripped floor), `^8` at 8.0.0', async () => {
+  it('`>7.3.5` without a lockfile is queried at 7.3.6 (the range minimum), `^8` at 8.0.0', async () => {
     narrowStub.dropSafe.mockReturnValue(false);
     const { queries } = await runScan(fetchOsvAdvisories, {
       files: { 'package.json': pkg({ name: 'app', dependencies: { vite: '>7.3.5', react: '^8' } }) },
     });
-    expect(queries).toEqual(['react@8.0.0', 'vite@7.3.5']);
+    expect(queries).toEqual(['react@8.0.0', 'vite@7.3.6']);
   });
 });

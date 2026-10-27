@@ -362,17 +362,48 @@ interface DepEntry {
 
 /**
  * The usable manifest floor of a dependency spec, or null when there is none.
- * Usable as-is when the spec with its leading range operator stripped parses as
- * an exact semver version (fast path); otherwise the RAW spec is tried as a
- * semver RANGE and its `minVersion` is the floor. A digit-free spec (`*`,
- * `latest`, `workspace:*`) is excluded on purpose: `semver.validRange` would
- * accept `*` and `minVersion` would wrongly resolve it to `0.0.0`.
+ * The floor is a version the spec admits, for any valid range.
+ *
+ * Fast path: a spec that opens with `^`, `~`, `=`, `>=` or nothing (an optional
+ * `v` before the digits) keeps its stripped form when that parses as an exact
+ * semver version (`^1.2.3` gives `1.2.3`, `v1.2.3` gives `1.2.3`). Every other
+ * valid range (`<2.0.0`, `<=1.5.0`, `>1.0.0`, `>1 <3`, hyphen ranges, `||`
+ * unions, `1.x`) takes `semver.minVersion` of the raw spec; stripping a `<`, `<=`
+ * or `>` would name a bound the range excludes. A satisfiable range always has
+ * a minVersion; an unsatisfiable one (`>=2 <1`) yields null, because the
+ * stripped bound is outside the range (null falls back to the lockfile or the
+ * ambiguous map in the caller). An invalid spec has no range to be outside of,
+ * so it keeps the previous behaviour: the stripped form when that parses as an
+ * exact version, else null. A digit-free spec (`*`, `x`, `latest`,
+ * `workspace:*`) is excluded on purpose: `semver.validRange` would accept `*`
+ * and `minVersion` would wrongly resolve it to `0.0.0`.
  */
-function manifestFloor(versionSpec: string): string | null {
+export function manifestFloor(versionSpec: string): string | null {
   const floor = versionSpec.replace(/^[^0-9]*/, '');
-  if (semver.valid(floor) !== null) return floor;
-  if (floor === '' || semver.validRange(versionSpec) === null) return null;
+  if (floor === '') return null;
+  const keepsStrippedForm = /^(?:\^|~|>=|=)?\s*v?\d/.test(versionSpec.trim());
+  if (keepsStrippedForm && semver.valid(floor) !== null) return floor;
+  if (semver.validRange(versionSpec) === null) {
+    return semver.valid(floor) !== null ? floor : null;
+  }
   return semver.minVersion(versionSpec)?.version ?? null;
+}
+
+/**
+ * The versions to query OSV for under one dependency spec: its `manifestFloor`
+ * and, for a `<=x` spec whose bound `x` is an exact version (always admitted by
+ * `<=x`), `x` too. OSV queries are single-version lookups, and with no lockfile a
+ * `<=x` range installs a version at or near `x`, which the lowest admitted
+ * version (`0.0.0`) does not stand in for. `<x` excludes `x`, so it gets no
+ * extra query. Empty when the spec has no floor. Only the query callers use
+ * this; the dependency-age proof floor stays on `manifestFloor`.
+ */
+function manifestQueryVersions(versionSpec: string): string[] {
+  const floor = manifestFloor(versionSpec);
+  if (floor === null) return [];
+  const bound = /^<=\s*(v?\d\S*)$/.exec(versionSpec.trim())?.[1];
+  const exact = bound !== undefined ? semver.valid(bound) : null;
+  return exact === null ? [floor] : [floor, exact];
 }
 
 /**
@@ -435,23 +466,23 @@ export function repoWideNpmEntries(
   const merged = mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
   const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } = merged;
   const chain = unionNpmDeps(manifests)
-    .map(({ name, versionSpec }) => {
+    .flatMap(({ name, versionSpec }): DepEntry[] => {
       // Prefer the lockfile-resolved version (exact installed version) to
       // avoid false positives from the manifest floor. Fall back to the
       // floor-strip when neither lockfile is present or lists this dep;
       // full rationale for what counts as a "usable" floor (exact vs.
       // range-derived), the ambiguous last-resort, and the one documented
       // drop case is in the doc comment above `collectDeps`. Mechanics: the
-      // usable floor is `manifestFloor` (above); only when it yields nothing
-      // does the `ambiguous` map (or, failing that, an empty string that drops
-      // the dep) apply. D-006 ordering is unchanged: resolved > usable floor
-      // (exact or range-derived) > ambiguous.
-      const version =
-        lockfileResolutions.get(name) ??
-        manifestFloor(versionSpec) ??
-        ambiguousLockfileResolutions.get(name) ??
-        '';
-      return { name, version };
+      // usable floor is `manifestFloor` (above, plus the `<=x` bound from
+      // `manifestQueryVersions`); only when it yields nothing does the
+      // `ambiguous` map (or, failing that, an empty string that drops the dep)
+      // apply. D-006 ordering is unchanged: resolved > usable floor (exact or
+      // range-derived) > ambiguous.
+      const resolvedVersion = lockfileResolutions.get(name);
+      if (resolvedVersion !== undefined) return [{ name, version: resolvedVersion }];
+      const floors = manifestQueryVersions(versionSpec);
+      if (floors.length > 0) return floors.map((version) => ({ name, version }));
+      return [{ name, version: ambiguousLockfileResolutions.get(name) ?? '' }];
     })
     .filter(({ version }) => /\d/.test(version));
 
@@ -482,8 +513,7 @@ export function repoWideNpmEntries(
           ? semver.satisfies(resolvedVersion, versionSpec)
           : observed.some((version) => semver.satisfies(version, versionSpec));
       if (!satisfied) {
-        const floor = manifestFloor(versionSpec);
-        if (floor !== null) push({ name, version: floor });
+        for (const version of manifestQueryVersions(versionSpec)) push({ name, version });
       }
       if (resolvedVersion !== undefined) continue;
     }
@@ -726,8 +756,10 @@ function raisedNpmVersion(
  * query: when `semver.validRange(versionSpec)` succeeds (`^19`, `~1.2`,
  * `2.x`, `>=1.2` — ordinary ranges whose floor-strip merely isn't a full
  * x.y.z), `semver.minVersion(versionSpec)` supplies the range's lowest
- * version (`^19` -> `19.0.0`) as the query version — more precise than the
- * pre-task raw-floor value would have been for the same range. Only when
+ * version (`^19` -> `19.0.0`) as the query version; a spec that opens with
+ * `<`, `<=` or `>` always takes this path, never the stripped bound
+ * (`manifestFloor`). This is more precise than the pre-task raw-floor value
+ * would have been for the same range. Only when
  * NEITHER the exact-floor nor the range path yields anything (a git ref, a
  * malformed/unsupported `npm:` alias, or a genuinely version-free spec like
  * `*`/`latest`/`workspace:*`) does collection fall back to the dep's
