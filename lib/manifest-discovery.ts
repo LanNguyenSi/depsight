@@ -1255,11 +1255,27 @@ export async function fetchNpmManifests(
 //
 // The repo-wide chain (`mergeLockfileResolutions`, then the manifest floor,
 // then `ambiguous`) stays the baseline for every dependency. On top of it, for
-// one well-understood repo shape, the scan also asks what a manifest's OWN
-// lockfile installs. The shape: several separate projects, each with its own
-// package.json and package-lock.json (`frontend/` and `backend/`). When a name
-// resolves to different versions in different projects it drops out of
-// `resolved` and is queried at a manifest floor that no project installs.
+// two well-understood repo shapes, the scan also asks what the lockfile that
+// installs a manifest holds for it. The first shape: several separate
+// projects, each with its own package.json and package-lock.json (`frontend/`
+// and `backend/`). The second: an npm workspace, a root package.json with a
+// `workspaces` key whose own package-lock.json installs its member packages.
+// When a name resolves to different versions in different projects (or in
+// different places of one lockfile) it drops out of `resolved` and is queried
+// at a manifest floor that nothing may install.
+//
+// Workspace membership comes from the root's lockfile, never from the
+// `workspaces` patterns, which are not evaluated (`provenWorkspaceFolders`).
+// The lockfile (lockfileVersion 2 or 3) must record the root's `workspaces`
+// value unchanged in its root entry, as npm writes it (a lockfile written for
+// other patterns is stale). A manifest below the root is a member when the
+// lockfile has an entry for its folder and a `node_modules/<its name>` entry
+// with `link: true` that resolves to exactly that folder. Every `link` entry
+// of the lockfile must resolve to such a member folder, so no linked package
+// escapes the check. A member resolves a dependency from its own
+// `<folder>/node_modules/<name>` entry, else from the root's
+// `node_modules/<name>` (`workspaceMemberLockKey`); an entry under a folder
+// between the two is not followed.
 //
 // What a removal guarantees: no under-reporting for an install that honours the
 // lockfiles, that is `npm ci`, or `npm install` on a lockfile that has no
@@ -1282,6 +1298,12 @@ export async function fetchNpmManifests(
 //     `node_modules/<name>` only, never an ancestor's lockfile) and the manifest
 //     is narrow for it (the declaration rules below). Declarations in `dependencies`,
 //     `devDependencies`, `optionalDependencies` and `peerDependencies` all add.
+//     In a workspace (the root and its members) only `dependencies` and
+//     `devDependencies` declarations are narrow, the root's lockfile must prove
+//     the membership (above), and a member is narrow for a name only when the
+//     root's `node_modules/<name>` is what it resolves: a copy under its own
+//     folder or a folder between keeps the floor, so members that install
+//     different versions of a name keep it as well.
 //   - REMOVAL. The baseline entry of a name is removed only when everything the
 //     scan reads is positively accounted for. `narrowDropSafe` holds when ALL of
 //     these hold:
@@ -1292,7 +1314,14 @@ export async function fetchNpmManifests(
 //         `.pnpmfile.cjs`, and no manifest has a `packageManager` or a
 //         `devEngines.packageManager` field (each can change what is installed
 //         without the package-lock.json saying so);
-//       * every manifest the scan reads is locked: its own-directory
+//       * every manifest the scan reads is locked. A manifest below a
+//         `workspaces` root is locked only as a proven member: the root's
+//         lockfile lists each of its declarations at the entry the member
+//         resolves it from, with the same range rules as below, and the member
+//         has no `overrides` (npm ignores a member's overrides; this scan does
+//         not vouch for them). A manifest below a root that does not prove it,
+//         below two roots, or below an unread package.json is not locked. Any
+//         other manifest: its own-directory
 //         package-lock.json was fetched and parsed, has a known shape
 //         (lockfileVersion 2 or 3 with a `packages` map), lists every key of the manifest's `dependencies`, `devDependencies`,
 //         `optionalDependencies` and `peerDependencies` (a peer that
@@ -1309,7 +1338,11 @@ export async function fetchNpmManifests(
 //         unreadable lockfile means the project installs fresh, which nothing
 //         here can see. Local package names are not exempt: only the same names
 //         the baseline leaves out would qualify, and a stale lockfile that lacks
-//         one still installs its dependencies fresh;
+//         one still installs its dependencies fresh. In a workspace a
+//         `link: true` entry satisfies a declared range only when it resolves
+//         to a proven member whose package.json `version` the range admits and
+//         the lockfile's entry for that folder has the same version (npm reads
+//         a linked member's version from its package.json);
 //       * every manifest declaring the name (`dependencies`, `devDependencies`,
 //         `optionalDependencies`, `peerDependencies`, `bundleDependencies`) is
 //         narrow for it;
@@ -1345,13 +1378,22 @@ export async function fetchNpmManifests(
 // addition never removes anything. Optional, peer and bundled declarations block
 // removals; only a bundled one never adds. Nothing else removes or replaces an entry. A
 // manifest with a lockfileVersion 1 lockfile is not narrow and keeps the
-// baseline chain. No pattern is built from repository content, and
-// `workspaces` is only tested for presence. Whatever a check cannot establish (a read or parse error, an
+// baseline chain. No pattern is built from repository content: `workspaces` is
+// tested for presence and compared, as a whole value, with the copy in the
+// root's lockfile, never evaluated. Whatever a check cannot establish (a read or parse error, an
 // unknown shape, an exhausted budget) keeps the baseline entry: under-reporting
 // is worse than over-reporting. "Installed nowhere" means in no package-lock.json
-// the scan reads; vendored, build and fixture directories are not read. Npm
-// workspaces, repos with another package manager's lockfile and repos whose
-// tree could not be read completely keep the baseline result.
+// the scan reads; vendored, build and fixture directories are not read, and a
+// workspace member in one of them is not checked against its package.json (its
+// lockfile entries still count as installed). A lockfile edited by hand so
+// that its member entries disagree with its own `workspaces` patterns is
+// outside the guarantee. A workspace manifest the root lockfile does not prove
+// (a lockfileVersion 1, missing or unreadable root lockfile, a `workspaces`
+// value the lockfile does not record, a member it does not list, a member that
+// is a workspace root itself) adds nothing, and one below the root keeps every
+// baseline entry of the repository. Repos with another package
+// manager's lockfile and repos whose tree could not be read completely keep
+// the baseline result.
 
 /** What `resolveNarrowNpm` reads. The raw files are the ones the fetchers read anyway. */
 export interface NarrowNpmInputs {
@@ -1628,6 +1670,117 @@ function nameFromPackagesKey(key: string): string | undefined {
   return i === -1 ? undefined : key.slice(i + NODE_MODULES.length);
 }
 
+// ---- npm workspaces: membership from the root lockfile ----------------------
+
+// A `workspaces` value npm reads: a non-empty array of strings, or an object
+// whose `packages` is one. npm refuses any other shape, and writes an empty one
+// into no lockfile, so nothing else can be recorded.
+function hasWorkspacePatterns(value: unknown): boolean {
+  const list = Array.isArray(value) ? value : isPlainObject(value) ? ownValue(value, 'packages') : undefined;
+  return Array.isArray(list) && list.length > 0 && list.every((p) => typeof p === 'string');
+}
+
+// A folder path relative to a workspace root, as npm writes it into a
+// lockfile: `/`-separated segments, none empty, `.`, `..` or `node_modules`,
+// and no backslash. Anything else is never a proven member folder.
+function isMemberFolder(folder: string): boolean {
+  if (folder === '' || folder.includes('\\')) return false;
+  return folder
+    .split('/')
+    .every((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment.toLowerCase() !== 'node_modules');
+}
+
+// A package name that addresses exactly one `node_modules/<name>` entry: one
+// segment not starting with `@`, or `@scope/` and one segment; no segment
+// empty or starting with a dot, none `node_modules`, no backslash.
+function isLinkablePackageName(name: unknown): name is string {
+  if (typeof name !== 'string' || name.includes('\\')) return false;
+  const segment = (s: string) => s !== '' && !s.startsWith('.') && s.toLowerCase() !== 'node_modules';
+  const parts = name.split('/');
+  if (parts.length === 1) return segment(parts[0]) && !parts[0].startsWith('@');
+  return parts.length === 2 && parts[0].startsWith('@') && segment(parts[0].slice(1)) && segment(parts[1]);
+}
+
+// Does the lockfile link `node_modules/<name>` to the package folder `folder`?
+// The folder has an entry of its own (not a link, not extraneous, its `name`, if
+// written, equal to `name`), and `node_modules/<name>` is a `link: true` entry,
+// not extraneous, whose `resolved` is exactly `folder` (npm writes it relative
+// and with `/`).
+function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown): boolean {
+  if (!isMemberFolder(folder) || !isLinkablePackageName(name)) return false;
+  const target = ownValue(packages, folder);
+  if (!isPlainObject(target) || target.link !== undefined || target.extraneous) return false;
+  if (target.name !== undefined && target.name !== name) return false;
+  const link = ownValue(packages, `${NODE_MODULES}${name}`);
+  return isPlainObject(link) && link.link === true && !link.extraneous && link.resolved === folder;
+}
+
+/**
+ * Pure: which candidate manifests below a workspace root does the root's own
+ * lockfile prove to be members? `rootWorkspaces` is the root package.json's
+ * `workspaces` value, `rootLock` its parsed package-lock.json, and each
+ * candidate is a package.json below the root (its folder relative to the root,
+ * its `name`). Returns the proven folders, or null when the lockfile proves
+ * nothing at all:
+ *
+ *   - the lockfile is lockfileVersion 2 or 3 with a `packages` map and a root
+ *     entry `""`;
+ *   - `rootWorkspaces` is a shape npm reads (a non-empty array of strings, or
+ *     `{ packages: [...] }`) and the root entry's `workspaces` is the same value
+ *     (compared as JSON text): npm copies it there when it writes the
+ *     lockfile, so a lockfile written for other patterns is stale;
+ *   - every entry with a `link` value is `link: true` and resolves to a proven
+ *     folder, so no linked package is left unread (a link outside the root,
+ *     to a folder whose package.json the scan did not read, or to the root);
+ *   - at most `MAX_LOCK_INDEX_NODES` entries.
+ *
+ * A candidate is proven when the lockfile has an entry for its folder and
+ * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`).
+ * The patterns are never evaluated and nothing is built from them.
+ */
+export function provenWorkspaceFolders(
+  rootWorkspaces: unknown,
+  rootLock: unknown,
+  candidates: ReadonlyArray<{ folder: string; name: unknown }>,
+): Set<string> | null {
+  if (!isPlainObject(rootLock)) return null;
+  const version = rootLock.lockfileVersion;
+  const packages = rootLock.packages;
+  if ((version !== 2 && version !== 3) || !isPlainObject(packages)) return null;
+  const rootEntry = ownValue(packages, '');
+  if (!isPlainObject(rootEntry)) return null;
+  if (!hasWorkspacePatterns(rootWorkspaces)) return null;
+  if (JSON.stringify(ownValue(rootEntry, 'workspaces')) !== JSON.stringify(rootWorkspaces)) return null;
+  const proven = new Set<string>();
+  for (const { folder, name } of candidates) {
+    if (lockfileLinksFolder(packages, folder, name)) proven.add(folder);
+  }
+  let visited = 0;
+  for (const entry of Object.values(packages)) {
+    if (++visited > MAX_LOCK_INDEX_NODES) return null;
+    if (!isPlainObject(entry) || !entry.link) continue;
+    if (entry.link !== true || typeof entry.resolved !== 'string' || !proven.has(entry.resolved)) return null;
+  }
+  return proven;
+}
+
+/**
+ * Pure: the `packages` key npm resolves the dependency `key` of the workspace
+ * member at `folder` from (both relative to the root's lockfile): the member's
+ * own `<folder>/node_modules/<key>` when the lockfile has it, else the root's
+ * `node_modules/<key>`. Null when a folder between them has a
+ * `<parent>/node_modules/<key>` entry (a member nested in another member):
+ * this scan does not follow such a chain.
+ */
+export function workspaceMemberLockKey(packages: Record<string, unknown>, folder: string, key: string): string | null {
+  const own = `${folder}/${NODE_MODULES}${key}`;
+  if (hasOwn(packages, own)) return own;
+  for (let i = folder.lastIndexOf('/'); i > 0; i = folder.lastIndexOf('/', i - 1)) {
+    if (hasOwn(packages, `${folder.slice(0, i)}/${NODE_MODULES}${key}`)) return null;
+  }
+  return `${NODE_MODULES}${key}`;
+}
+
 /**
  * Index what the fetched lockfiles install, in one pass: top level, nested
  * under another package, aliased installs, and the legacy `dependencies`
@@ -1769,15 +1922,23 @@ function indexHas(index: InstalledIndex, name: string, version: string): boolean
   return normalised !== null && versions.has(normalised);
 }
 
-// Does the manifest's own lockfile list this declaration as a top-level entry?
-// A plain semver range additionally needs an installed, registry version (no
-// link, no alias under another name) that satisfies it; any other spec (git,
-// `file:`, tag, alias) only needs the entry to exist.
-function lockfileListsDeclaration(lock: NarrowLockfile, decl: NarrowDeclaration): boolean {
-  const entry = ownValue(lock.packages, `node_modules/${decl.key}`);
+// Does the lockfile list this declaration at `entryKey` (the manifest's own
+// lockfile's top-level `node_modules/<key>`, or the entry a workspace member
+// resolves it from)? A plain semver range additionally needs an installed,
+// registry version (no alias under another name) that satisfies it, or a
+// `link: true` entry that `linkSatisfies` accepts (none outside a proven
+// workspace); any other spec (git, `file:`, tag, alias) only needs the entry
+// to exist.
+function lockfileListsDeclaration(
+  lock: NarrowLockfile,
+  decl: NarrowDeclaration,
+  entryKey: string = `node_modules/${decl.key}`,
+  linkSatisfies: (entry: JsonObject, decl: NarrowDeclaration) => boolean = () => false,
+): boolean {
+  const entry = ownValue(lock.packages, entryKey);
   if (!isPlainObject(entry)) return false;
   if (!isPlainSemverRange(decl.spec)) return true;
-  if (entry.link === true) return false;
+  if (entry.link === true) return linkSatisfies(entry, decl);
   if (entry.name !== undefined && entry.name !== decl.key) return false;
   return satisfiesLikeNpm(String(entry.version), decl.spec);
 }
@@ -1876,59 +2037,149 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     manifests.map((m) => m.data.name).filter((n): n is string => typeof n === 'string' && n !== ''),
   );
 
+  // How each manifest is installed (`governanceOf`). Standalone: the manifest
+  // and every package.json in a directory above it were read and parsed, and
+  // none has a `workspaces` key (any value); its own lockfile installs it.
+  // Root: it has a `workspaces` key and nothing above it does; its own lockfile
+  // installs it, and `members` are the members that lockfile proves (null when
+  // it proves none, `provenWorkspaceFolders`). Member: the one `workspaces` root
+  // above it proves it; the root's lockfile installs it. Unknown: anything else
+  // (an unread package.json at or above it, two `workspaces` keys at or above
+  // it, a root that does not prove it). The ancestors come from the manifest
+  // list, which is the whole tree here (not capped).
+  type Governance =
+    | { kind: 'standalone' }
+    | { kind: 'root'; members: Map<string, NarrowManifest> | null }
+    | { kind: 'member'; root: NarrowManifest; folder: string; members: Map<string, NarrowManifest> }
+    | { kind: 'unknown' };
+  const UNKNOWN: Governance = { kind: 'unknown' };
+
+  // The manifests with a `workspaces` key in `dir` or a directory above it, or
+  // null when a package.json there was not read and parsed.
+  const workspaceRootsAt = (dir: string): NarrowManifest[] | null => {
+    const roots: NarrowManifest[] = [];
+    for (const path of manifestPaths) {
+      if (!isSelfOrAncestorDir(dirOf(path), dir)) continue;
+      const ancestor = manifestByPath.get(path);
+      if (ancestor == null) return null;
+      if (hasOwn(ancestor.data, 'workspaces')) roots.push(ancestor);
+    }
+    return roots;
+  };
+
+  // A member's folder relative to its root's directory.
+  const folderBelow = (rootDir: string, dir: string): string => (rootDir === '' ? dir : dir.slice(rootDir.length + 1));
+
+  // The members a root's own lockfile proves, by folder; computed once per root.
+  const membersByRoot = new Map<string, Map<string, NarrowManifest> | null>();
+  const provenMembersOf = (root: NarrowManifest): Map<string, NarrowManifest> | null => {
+    if (membersByRoot.has(root.path)) return membersByRoot.get(root.path) ?? null;
+    let members: Map<string, NarrowManifest> | null = null;
+    const lock = lockByPath.get(ownLockfilePath(root.dir));
+    if (lock) {
+      const below = manifests.filter((m) => m !== root && isSelfOrAncestorDir(root.dir, m.dir));
+      const candidates = below.map((m) => ({ folder: folderBelow(root.dir, m.dir), name: m.data.name, manifest: m }));
+      const folders = provenWorkspaceFolders(root.data.workspaces, lock.data, candidates);
+      if (folders) members = new Map(candidates.filter((c) => folders.has(c.folder)).map((c) => [c.folder, c.manifest]));
+    }
+    membersByRoot.set(root.path, members);
+    return members;
+  };
+
+  const governanceByPath = new Map<string, Governance>();
+  const governanceOf = (m: NarrowManifest): Governance => {
+    const cached = governanceByPath.get(m.path);
+    if (cached) return cached;
+    let governance: Governance = UNKNOWN;
+    const roots = workspaceRootsAt(m.dir);
+    if (roots !== null && roots.length === 0) governance = { kind: 'standalone' };
+    else if (roots !== null && roots.length === 1) {
+      const root = roots[0];
+      const members = provenMembersOf(root);
+      if (root === m) governance = { kind: 'root', members };
+      else {
+        const folder = folderBelow(root.dir, m.dir);
+        if (members !== null && members.get(folder) === m) governance = { kind: 'member', root, folder, members };
+      }
+    }
+    governanceByPath.set(m.path, governance);
+    return governance;
+  };
+
+  // The lockfile that installs M: its own, or its workspace root's.
+  const governingLock = (m: NarrowManifest, g: Governance): NarrowLockfile | null => {
+    if (g.kind === 'unknown') return null;
+    const dir = g.kind === 'member' ? g.root.dir : m.dir;
+    return lockByPath.get(ownLockfilePath(dir)) ?? null;
+  };
+
+  // A `link: true` entry for a declaration with a plain range, in a workspace
+  // whose root lockfile proves `members`: it must resolve to a member of that
+  // name whose package.json version (which npm reads for a linked member) the
+  // range admits, and the lockfile's entry for the member folder must carry the
+  // same version.
+  const linkToMemberSatisfies =
+    (lock: NarrowLockfile, members: Map<string, NarrowManifest> | null) =>
+    (entry: JsonObject, decl: NarrowDeclaration): boolean => {
+      if (members === null || typeof entry.resolved !== 'string') return false;
+      const member = members.get(entry.resolved);
+      if (!member || member.data.name !== decl.key) return false;
+      const version = member.data.version;
+      if (typeof version !== 'string' || semver.valid(version) === null) return false;
+      const folderEntry = ownValue(lock.packages, entry.resolved);
+      if (!isPlainObject(folderEntry) || folderEntry.version !== version) return false;
+      return satisfiesLikeNpm(version, decl.spec);
+    };
+
   // Every manifest the scan reads is locked. A manifest that was not read and
-  // parsed is not (it could declare any name). Its own-directory package-lock.json
-  // was fetched and parsed, and lists every key of the manifest's
-  // dependencies, devDependencies and optionalDependencies at the top level with a
-  // version that satisfies the declared range (see `lockfileListsDeclaration`).
+  // parsed is not (it could declare any name), nor is one whose governance is
+  // unknown. Its governing lockfile (its own, or for a workspace member the
+  // root's) was fetched and parsed, and lists every key of the manifest's
+  // dependencies, devDependencies, optionalDependencies and peerDependencies
+  // with a version that satisfies the declared range (see
+  // `lockfileListsDeclaration`): at the top level of an own lockfile, at the
+  // entry a member resolves it from (`workspaceMemberLockKey`) in the root's.
   // A project without such a lockfile installs fresh, transitively or through
-  // `overrides`, and nothing here can see what. With a single manifest that is
-  // not locked no baseline entry is removed. (Additions are not gated by this:
-  // they never remove anything. The known-shape requirement is enforced for every
-  // fetched lockfile, this one included, by `buildInstalledIndex`.) Computed on
-  // first use.
+  // `overrides`, and nothing here can see what. A member with `overrides` is not
+  // locked: npm ignores them, and this scan does not vouch for them. With a
+  // single manifest that is not locked no baseline entry is removed. (Additions
+  // are not gated by this: they never remove anything. The known-shape
+  // requirement is enforced for every fetched lockfile, this one included, by
+  // `buildInstalledIndex`.) Computed on first use.
+  const manifestLocked = (m: NarrowManifest): boolean => {
+    const g = governanceOf(m);
+    const lock = governingLock(m, g);
+    if (!lock) return false;
+    if (g.kind === 'member') {
+      if (hasOwn(m.data, 'overrides')) return false;
+      const linkSatisfies = linkToMemberSatisfies(lock, g.members);
+      return m.declarations.every((d) => {
+        if (!d.lockRequired) return true;
+        const key = workspaceMemberLockKey(lock.packages, g.folder, d.key);
+        return key !== null && lockfileListsDeclaration(lock, d, key, linkSatisfies);
+      });
+    }
+    const linkSatisfies = linkToMemberSatisfies(lock, g.kind === 'root' ? g.members : null);
+    return (
+      m.overridesPlain &&
+      lockfileHonoursOverrides(lock, m.overrides) &&
+      m.declarations.every((d) => !d.lockRequired || lockfileListsDeclaration(lock, d, undefined, linkSatisfies))
+    );
+  };
   let everyManifestLockedMemo: boolean | undefined;
   const everyManifestLocked = (): boolean => {
     if (everyManifestLockedMemo === undefined) {
       everyManifestLockedMemo = manifestPaths.every((path) => {
         const m = manifestByPath.get(path);
-        if (!m) return false;
-        const lock = lockByPath.get(ownLockfilePath(m.dir));
-        if (!lock) return false;
-        return (
-          m.overridesPlain &&
-          lockfileHonoursOverrides(lock, m.overrides) &&
-          m.declarations.every(
-            (d) => !d.lockRequired || lockfileListsDeclaration(lock, d),
-          )
-        );
+        return m != null && manifestLocked(m);
       });
     }
     return everyManifestLockedMemo;
   };
 
-  // Standalone: the manifest and every package.json in a directory above it were
-  // read and parsed, and none has a `workspaces` key (any value). The ancestors
-  // come from the manifest list, which is the whole tree here (not capped).
-  const standaloneByPath = new Map<string, boolean>();
-  const isStandalone = (m: NarrowManifest): boolean => {
-    const cached = standaloneByPath.get(m.path);
-    if (cached !== undefined) return cached;
-    const standalone = manifestPaths.every((path) => {
-      if (!isSelfOrAncestorDir(dirOf(path), m.dir)) return true;
-      const ancestor = manifestByPath.get(path);
-      return ancestor != null && !hasOwn(ancestor.data, 'workspaces');
-    });
-    standaloneByPath.set(m.path, standalone);
-    return standalone;
-  };
-
-  // The version M's own-directory lockfile installs for `name` at the
-  // top-level key, or null.
-  const ownLockVersion = (m: NarrowManifest, name: string): string | null => {
-    const lock = lockByPath.get(ownLockfilePath(m.dir));
-    if (!lock) return null;
-    const entry = ownValue(lock.packages, `node_modules/${name}`);
+  // The version `lock` installs for `name` at `entryKey`, or null.
+  const lockVersionAt = (lock: NarrowLockfile, entryKey: string, name: string): string | null => {
+    const entry = ownValue(lock.packages, entryKey);
     if (!isPlainObject(entry)) return null;
     // A real semver version: the loose range check below also accepts forms
     // such as `07.3.7`, which are no version to query.
@@ -1939,16 +2190,29 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   };
 
   // The version M installs for the dependency it declares as `decl` when M is
-  // narrow for it, else null. Narrow means standalone (above), a non-alias
-  // declaration with a plain semver range, an own lockfile entry (above), and an
-  // installed version that satisfies the declared range.
+  // narrow for it, else null. Narrow means: a non-alias declaration with a plain
+  // semver range, and an installed version at the top-level key of the
+  // governing lockfile (above) that satisfies it. Standalone: any declaring
+  // field. Workspace root or member: `dependencies` and `devDependencies` only,
+  // the root's lockfile proves the membership, and a member resolves the name
+  // from the root's top-level entry (a copy under its own folder, or a folder
+  // between, keeps the floor).
   const narrowVersion = (m: NarrowManifest, decl: NarrowDeclaration): string | null => {
-    if (!isStandalone(m)) return null;
+    const g = governanceOf(m);
+    if (g.kind === 'unknown') return null;
     if (decl.aliasForm) return null; // the lockfile key is the local alias, not the name
+    const topKey = `${NODE_MODULES}${decl.key}`;
+    if (g.kind !== 'standalone') {
+      if (decl.field !== 'dependencies' && decl.field !== 'devDependencies') return null;
+      if (g.kind === 'root' && g.members === null) return null;
+    }
+    const lock = governingLock(m, g);
+    if (!lock) return null;
+    if (g.kind === 'member' && workspaceMemberLockKey(lock.packages, g.folder, decl.key) !== topKey) return null;
     const range = decl.spec.trim();
     // A spec that is no semver range (git, file:, tag, workspace:...) is
     // satisfied by nothing, so such a declaration is never narrow.
-    const version = ownLockVersion(m, decl.key);
+    const version = lockVersionAt(lock, topKey, decl.key);
     if (version === null) return null;
     return satisfiesLikeNpm(version, range) ? version : null;
   };
