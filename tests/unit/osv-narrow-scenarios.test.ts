@@ -23,6 +23,15 @@
  * In the declarer-floor block at the end, `base` is the result before the
  * declarer floors (the narrow override included), not the pre-narrow code.
  *
+ * `WIDENED` lists, per scenario, the pairs added for a name with no single
+ * resolution (the lockfiles disagree, or none records it) that a plain-range
+ * declarer declares: every version any lockfile records for the name (nested
+ * transitive copies included, another package installs them) and the floor of
+ * every plain-range declarer, except that for a name with observed versions a
+ * declarer whose range some observed version satisfies adds no floor. They come
+ * on top of base - dropped + added and are listed apart so the older
+ * expectations stay readable; a scenario not listed gains nothing.
+ *
  * The invariant checked for every scenario: no base entry is lost unless it is
  * listed as dropped.
  */
@@ -130,7 +139,7 @@ const EXPECTED: Record<string, Expectation> = {
     base: ['foo@1.0.0', 'glob@7.0.0'],
     dropped: ['glob@7.0.0'],
     added: ['glob@7.2.3'],
-    why: 'single project; glob installed at 7.2.3 (top level) and 7.1.0 (nested under foo); floor 7.0.0 installed nowhere; the nested copy is a transitive install and is queried neither before nor after',
+    why: 'single project; glob installed at 7.2.3 (top level) and 7.1.0 (nested under foo); floor 7.0.0 installed nowhere; the nested copy under foo (7.1.0) is not a narrow addition; it is queried through WIDENED, as a lockfile copy of a declared name without a single resolution that another package installs',
   }),
   depAbsentFromOwnLockButOtherManifestResolves: narrow({
     base: ['lodash@4.0.0'],
@@ -709,6 +718,18 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.6', 'vite@7.3.7'],
     why: 'b/ declares vite as peer and dev dependency (the usual plugin shape): 7.3.6 added once; floor 7.3.5 installed nowhere',
   }),
+  midPeerOnlyOwnLock: narrow({
+    base: ['ms@2.1.3'],
+    dropped: [],
+    added: ['vite@7.3.6'],
+    why: 'vite is declared only as a peer: the chain holds no entry for it and no declarer widens it, so the narrow override alone adds the version its own lockfile installs',
+  }),
+  midOptionalOnlyOwnLock: narrow({
+    base: ['ms@2.1.3'],
+    dropped: [],
+    added: ['vite@7.3.6'],
+    why: 'the same for an optionalDependencies declaration',
+  }),
   midPeerOnLocalPackage: narrow({
     base: ['vite@7.3.7'],
     dropped: [],
@@ -745,8 +766,6 @@ const EXPECTED: Record<string, Expectation> = {
     why: 'two declarers without a lockfile, both below the repo-wide 8.3.5: both floors are queried',
   }),
   declarerRangesWithoutAnyLock: same(['vite@6.0.0']),
-  // Documented residual, not a feature: an ambiguous name is answered by the floor
-  // of the lowest range only, so root's installed 8.3.5 and 7.3.7 are never queried.
   declarerRangesBesideAmbiguousYarnLock: same(['vite@6.0.0']),
   latestDeclarerBesideLockedRange: narrow({
     base: ['vite@8.3.0', 'vite@8.3.5'],
@@ -782,9 +801,93 @@ const EXPECTED: Record<string, Expectation> = {
   }),
 };
 
+// Pairs added for a name with no single resolution beside a plain-range declarer
+// (see the header). Generated from the measured difference to the code before
+// the declarer floors (the run-base query sets); every pair was then checked to
+// name a version that appears in the scenario's own files (a declared range's
+// floor or a lockfile entry), and the run-base result was checked to be
+// contained in the new one for every scenario.
+const WIDENED: Record<string, string[]> = {
+  stalePkgLockPlusYarnLockSameDir: ['lodash@4.17.15', 'lodash@4.17.21'],
+  yarnSubprojectUnderNpmRoot: ['lodash@4.17.15', 'lodash@4.17.21'],
+  v1SubprojectPlusV3Subproject: ['lodash@4.17.15'],
+  yarnSubprojectPlusNpmSubproject: ['lodash@4.17.15', 'lodash@4.17.21'],
+  transitiveNestedCopy: ['glob@7.1.0'],
+  workspaceRoot: ['lodash@4.17.15', 'lodash@4.17.21'],
+  v1RootLockAndV3Sub: ['lodash@4.17.10'],
+  staleMemberLockInWorkspace: ['lodash@4.17.15', 'lodash@4.17.21'],
+  aliasAndDirectTwoVersions: ['lodash@4.17.15'],
+  sameNameInDepsAndDevDepsNoLock: ['lodash@4.17.20'],
+  coveringRootWithoutLockGoesToChain: ['lodash@4.17.15', 'lodash@4.17.20'],
+  workspaceDoesNotCoverMember: ['lodash@4.17.15', 'lodash@9.9.9'],
+  nonMemberNestedInsideMember: ['lodash@4.17.10', 'lodash@4.17.21'],
+  nestedWorkspaceRootStaleMemberLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  negatedWorkspaceMember: ['lodash@4.17.10', 'lodash@4.17.21'],
+  doublestarObjectFormWorkspaces: ['lodash@4.17.15', 'lodash@4.17.21'],
+  twoNestedCoveringRootsNearestWins: ['lodash@4.17.10', 'lodash@4.17.15'],
+  nearestCoveringRootWithoutLockStops: ['lodash@4.17.10', 'lodash@4.17.21'],
+  unevaluableWorkspacePatternGoesToChain: ['lodash@4.17.15', 'lodash@4.17.21'],
+  dotDirNotAWorkspaceMember: ['lodash@4.17.10', 'lodash@4.17.21'],
+  yarnWorkspaceRootStaleMemberPkgLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  rootYarnLockAndSubPkgLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  yarnLockInAncestorDirWithoutManifest: ['lodash@4.17.20', 'lodash@4.17.21'],
+  yarnLockInSiblingDirDoesNotVeto: ['lodash@4.17.15', 'lodash@4.17.21'],
+  scopedDepAndScopedAlias: ['@babel/core@7.1.2'],
+  blindSameDirPkgLockPlusYarnLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  blindSubdirPkgLockPlusYarnLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  blindAncestorYarnLockVetoes: ['lodash@4.17.15', 'lodash@4.17.21'],
+  blindNoYarnLockPerManifest: ['lodash@4.17.15', 'lodash@4.17.21'],
+  nonMemberNestedUnderMemberLock: ['lodash@4.17.10', 'lodash@4.17.21'],
+  nestedWorkspaceRootMemberStaleLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  rootManifestUnreadableMemberStaleOwnLock: ['lodash@4.17.15', 'lodash@4.17.21'],
+  negationCancelledByLaterPositive: ['lodash@4.17.15', 'lodash@4.17.21'],
+  negationThenExactReinclude: ['lodash@4.17.15', 'lodash@4.17.21'],
+  pnpmLockPlusTwoStalePkgLocks: ['lodash@4.17.10', 'lodash@4.17.21'],
+  blindYarnLockReadFailsWithConflict: ['lodash@4.17.11', 'lodash@4.17.21'],
+  observedYarnLockReadFails: ['lodash@4.17.11', 'lodash@4.17.21'],
+  workspaceRootNestedInOuterRoot: ['lodash@4.17.15', 'lodash@4.17.20', 'lodash@4.17.21'],
+  dotSlashWorkspacePattern: ['lodash@4.17.15', 'lodash@4.17.21'],
+  rootV1LockWorkspaceMemberV3: ['lodash@4.17.15', 'lodash@4.17.21'],
+  workspacesObjectNohoistOnly: ['lodash@4.17.15', 'lodash@4.17.21'],
+  bunLockPlusTwoStalePkgLocks: ['lodash@4.17.10', 'lodash@4.17.21'],
+  noRootBackendVitePlusFrontendVite: ['vite@8.3.5'],
+  negTruncatedTree: ['vite@7.3.7', 'vite@8.3.5'],
+  negManifestListCapped: ['vite@7.3.7', 'vite@8.3.5'],
+  negYarnLockElsewhere: ['vite@7.3.7', 'vite@8.3.5'],
+  negPnpmLockElsewhere: ['vite@7.3.7', 'vite@8.3.5'],
+  negBunLockElsewhere: ['vite@7.3.7', 'vite@8.3.5'],
+  negBunLockbElsewhere: ['vite@7.3.7', 'vite@8.3.5'],
+  negShrinkwrapElsewhere: ['vite@7.3.7', 'vite@8.3.5'],
+  negWorkspacesKeyInAncestor: ['vite@7.3.7', 'vite@8.3.5'],
+  negWorkspacesKeyInSelf: ['vite@7.3.7'],
+  negAncestorManifestReadError: ['vite@7.3.7', 'vite@8.3.5'],
+  negAncestorManifestUnparsable: ['vite@7.3.7', 'vite@8.3.5'],
+  negDeclarerLockV1: ['vite@7.3.7'],
+  negDeclarerLockOnlyNestedKey: ['vite@7.3.7'],
+  negDeclarationIsAlias: ['vite@7.3.7'],
+  negLockVersionOutsideDeclaredRange: ['vite@7.0.1'],
+  craftedWorkspacesPattern: ['vite@7.3.7', 'vite@8.3.5'],
+  negStaleLockRangeUnsatisfied: ['vite@7.3.6'],
+  negOverridesStaleLock: ['vite@7.3.6'],
+  overridesReflectedInLock: ['vite@7.3.6'],
+  negPrereleaseStaleLock: ['vite@7.4.0-beta.1'],
+  negLinkEntryWithVersion: ['vite@7.3.7'],
+  negDenoLock: ['vite@7.3.7', 'vite@8.3.5'],
+  midBundledDeclarer: ['vite@7.3.6'],
+  midPeerOutOfRange: ['vite@7.1.0'],
+  midOptionalOutOfRange: ['vite@7.1.0'],
+  midPeerAlias: ['vite@7.3.6'],
+  midOptionalAlias: ['vite@7.3.6'],
+  midPeerForeignLockfile: ['vite@7.3.6', 'vite@7.3.7'],
+  midPeerInWorkspaceMember: ['vite@7.3.6', 'vite@7.3.7'],
+  declarerRangesWithoutAnyLock: ['vite@8.3.0'],
+  declarerRangesBesideAmbiguousYarnLock: ['vite@7.3.7', 'vite@8.3.5'],
+};
+
 describe('narrow npm lockfile override: end-to-end OSV query scenarios', () => {
   it('has an expectation for every scenario and no stale ones', () => {
     expect(Object.keys(EXPECTED).sort()).toEqual(Object.keys(SCENARIOS).sort());
+    expect(Object.keys(WIDENED).filter((name) => !(name in SCENARIOS))).toEqual([]);
   });
 
   for (const [name, scenario] of Object.entries(SCENARIOS)) {
@@ -792,7 +895,12 @@ describe('narrow npm lockfile override: end-to-end OSV query scenarios', () => {
       const expected = EXPECTED[name];
       const { queries, degraded } = await runScan(fetchOsvAdvisories, scenario);
 
-      const head = [...expected.base.filter((q) => !expected.dropped.includes(q)), ...expected.added].sort();
+      const widened = WIDENED[name] ?? [];
+      const head = [
+        ...expected.base.filter((q) => !expected.dropped.includes(q)),
+        ...expected.added,
+        ...widened,
+      ].sort();
       expect(queries).toEqual(head);
 
       // No base entry is lost unless it is a documented drop.

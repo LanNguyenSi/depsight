@@ -49,6 +49,7 @@ describe('regression: a name installed at different versions in separate project
       'express@5.1.0',
       'react@19.1.0',
       'vite@7.3.7',
+      'vite@8.3.5',
       'vitest@3.2.4',
     ]);
   });
@@ -74,12 +75,12 @@ describe('regression: a name installed at different versions in separate project
 });
 
 describe('drop rule: tree walk complete', () => {
-  it('truncated tree: result equals the baseline', async () => {
-    expect(await scan('negTruncatedTree')).toEqual(['vite@7.3.5']);
+  it('truncated tree: result is the baseline plus the lockfile copies of the name', async () => {
+    expect(await scan('negTruncatedTree')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
-  it('manifest list capped at its limit: result equals the baseline', async () => {
-    expect(await scan('negManifestListCapped')).toEqual(['vite@7.3.5']);
+  it('manifest list capped at its limit: result is the baseline plus the lockfile copies of the name', async () => {
+    expect(await scan('negManifestListCapped')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('a manifest list exactly at its limit is complete: the narrow override applies', async () => {
@@ -146,8 +147,8 @@ describe('drop rule: no other package manager lockfile anywhere', () => {
     'negBunLockbElsewhere',
     'negShrinkwrapElsewhere',
   ]) {
-    it(`${name}: result equals the baseline`, async () => {
-      expect(await scan(name)).toEqual(['vite@7.3.5']);
+    it(`${name}: the floor stays and the lockfile copies of the name are queried`, async () => {
+      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
     });
   }
 });
@@ -196,20 +197,20 @@ describe('drop rule: every project is locked and every lockfile entry is readabl
 });
 
 describe('drop rule: every declaring manifest is narrow for the name', () => {
-  it('workspaces key in an ancestor package.json (even an empty array): result equals the baseline', async () => {
-    expect(await scan('negWorkspacesKeyInAncestor')).toEqual(['vite@7.3.5']);
+  it('workspaces key in an ancestor package.json (even an empty array): result is the baseline plus the lockfile copies of the name', async () => {
+    expect(await scan('negWorkspacesKeyInAncestor')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('workspaces key in the declaring manifest itself: floor stays, the standalone project adds its version', async () => {
-    expect(await scan('negWorkspacesKeyInSelf')).toEqual(['vite@7.3.5', 'vite@8.3.5']);
+    expect(await scan('negWorkspacesKeyInSelf')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
-  it('ancestor package.json unreadable (500): result equals the baseline', async () => {
-    expect(await scan('negAncestorManifestReadError')).toEqual(['vite@7.3.5']);
+  it('ancestor package.json unreadable (500): result is the baseline plus the lockfile copies of the name', async () => {
+    expect(await scan('negAncestorManifestReadError')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
-  it('ancestor package.json not valid JSON: result equals the baseline', async () => {
-    expect(await scan('negAncestorManifestUnparsable')).toEqual(['vite@7.3.5']);
+  it('ancestor package.json not valid JSON: result is the baseline plus the lockfile copies of the name', async () => {
+    expect(await scan('negAncestorManifestUnparsable')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('an unrelated manifest unreadable (500): floor stays, narrow versions are added', async () => {
@@ -229,11 +230,11 @@ describe('drop rule: every declaring manifest is narrow for the name', () => {
   });
 
   it('declaring manifest with a lockfileVersion 1 lockfile', async () => {
-    expect(await scan('negDeclarerLockV1')).toEqual(['vite@7.3.5', 'vite@8.3.5']);
+    expect(await scan('negDeclarerLockV1')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaring manifest whose lockfile lists the name only nested', async () => {
-    expect(await scan('negDeclarerLockOnlyNestedKey')).toEqual(['vite@7.3.5', 'vite@8.3.5']);
+    expect(await scan('negDeclarerLockOnlyNestedKey')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaring manifest whose lockfile version has no digit', async () => {
@@ -241,7 +242,7 @@ describe('drop rule: every declaring manifest is narrow for the name', () => {
   });
 
   it('declaration through an npm: alias', async () => {
-    expect(await scan('negDeclarationIsAlias')).toEqual(['vite@7.3.5', 'vite@8.3.5']);
+    expect(await scan('negDeclarationIsAlias')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaration that is not a plain semver range (git spec)', async () => {
@@ -251,7 +252,7 @@ describe('drop rule: every declaring manifest is narrow for the name', () => {
   });
 
   it('installed version outside the declared range (stale lockfile)', async () => {
-    expect(await scan('negLockVersionOutsideDeclaredRange')).toEqual(['vite@7.3.5', 'vite@8.3.5']);
+    expect(await scan('negLockVersionOutsideDeclaredRange')).toEqual(['vite@7.0.1', 'vite@7.3.5', 'vite@8.3.5']);
   });
 });
 
@@ -291,7 +292,7 @@ describe('workspaces are only tested for presence', () => {
   // A pattern that made an earlier glob matcher run for seconds: nothing is
   // built from it any more, so this must finish well inside the timeout.
   it('a crafted workspaces pattern is not evaluated', { timeout: 2000 }, async () => {
-    expect(await scan('craftedWorkspacesPattern')).toEqual(['vite@7.3.5']);
+    expect(await scan('craftedWorkspacesPattern')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('a very long workspaces list is not evaluated either', { timeout: 2000 }, async () => {
@@ -304,17 +305,17 @@ describe('workspaces are only tested for presence', () => {
         'packages/m/package-lock.json': v3({ 'node_modules/vite': '7.3.7' }),
       },
     });
-    expect(queries).toEqual(['vite@7.3.5']);
+    expect(queries).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 });
 
-describe('npm workspaces and mixed shapes keep the baseline', () => {
+describe('npm workspaces and mixed shapes keep the baseline entries', () => {
   it('a workspace root with a member that has a stale own lockfile', async () => {
-    expect(await scan('staleMemberLockInWorkspace')).toEqual(['lodash@4.17.0']);
+    expect(await scan('staleMemberLockInWorkspace')).toEqual(['lodash@4.17.0', 'lodash@4.17.15', 'lodash@4.17.21']);
   });
 
   it('a workspace member with a v1 root lockfile (npm 6 era)', async () => {
-    expect(await scan('rootV1LockWorkspaceMemberV3')).toEqual(['lodash@4.17.0']);
+    expect(await scan('rootV1LockWorkspaceMemberV3')).toEqual(['lodash@4.17.0', 'lodash@4.17.15', 'lodash@4.17.21']);
   });
 
   it('v1 lockfiles at the root are not narrow-resolved', async () => {

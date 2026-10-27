@@ -1467,6 +1467,25 @@ export const SCENARIOS: Record<string, Scenario> = {
       'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
     },
   },
+  // A name declared only as a peer or optional dependency has no repo-wide chain
+  // entry and no declarer, so the lockfile version it installs is queried by the
+  // narrow override alone (no widening of the chain can supply it).
+  midPeerOnlyOwnLock: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { ms: '2.1.3' } }),
+      'a/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  midOptionalOnlyOwnLock: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { ms: '2.1.3' } }),
+      'a/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+      'b/package.json': pkg({ name: 'b', optionalDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
   // A peer on a package that is another project of the repository: local names
   // are never queried.
   midPeerOnLocalPackage: {
@@ -1540,15 +1559,17 @@ export const SCENARIOS: Record<string, Scenario> = {
       'tools/package.json': pkg({ name: 'tools', dependencies: { vite: '~5.4.2' } }),
     },
   },
-  // No lockfile resolution for the name: nothing for the declarer floor to add.
+  // No lockfile records the name: nothing can satisfy a range, both ranges are
+  // plain, so both floors are queried.
   declarerRangesWithoutAnyLock: {
     files: {
       'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
       'docs/package.json': pkg({ name: 'docs', dependencies: { vite: '^6.0.0' } }),
     },
   },
-  // Documented residual: yarn.lock records vite 8.3.5 and 7.3.7 (ambiguous), root
-  // declares ^8.3.0 and docs/ ^6.0.0. Only the lowest range's floor is queried.
+  // yarn.lock records vite 8.3.5 and 7.3.7 (ambiguous), root declares ^8.3.0 and
+  // docs/ ^6.0.0: both lockfile versions are queried, and the ^6.0.0 floor (no
+  // recorded version satisfies it); the ^8.3.0 floor is not, 8.3.5 satisfies it.
   declarerRangesBesideAmbiguousYarnLock: {
     files: {
       'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),

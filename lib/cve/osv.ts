@@ -384,8 +384,8 @@ function manifestFloor(versionSpec: string): string | null {
  * for the rationale of each step.
  *
  * The chain answers with one version per name, taken for the repo as a whole,
- * so it can stand in for a declarer that installs something else. Two kinds of
- * declarer are covered by additional entries (nothing the chain returns is
+ * so it can stand in for a declarer that installs something else. Three cases
+ * are covered by additional entries (nothing the chain returns is
  * ever removed; the result is the chain plus these):
  *
  * - A declarer with a plain semver range that the merged `resolved` version
@@ -397,14 +397,35 @@ function manifestFloor(versionSpec: string): string | null {
  *   holds, which the merged map cannot attribute to it, so every version any
  *   lockfile records for the name is queried.
  *
- * Not covered: a name the lockfiles resolve ambiguously, or that no lockfile
- * resolves. The range branch only acts on a single merged `resolved` version,
- * so for such a name only the chain answer, the floor of the lowest declared
- * range, is queried: a declarer of a higher range and the lockfile copies of
- * that name are not queried (a yarn.lock with vite 8.3.5 and 7.3.7, root
- * `^8.3.0`, `docs/` `^6.0.0` queries only vite@6.0.0). Also not covered:
- * declarations outside `dependencies` and `devDependencies` (see
- * `declaredOutsideDeps`; the narrow override handles those per project).
+ * - A name with no single resolution (the lockfiles record several versions
+ *   and disagree, or no lockfile records it): no resolved version exists to
+ *   test a range against, and the chain answer is only the floor of the
+ *   lowest declared range. Every version any lockfile records for the name is
+ *   queried (nested transitive copies in a single package-lock.json included:
+ *   another package installs them, and one such copy is enough to leave the
+ *   name without a single resolution). A plain-range declarer's own floor is
+ *   queried only when no recorded version satisfies its range, the same
+ *   trade-off as the single-resolution branch above; for a name no lockfile
+ *   records, every plain-range declarer's floor is queried. A yarn.lock with
+ *   vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries vite@6.0.0
+ *   (the chain answer, unsatisfied), vite@7.3.7 and vite@8.3.5; the `^8.3.0`
+ *   floor is left out because 8.3.5 satisfies it.
+ *
+ * A plain range is a spec that `semver.validRange` accepts and that is not
+ * the wildcard (`*`, `x`, the empty string): `^`, `~`, `>=`/`<` comparator
+ * sets, x-ranges (`7.x`), hyphen ranges, `||` unions and exact pins. Its floor
+ * is `manifestFloor`: the exact version after stripping the operator, else the
+ * `minVersion` of the whole range (for a `||` union that is the lowest
+ * alternative; a higher alternative gets no floor of its own). A range that
+ * admits no version has no floor and adds nothing. Wildcards, tags, git and
+ * `file:` specs are the no-range kind above.
+ *
+ * Not covered: declarations outside `dependencies` and `devDependencies` (see
+ * `declaredOutsideDeps`; the narrow override handles those per project), the
+ * per-workspace provenance of a copy (which workspace member installs which
+ * version; the merged map cannot attribute it). The narrow override's drop proof
+ * is separate and untouched. The widening applies to workspace repositories
+ * like any other.
  */
 export function repoWideNpmEntries(
   manifests: ParsedNpmManifest[],
@@ -447,13 +468,24 @@ export function repoWideNpmEntries(
   for (const { name, versionSpec } of npmDeclarations(manifests)) {
     const range = semver.validRange(versionSpec);
     if (range !== null && range !== '*') {
-      // A plain range: it only needs its own floor when the one resolution the
-      // chain queried for the name is not a version this range accepts.
+      // A plain range needs its own floor only when nothing the lockfiles
+      // installed for the name is a version this range accepts. With one merged
+      // resolution that is the resolution; with observed versions but no single
+      // resolution (ambiguous across lockfiles) it is any observed version; a
+      // name no lockfile records has nothing to test against, so the floor is
+      // always queried. Observed copies of a name without a single resolution
+      // are queried below either way.
       const resolvedVersion = lockfileResolutions.get(name);
-      if (resolvedVersion === undefined || semver.satisfies(resolvedVersion, versionSpec)) continue;
-      const floor = manifestFloor(versionSpec);
-      if (floor !== null) push({ name, version: floor });
-      continue;
+      const observed = resolvedVersion === undefined ? lockfileVersionsOf(merged, name) : [];
+      const satisfied =
+        resolvedVersion !== undefined
+          ? semver.satisfies(resolvedVersion, versionSpec)
+          : observed.some((version) => semver.satisfies(version, versionSpec));
+      if (!satisfied) {
+        const floor = manifestFloor(versionSpec);
+        if (floor !== null) push({ name, version: floor });
+      }
+      if (resolvedVersion !== undefined) continue;
     }
     for (const version of lockfileVersionsOf(merged, name)) push({ name, version });
   }
