@@ -29,12 +29,13 @@
  * member in a directory the scan does not read, and a surviving-mutant
  * scenario for the root-containment check of the candidate list.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import semver from 'semver';
 import {
   MAX_LOCK_INDEX_NODES,
   MAX_MEMBER_FOLDER_CHARS,
   MAX_MEMBER_FOLDER_SEGMENTS,
+  MAX_SLOW_SPEC_CHARS,
   isRegistrySpec,
   provenWorkspaceFolders,
   registrySpecCount,
@@ -959,14 +960,6 @@ describe('isRegistrySpec: only the registry forms are accepted', () => {
     'npm:vite@latest',
     'npm:Old.Name@1.0.0',
     'npm:left@',
-    // workspace: followed by a range, version, tag, or one of * ^ ~
-    'workspace:*',
-    'workspace:^',
-    'workspace:~',
-    'workspace:^1.0.0',
-    'workspace:1.2.3',
-    'workspace:latest',
-    'workspace:',
   ])('%j is a registry spec', (spec) => {
     expect(isRegistrySpec(spec)).toBe(true);
   });
@@ -979,7 +972,8 @@ describe('isRegistrySpec: only the registry forms are accepted', () => {
     'tarball names': ['1.0.0-x.tgz', '1.0.0-x.TGZ', 'latest.tgz', 'x.tar', '1.0.0-a.tar.gz', '1.0.0-x.tgz ', 'npm:left@1.0.0-x.tgz', 'workspace:1.0.0-x.tgz'],
     'ranges only loose parsing accepts, which npm reads as folders': ['^1.0.0 || ./x', '1.0.0 ../tools/t', '1.0.0 tools/t/', '^1.0.0 || tools/t'],
     'aliases of anything but a version, range or tag': ['npm:foo', 'npm:@1.0.0', 'npm:@s@1.0.0', 'npm:a/b@1.0.0', 'npm:../x@1.0.0', 'npm:foo@file:../x', 'npm:foo@../x', 'npm:foo@github:a/b', 'npm:foo@npm:bar@1.0.0', 'npm:foo@workspace:*', 'NPM:foo@1.0.0', ' npm:foo@1.0.0'],
-    'workspace: of anything else': ['workspace:../x', 'workspace:file:x', 'workspace:npm:foo@1.0.0', 'workspace:^^', 'workspace:a/b', 'Workspace:*'],
+    // a workspace: spec names a package of the repository, whatever follows
+    'workspace: specs of any kind': ['workspace:*', 'workspace:^', 'workspace:~', 'workspace:^1.0.0', 'workspace:1.2.3', 'workspace:latest', 'workspace:', 'workspace:../x', 'workspace:file:x', 'workspace:npm:foo@1.0.0', 'workspace:^^', 'workspace:a/b', 'Workspace:*'],
     // `latest!` is a tag npm would ask the registry for; the tag rule is stricter
     'other strings': ['$foo', '.next', 'a tag', 'latest!', 'x:', '%2E%2E'],
   };
@@ -1002,9 +996,9 @@ describe('isRegistrySpec: only the registry forms are accepted', () => {
   });
 
   it('seeded fuzz: an accepted spec never carries a path, URL or tarball part', () => {
-    // An independent check on the accepted set: strip a leading `npm:<name>@`
-    // or `workspace:`; what remains has no `/`, `\`, `:`, `@` or `#`, and no
-    // accepted spec ends like a tarball file.
+    // An independent check on the accepted set: strip a leading `npm:<name>@`;
+    // what remains has no `/`, `\`, `:`, `@` or `#`, and no accepted spec ends
+    // like a tarball file, and none starts with `workspace:`.
     const rand = (() => {
       let a = 20261027;
       return () => {
@@ -1031,12 +1025,65 @@ describe('isRegistrySpec: only the registry forms are accepted', () => {
       let rest = spec;
       const alias = /^npm:(@?[^@]*)@/.exec(rest);
       if (alias) rest = rest.slice(alias[0].length);
-      else if (rest.startsWith('workspace:')) rest = rest.slice('workspace:'.length);
+      expect(spec.startsWith('workspace:'), spec).toBe(false);
       expect(/[/\\:@#]/.test(rest), spec).toBe(false);
       expect(/[.](?:tgz|tar|tar.gz)\s*$/i.test(spec), spec).toBe(false);
     }
     expect(accepted).toBeGreaterThan(2_000);
     expect(rejected).toBeGreaterThan(2_000);
+  });
+});
+
+describe('isRegistrySpec: the character budget of the slow path', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a version, a simple ^ or ~ range and a dist-tag cost nothing (also through an alias)', () => {
+    const budget = { remaining: 0 };
+    for (const spec of ['1.2.3', '^1.2.3', '~1.2.3', 'latest', 'next-1', 'npm:a@^1.2.3', 'npm:a@latest']) {
+      expect(isRegistrySpec(spec, budget), spec).toBe(true);
+    }
+    expect(budget.remaining).toBe(0);
+  });
+
+  it('any other spec is charged its length (the part after npm:<name>@ for an alias)', () => {
+    const budget = { remaining: 100 };
+    expect(isRegistrySpec('>=1 <3', budget)).toBe(true);
+    expect(budget.remaining).toBe(94);
+    expect(isRegistrySpec('^1 || ^2', budget)).toBe(true);
+    expect(budget.remaining).toBe(86);
+    expect(isRegistrySpec('npm:a@>=1 <3', budget)).toBe(true);
+    expect(budget.remaining).toBe(80);
+    expect(isRegistrySpec('*', budget)).toBe(true);
+    expect(budget.remaining).toBe(79);
+  });
+
+  it('a spec the budget covers exactly is read; one character more is not accepted and not parsed', () => {
+    expect(isRegistrySpec('>=1 <3', { remaining: 6 })).toBe(true);
+    const parse = vi.spyOn(semver, 'validRange');
+    expect(isRegistrySpec('>=1 <3', { remaining: 5 })).toBe(false);
+    expect(isRegistrySpec('npm:a@>=1 <3', { remaining: 5 })).toBe(false);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it('an exhausted budget refuses every later slow-path spec, whatever its length', () => {
+    const budget = { remaining: 7 };
+    expect(isRegistrySpec('>=1 <3', budget)).toBe(true); // 1 left
+    expect(isRegistrySpec('*', budget)).toBe(true); // 0 left
+    expect(isRegistrySpec('*', budget)).toBe(false);
+    expect(isRegistrySpec('^1 || ^2', budget)).toBe(false);
+    expect(isRegistrySpec('^1.0.0', budget)).toBe(true); // the cheap forms stay free
+  });
+
+  it('a spec that is no registry range is charged as well (the budget bounds what is parsed)', () => {
+    const budget = { remaining: 100 };
+    expect(isRegistrySpec('1.0.0 ../tools/t', budget)).toBe(false);
+    expect(budget.remaining).toBe(100 - '1.0.0 ../tools/t'.length);
+  });
+
+  it('without a budget nothing is charged and nothing is refused', () => {
+    expect(isRegistrySpec(`>=1 <3 || ${'^1 || '.repeat(1000)}^2`)).toBe(true);
   });
 });
 
@@ -1067,6 +1114,34 @@ describe('registrySpecCount', () => {
     for (const overrides of [{ e: 'file:../e' }, { f: { g: 'github:a/b' } }, { f: { '.': 'tools/f' } }, { h: ['^1.0.0', 'link:../h'] }, { e: '$e' }, 'file:x']) {
       expect(hasOnlyRegistrySpecs({ ...data, overrides }), JSON.stringify(overrides)).toBe(false);
     }
+  });
+
+  it('the spec after the package name in an overrides key is classified like a value', () => {
+    // `t@file:tools/t` overrides `t` where it is `file:tools/t`; the package
+    // name's own `@` (index 0 of a scoped name) is no separator
+    for (const key of ['t@file:tools/t', 't@tools/t', 't@link:../t', 't@workspace:*', 't@github:o/t', '@s/t@file:tools/t', 't@^1.0.0 || ./x', 't@1.0.0-x.tgz', 'a@b@c']) {
+      expect(hasOnlyRegistrySpecs({ overrides: { [key]: '1.0.0' } }), key).toBe(false);
+      expect(hasOnlyRegistrySpecs({ overrides: { ra: { [key]: '1.0.0' } } }), `nested ${key}`).toBe(false);
+      expect(hasOnlyRegistrySpecs({ overrides: [{ [key]: '1.0.0' }] }), `in an array ${key}`).toBe(false);
+    }
+    for (const key of ['t', '@s/t', 't@^1.0.0', 't@1.0.0', 't@latest', 't@>=1 <3', '@s/t@^1.0.0', 't@npm:u@^1.0.0', '.']) {
+      expect(hasOnlyRegistrySpecs({ overrides: { [key]: '1.0.0' } }), key).toBe(true);
+      expect(hasOnlyRegistrySpecs({ overrides: { ra: { [key]: '1.0.0' } } }), `nested ${key}`).toBe(true);
+    }
+  });
+
+  it('an overrides key adds nothing to the count, and a key of a dependency map is no spec', () => {
+    expect(registrySpecCount({ overrides: { 't@^1.0.0': '1.0.0' } })).toBe(2);
+    expect(registrySpecCount({ dependencies: { 't@file:tools/t': '^1.0.0' } })).toBe(1);
+  });
+
+  it('a slow-path spec of a value or of a key is charged to the budget', () => {
+    const budget = { remaining: 100 };
+    expect(registrySpecCount({ dependencies: { a: '>=1 <3', b: '^1.0.0' }, overrides: { 'c@>=2 <4': '>=1 <3' } }, budget)).toBe(4);
+    expect(budget.remaining).toBe(100 - 6 - 6 - 6);
+    expect(registrySpecCount({ dependencies: { a: '>=1 <3' } }, { remaining: 5 })).toBeNull();
+    expect(registrySpecCount({ overrides: { 'c@>=2 <4': '1.0.0' } }, { remaining: 5 })).toBeNull();
+    expect(registrySpecCount({ overrides: { c: '>=1 <3' } }, { remaining: 5 })).toBeNull();
   });
 
   it('a map that is not an object, or an overrides value of another kind, is not read as registry-only', () => {
@@ -1138,6 +1213,42 @@ describe('repoHasOnlyRegistrySpecs', () => {
     const locks = [{ '': {}, 'node_modules/a': { dependencies: { b: '^1.0.0', c: '^1.0.0' } } }];
     expect(repoHasOnlyRegistrySpecs([], locks, 4)).toBe(true);
     expect(repoHasOnlyRegistrySpecs([], locks, 3)).toBe(false);
+  });
+
+  it('counts the characters of slow-path specs across manifests and lockfile entries against one budget', () => {
+    // each `>=1 <3` costs 6 characters; `^1.0.0` is free
+    const manifests = [{ dependencies: { a: '>=1 <3', b: '^1.0.0' } }, { devDependencies: { c: '>=1 <3' } }];
+    const locks = [{ '': {}, 'node_modules/x': { dependencies: { y: '>=1 <3' } } }, { 'node_modules/z': { peerDependencies: { y: '>=1 <3' } } }];
+    expect(repoHasOnlyRegistrySpecs(manifests, locks, 1000, 24)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs(manifests, locks, 1000, 23)).toBe(false);
+    expect(repoHasOnlyRegistrySpecs(manifests, [], 1000, 12)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs(manifests, [], 1000, 11)).toBe(false);
+    expect(repoHasOnlyRegistrySpecs([], locks, 1000, 12)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([], locks, 1000, 11)).toBe(false);
+    // specs of the cheap forms cost nothing, whatever their number
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: '^1.0.0', b: '1.2.3', c: 'latest' } }], [], 1000, 0)).toBe(true);
+  });
+
+  it('the character budget is MAX_SLOW_SPEC_CHARS unless given', () => {
+    // one valid range of about 1.2 million characters (cheap to parse)
+    const range = Array.from({ length: 150_000 }, () => '>=1.0.0').join(' ');
+    expect(range.length).toBeGreaterThan(MAX_SLOW_SPEC_CHARS / 2);
+    expect(range.length).toBeLessThan(MAX_SLOW_SPEC_CHARS);
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: range } }], [])).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: range } }, { dependencies: { a: range } }], [])).toBe(false);
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: range } }], [{ 'node_modules/a': { dependencies: { b: range } } }])).toBe(false);
+  }, 60_000);
+
+  it('nothing is parsed past the budget', () => {
+    const parse = vi.spyOn(semver, 'validRange');
+    try {
+      const specs: Record<string, string> = {};
+      for (let i = 0; i < 100; i++) specs[`d${i}`] = '^1 || ^2 || ^3';
+      expect(repoHasOnlyRegistrySpecs([{ dependencies: specs }], [], 1000, 14 * 10)).toBe(false);
+      expect(parse).toHaveBeenCalledTimes(10);
+    } finally {
+      parse.mockRestore();
+    }
   });
 });
 
@@ -1231,7 +1342,6 @@ describe('workspace: only registry specs anywhere (npm installs a folder named b
     ['an exact version', '1.0.0', { version: '1.0.0' }],
     ['a dist-tag', 'latest', { version: '1.0.0' }],
     ['an npm: alias of a range', 'npm:x-real@^1.0.0', { name: 'x-real', version: '1.0.0' }],
-    ['workspace:*', 'workspace:*', { version: '1.0.0' }],
   ])('%s: the workspace still narrows', (_label, spec, entry) => {
     const r = withX(spec, entry);
     expect(r.dropSafe('ra', '1.0.0')).toBe(true);
@@ -1255,6 +1365,8 @@ describe('workspace: only registry specs anywhere (npm installs a folder named b
     ['a range only loose parsing reads, a folder for npm', '^1.0.0 || ./x', { version: '1.0.0' }],
     ['an alias of a folder', 'npm:x-real@../x', { name: 'x-real', version: '1.0.0' }],
     ['a workspace: spec of a path', 'workspace:../x', { version: '1.0.0' }],
+    ['workspace:*', 'workspace:*', { version: '1.0.0' }],
+    ['workspace:^1.0.0', 'workspace:^1.0.0', { version: '1.0.0' }],
   ])('%s anywhere leaves every root unproven', (_label, spec, entry) => {
     const r = withX(spec, entry);
     expect(r.dropSafe('ra', '1.0.0')).toBe(false);
@@ -1521,6 +1633,178 @@ describe('workspace: a manifest outside the root does not prove a link of that r
     };
     const r = resolveNarrowNpm(inputs(files, lockFiles));
     expect(r.dropSafe('ra', '2.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+});
+
+describe('workspace: the spec in an overrides key counts like a spec in a value', () => {
+  // The root overrides `ra` for one range only (`ra@^1.0.0`). An overrides key
+  // with an `@` after the name is not a plain override, so the root is not
+  // locked and nothing is dropped; the member still adds what the root
+  // lockfile installs for it, but only where the workspace is proven, and a
+  // key whose spec is not a registry spec leaves every root unproven.
+  const withKey = (key: string) => {
+    const workspaces = ['packages/*', 'tools/*'];
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces, overrides: { [key]: '1.2.0' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/t': { resolved: 'tools/t', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'node_modules/rb': { version: '1.3.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+      'tools/t': { name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+    });
+    return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+  };
+
+  it.each(['t@^1.0.0', 't@1.0.0', 't@latest', 't@>=1 <3', '@s/t@^1.0.0', 'ra@npm:u@^1.0.0'])('%s: a registry spec in the key still proves the workspace', (key) => {
+    expect(versions(withKey(key))).toEqual(['ra@1.2.0', 'rb@1.3.0']);
+  });
+
+  it.each(['t@file:tools/t', 't@tools/t', 't@link:../t', 't@workspace:*', 't@github:o/t', '@s/t@file:tools/t', 't@^1.0.0 || ./x', 'a@b@c'])('%s: any other spec in the key leaves every root unproven', (key) => {
+    const r = withKey(key);
+    expect(r.additions).toEqual([]);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+  });
+
+  it('control: an overrides key without a spec behaves as before', () => {
+    expect(versions(withKey('ra'))).toEqual(['ra@1.2.0', 'rb@1.3.0']);
+    expect(withKey('ra').dropSafe('ra', '1.0.0')).toBe(true);
+  });
+});
+
+describe('workspace: long slow-path ranges in root lockfiles stay within a time bound', () => {
+  // Ranges that miss the cheap forms go through `semver`. 100 workspace roots
+  // (the manifest cap), each with a root lockfile of about 450 KB of entries
+  // whose dependency specs are 50-way `||` ranges, are about 45 MB of ranges:
+  // read to the end they take `semver` more than 15 seconds on the development
+  // machine. The character budget stops the pass after MAX_SLOW_SPEC_CHARS and
+  // no root is proven, which costs about a second, most of it JSON parsing.
+  it('100 roots with 45 MB of 50-way || ranges in their lockfiles: unproven, in a few seconds', () => {
+    let g = 0;
+    const range = () => {
+      g++;
+      return Array.from({ length: 50 }, (_, k) => `~${g % 100_000}.${k}`).join('||');
+    };
+    const files: Files = {};
+    const lockFiles: Files = {};
+    for (let j = 0; j < 100; j++) {
+      const packages: Packages = { '': { name: `r${j}`, version: '1.0.0', workspaces: ['packages/*'] } };
+      let size = 200;
+      for (let i = 0; size < 450_000; i++) {
+        const spec = range();
+        packages[`node_modules/q${i}`] = { version: '1.0.0', dependencies: { z: spec } };
+        size += spec.length + 60;
+      }
+      files[`r${j}/package.json`] = pkg({ name: `r${j}`, version: '1.0.0', workspaces: ['packages/*'], dependencies: { d1: '^1.0.0' } });
+      lockFiles[`r${j}/package-lock.json`] = lockOf(packages);
+    }
+    const started = performance.now();
+    const r = resolveNarrowNpm(inputs(files, lockFiles));
+    const dropped = r.dropSafe('d1', '1.0.0');
+    const elapsed = performance.now() - started;
+    expect(dropped).toBe(false);
+    expect(r.additions).toEqual([]);
+    expect(elapsed).toBeLessThan(8_000);
+  }, 120_000);
+
+  it('the same ranges below the budget are read: the workspace is proven', () => {
+    // the control for the test above: few enough characters, same shapes
+    const range = Array.from({ length: 50 }, (_, k) => `~1.${k}`).join('||');
+    const packages: Packages = {
+      '': { name: 'r', version: '1.0.0', workspaces: ['packages/*'] },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+    };
+    for (let i = 0; i < 1000; i++) packages[`node_modules/q${i}`] = { version: '1.0.0', dependencies: { z: range } };
+    const files: Files = {
+      'package.json': pkg({ name: 'r', version: '1.0.0', workspaces: ['packages/*'] }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+    };
+    const r = resolveNarrowNpm(inputs(files, { 'package-lock.json': lockOf(packages) }));
+    expect(versions(r)).toEqual(['ra@1.2.0']);
+  });
+});
+
+describe('workspace: documented residuals, a folder the root lockfile still links counts as a member', () => {
+  // Both files below are the shape `npm install` writes (the registry versions
+  // are the ones the lockfile pins). `npm ci` at the root installs `tools/t`
+  // from the root lockfile, but `npm run` inside `tools/t` installs it on its
+  // own without a lockfile, which can bring the dropped floor. This is not
+  // closed. The tests assert today's behaviour, so a future closure flips them
+  // on purpose.
+  const SCAN = (files: Files) => {
+    const manifestFiles: Files = {};
+    for (const [path, content] of Object.entries(files)) if (path.endsWith('package.json')) manifestFiles[path] = content;
+    return resolveNarrowNpm(inputs(manifestFiles, { 'package-lock.json': files['package-lock.json'] }));
+  };
+
+  it('residual: tools/t left the workspaces patterns, npm kept its link, and a registry range is satisfied by it', () => {
+    // `npm install` after `workspaces` shrank from [packages/*, tools/*] to
+    // [packages/*]: packages/a depends on `t ^1.0.0`, the link satisfies it
+    const r = SCAN({
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'package-lock.json': lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0' } },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/ra': { version: '1.2.0' },
+        'node_modules/rb': { version: '1.5.0', dependencies: { ra: '^2.0.0' } },
+        'node_modules/rb/node_modules/ra': { version: '2.1.0' },
+        'node_modules/t': { resolved: 'tools/t', link: true },
+        'packages/a': { version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } },
+        'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+      }),
+    });
+    // today: tools/t is a member, so the floor rb@1.0.0 counts as installed nowhere
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toEqual(['ra@1.2.0', 'rb@1.5.0']);
+  });
+
+  it('residual: tools/t was a file: dependency, became a registry range, and npm kept the link', () => {
+    const r = SCAN({
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', t: '^1.0.0' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'package-lock.json': lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', t: '^1.0.0' } },
+        'packages/a': { version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+        'node_modules/ra': { version: '1.2.0' },
+        'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+        'node_modules/rb': { version: '1.5.0', dependencies: { ra: '^2.0.0' } },
+        'node_modules/rb/node_modules/ra': { version: '2.1.0' },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/t': { resolved: 'tools/t', link: true },
+      }),
+    });
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toEqual(['ra@1.2.0', 'rb@1.5.0']);
+  });
+
+  it('control: the same folder with the file: spec still in place leaves the root unproven', () => {
+    const r = SCAN({
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', t: 'file:tools/t' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'package-lock.json': lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', t: 'file:tools/t' } },
+        'packages/a': { version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+        'node_modules/ra': { version: '1.2.0' },
+        'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+        'node_modules/rb': { version: '1.5.0' },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/t': { resolved: 'tools/t', link: true },
+      }),
+    });
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
     expect(r.additions).toEqual([]);
   });
 });

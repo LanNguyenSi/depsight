@@ -1278,16 +1278,27 @@ export async function fetchNpmManifests(
 // between the two is not followed.
 //
 // A workspace is narrowed only when every dependency spec the scan reads is a
-// registry range, version, dist-tag, `npm:` alias or `workspace:` spec
-// (`isRegistrySpec`, `repoHasOnlyRegistrySpecs`): the `dependencies`,
-// `devDependencies`, `optionalDependencies` and `peerDependencies` and every
-// value inside `overrides` of every read package.json, and the same maps of
-// every entry of every workspace root's own lockfile. A spec of any other kind
-// (`file:`, `link:`, a path in any spelling, git, a URL, a tarball) can make a
-// folder of the repository a project npm installs on its own, with the same
-// lockfile shape as a member, so one such spec anywhere leaves every workspace
-// root of the repository unproven. The rule lists what is accepted; nothing
-// tries to work out which folder a spec names.
+// registry range, version, dist-tag or `npm:` alias (`isRegistrySpec`,
+// `repoHasOnlyRegistrySpecs`): the `dependencies`, `devDependencies`,
+// `optionalDependencies` and `peerDependencies` and every value inside
+// `overrides` (and the spec after the package name in an `overrides` key,
+// `t@file:tools/t`) of every read package.json, and the same maps of every
+// entry of every workspace root's own lockfile. A spec of any other kind
+// (`file:`, `link:`, `workspace:`, a path in any spelling, git, a URL, a
+// tarball) can make a folder of the repository a project npm installs on its
+// own, with the same lockfile shape as a member, so one such spec anywhere
+// leaves every workspace root of the repository unproven. The rule lists what
+// is accepted; nothing tries to work out which folder a spec names. The specs
+// that miss the cheap forms (a version, a simple `^` / `~` range, a dist-tag)
+// share one character budget over the whole pass (`MAX_SLOW_SPEC_CHARS`);
+// beyond it no root is proven.
+//
+// This does not close the class of a folder that is no member. Residual: a
+// folder the root lockfile still links after it left the `workspaces`
+// patterns, or after a `file:` spec became a registry range, counts as a
+// member. `npm ci` at the root installs it from the root lockfile, but
+// `npm run` inside that folder installs it on its own without a lockfile.
+// npm itself keeps such a link in a lockfile it rewrites.
 //
 // What a removal guarantees: no under-reporting for an install that honours the
 // lockfiles, that is `npm ci`, or `npm install` on a lockfile that has no
@@ -1399,9 +1410,7 @@ export async function fetchNpmManifests(
 // workspace member in one of them leaves a link in the root lockfile that no
 // read manifest proves, so that root proves nothing and the whole workspace
 // keeps every baseline entry (its lockfile entries still count as installed).
-// A lockfile edited by hand so that its member entries disagree with its own
-// `workspaces` patterns is outside the guarantee. A workspace manifest the root
-// lockfile does not prove (a lockfileVersion 1, missing or unreadable root
+// A workspace manifest the root lockfile does not prove (a lockfileVersion 1, missing or unreadable root
 // lockfile, a `workspaces` value the lockfile does not record, a member it does
 // not list, a member that is a workspace root itself, a dependency spec other
 // than a registry spec anywhere in the read manifests or in a workspace
@@ -1653,6 +1662,22 @@ function readNarrowLockfile(content: string): NarrowLockfile | null {
 // has a budget of the same size, of specs and entries.
 export const MAX_LOCK_INDEX_NODES = 1_000_000;
 
+// Budget for the characters of the specs that miss the cheap forms (a version or
+// a simple `^` / `~` range, a dist-tag) and so go through `semver.validRange`,
+// counted over the whole pass of `repoHasOnlyRegistrySpecs`. `validRange` costs
+// up to about 0.5 microseconds per character on the slowest shapes measured
+// (long `||` chains), so the budget keeps the pass to about a second. A real
+// monorepo stays far below it: only its compound specs (`>=1 <3`,
+// `^16 || ^17`) go through `validRange`, tens of thousands of characters in
+// the largest root lockfiles looked at. Beyond the budget the pass fails
+// closed: no workspace root is proven.
+export const MAX_SLOW_SPEC_CHARS = 2_000_000;
+
+// The characters of slow-path specs a pass may still read (see above).
+export interface SlowSpecBudget {
+  remaining: number;
+}
+
 // What the fetched lockfiles install, at any install path. `versions` holds, per
 // name, both the raw version string and its semver-normalised form (which drops
 // build metadata), so a lookup counts unequal strings that are semver-equal as
@@ -1747,10 +1772,17 @@ const ALIAS_TARGET_NAME = /^(?:@[A-Za-z0-9][A-Za-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z
 // plain version range, a dist-tag or a range `semver.validRange` accepts in
 // strict mode. Strict, because loose mode drops every comparator it cannot
 // read: it accepts `^1.0.0 || ./x` and `1.0.0 ../tools/t`, which npm reads as
-// folders.
-function isRegistryRange(spec: string): boolean {
+// folders. A spec that misses the two cheap forms is charged to `budget` (its
+// length) before `validRange` reads it; one the budget cannot cover is not
+// accepted (fail closed), unread.
+function isRegistryRange(spec: string, budget?: SlowSpecBudget): boolean {
   if (TARBALL_SUFFIX.test(spec.trim())) return false;
-  return PLAIN_VERSION_RANGE.test(spec) || DIST_TAG.test(spec) || semver.validRange(spec) !== null;
+  if (PLAIN_VERSION_RANGE.test(spec) || DIST_TAG.test(spec)) return true;
+  if (budget) {
+    budget.remaining -= spec.length;
+    if (budget.remaining < 0) return false;
+  }
+  return semver.validRange(spec) !== null;
 }
 
 /**
@@ -1760,27 +1792,27 @@ function isRegistryRange(spec: string): boolean {
  *
  *   - a version or range (`semver.validRange` in strict mode);
  *   - a dist-tag (`A-Z a-z 0-9 . _ -`, not empty, not starting with a dot);
- *   - `npm:<name>@<version, range or dist-tag>`;
- *   - `workspace:` followed by `*`, `^`, `~`, a version, range or dist-tag.
+ *   - `npm:<name>@<version, range or dist-tag>`.
  *
  * None of them may end in `.tgz`, `.tar` or `.tar.gz`. Everything else is
  * not: a `file:` or `link:` spec, a path in any spelling (`tools/t`,
  * `tools/t/`, `./x`, `a/b/c`, `@s/x`), a git, GitHub or URL spec, a tarball, a
- * `~` or absolute path, a Windows path, a `$` reference, a value that is not a
- * string.
+ * `~` or absolute path, a Windows path, a `$` reference, a `workspace:` spec
+ * (it names a package of the repository, not one of the registry), a value
+ * that is not a string.
+ *
+ * With a `budget`, a spec that misses the cheap forms (a version or simple
+ * `^` / `~` range, a dist-tag) is charged to it by length, and a spec the
+ * budget cannot cover is not a registry spec.
  */
-export function isRegistrySpec(spec: unknown): boolean {
+export function isRegistrySpec(spec: unknown, budget?: SlowSpecBudget): boolean {
   if (typeof spec !== 'string') return false;
   if (spec.startsWith('npm:')) {
     const target = spec.slice('npm:'.length);
     const at = target.indexOf('@', 1);
-    return at > 0 && ALIAS_TARGET_NAME.test(target.slice(0, at)) && isRegistryRange(target.slice(at + 1));
+    return at > 0 && ALIAS_TARGET_NAME.test(target.slice(0, at)) && isRegistryRange(target.slice(at + 1), budget);
   }
-  if (spec.startsWith('workspace:')) {
-    const rest = spec.slice('workspace:'.length);
-    return rest === '^' || rest === '~' || isRegistryRange(rest);
-  }
-  return isRegistryRange(spec);
+  return isRegistryRange(spec, budget);
 }
 
 /**
@@ -1789,16 +1821,21 @@ export function isRegistrySpec(spec: unknown): boolean {
  * not. Read: the four dependency maps and every value inside `overrides`, at
  * any depth (inside objects and arrays); each map value and each `overrides`
  * value counts once. A map that is not an object, or an `overrides` value that
- * is neither a string, an object nor an array, also answers null.
+ * is neither a string, an object nor an array, also answers null. An
+ * `overrides` key can carry a spec too (`t@file:tools/t` overrides `t` where
+ * its version is `file:tools/t`): the part after the `@` that follows the
+ * package name (an `@` after the first character) is a spec like any other and
+ * must be a registry spec; it adds nothing to the count. `budget` is charged
+ * for every slow-path spec, see `isRegistrySpec`.
  */
-export function registrySpecCount(data: Record<string, unknown>): number | null {
+export function registrySpecCount(data: Record<string, unknown>, budget?: SlowSpecBudget): number | null {
   let count = 0;
   for (const field of SPEC_FIELDS) {
     const map = ownValue(data, field);
     if (map === undefined) continue;
     if (!isPlainObject(map)) return null;
     for (const spec of Object.values(map)) {
-      if (!isRegistrySpec(spec)) return null;
+      if (!isRegistrySpec(spec, budget)) return null;
       count++;
     }
   }
@@ -1807,8 +1844,14 @@ export function registrySpecCount(data: Record<string, unknown>): number | null 
     const value = pending.pop();
     count++;
     if (typeof value === 'string') {
-      if (!isRegistrySpec(value)) return null;
+      if (!isRegistrySpec(value, budget)) return null;
     } else if (isPlainObject(value) || Array.isArray(value)) {
+      if (!Array.isArray(value)) {
+        for (const key of Object.keys(value)) {
+          const at = key.indexOf('@', 1);
+          if (at > 0 && !isRegistrySpec(key.slice(at + 1), budget)) return null;
+        }
+      }
       for (const inner of Object.values(value)) pending.push(inner);
     } else return null;
   }
@@ -1824,17 +1867,21 @@ export function registrySpecCount(data: Record<string, unknown>): number | null 
  * own, which npm records with the same lockfile shape as a workspace member,
  * so one anywhere leaves every workspace root unproven. One pass, under a
  * budget of `maxNodes` (specs and lockfile entries count, the same budget as
- * the lockfile index): a repository beyond it is not read to the end, so no
- * root is proven.
+ * the lockfile index) and a budget of `maxSlowChars` characters for the specs
+ * that miss the cheap forms and so go through `semver` (`MAX_SLOW_SPEC_CHARS`,
+ * counted over the whole pass): a repository beyond either is not read to the
+ * end, so no root is proven.
  */
 export function repoHasOnlyRegistrySpecs(
   manifests: Iterable<Record<string, unknown>>,
   rootLockPackages: Iterable<Record<string, unknown>>,
   maxNodes: number = MAX_LOCK_INDEX_NODES,
+  maxSlowChars: number = MAX_SLOW_SPEC_CHARS,
 ): boolean {
   let visited = 0;
+  const budget: SlowSpecBudget = { remaining: maxSlowChars };
   const read = (data: Record<string, unknown>): boolean => {
-    const count = registrySpecCount(data);
+    const count = registrySpecCount(data, budget);
     if (count === null) return false;
     visited += count;
     return visited <= maxNodes;
@@ -1897,8 +1944,13 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
  * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`).
  * The same lockfile shape records a folder that a `file:` or `link:` spec
  * installs as a project of its own, so the caller asks this only when every
- * spec the scan reads is a registry spec (`repoHasOnlyRegistrySpecs`). The
- * patterns are never evaluated and nothing is built from them.
+ * spec the scan reads is a registry spec (`repoHasOnlyRegistrySpecs`). That
+ * does not make a proven folder a member: a folder the root lockfile still
+ * links after it left the `workspaces` patterns, or after a `file:` spec became
+ * a registry range, is proven all the same. `npm ci` at the root installs it
+ * from the root lockfile, but `npm run` inside that folder installs it on its
+ * own without a lockfile. The patterns are never evaluated and nothing is
+ * built from them.
  */
 export function provenWorkspaceFolders(
   rootWorkspaces: unknown,
@@ -1917,6 +1969,7 @@ export function provenWorkspaceFolders(
   for (const { folder, name } of candidates) {
     if (lockfileLinksFolder(packages, folder, name)) proven.add(folder);
   }
+  // Defensive: `repoHasOnlyRegistrySpecs` already bounds the entries of all root lockfiles; this per-lockfile bound keeps the function safe alone.
   let visited = 0;
   for (const entry of Object.values(packages)) {
     if (++visited > MAX_LOCK_INDEX_NODES) return null;
