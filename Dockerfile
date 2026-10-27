@@ -86,7 +86,8 @@ ENV PATH="/app/node_modules/.bin:${PATH}"
 COPY --from=migrate-cli /out/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY prisma ./prisma/
-# Fails the build, not the deploy, when the CLI cannot start from the pruned tree.
+# Fails at image build time, before the schema step touches the database, when
+# the CLI cannot start from the pruned tree.
 RUN CHECKPOINT_DISABLE=1 prisma --version
 
 USER node

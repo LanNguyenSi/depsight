@@ -136,6 +136,8 @@ describe('migrate image stage', () => {
     // It starts from the installed `prisma` and the symlink points at the real CLI entry.
     expect(cli).toMatch(/find\("prisma", root\)/);
     expect(cli).toMatch(/^ln -s \.\.\/prisma\/build\/index\.js \/out\/node_modules\/\.bin\/prisma$/m);
+    // --parents keeps the node_modules/<pkg> layout under /out; a flat copy breaks Node resolution.
+    expect(cli).toMatch(/^xargs -a \/tmp\/prisma-cli\.list cp -a --parents -t \/out$/m);
     expect(existsSync(join(ROOT, 'node_modules/prisma/build/index.js'))).toBe(true);
   });
 
