@@ -757,8 +757,9 @@ function raisedNpmVersion(
  * `2.x`, `>=1.2` — ordinary ranges whose floor-strip merely isn't a full
  * x.y.z), `semver.minVersion(versionSpec)` supplies the range's lowest
  * version (`^19` -> `19.0.0`) as the query version; a spec that opens with
- * `<`, `<=` or `>` always takes this path, never the stripped bound (`manifestFloor`) — more precise than the
- * pre-task raw-floor value would have been for the same range. Only when
+ * `<`, `<=` or `>` always takes this path, never the stripped bound
+ * (`manifestFloor`). This is more precise than the pre-task raw-floor value
+ * would have been for the same range. Only when
  * NEITHER the exact-floor nor the range path yields anything (a git ref, a
  * malformed/unsupported `npm:` alias, or a genuinely version-free spec like
  * `*`/`latest`/`workspace:*`) does collection fall back to the dep's
