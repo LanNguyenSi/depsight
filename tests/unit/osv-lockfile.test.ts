@@ -430,16 +430,11 @@ describe('collectDeps / fetchOsvAdvisories — npm lockfile version selection (e
     await fetchOsvAdvisories('tok', 'o', 'r', 'main');
 
     const body = osvQueryBody(mockFetch);
-    // The name has no single resolution, so each plain-range declarer's floor
-    // (3.0.0 and 4.0.0) and both lockfile copies (3.0.5 and 4.17.21) are
-    // queried next to the chain answer; the chain answer comes first.
+    // The name has no single resolution: both lockfile copies (3.0.5 and
+    // 4.17.21) are queried next to the chain answer (3.0.0, the lowest declared
+    // floor). The ^4.0.0 floor is not queried: the observed 4.17.21 satisfies it.
     expect(body.queries.every((q: { package: { name: string } }) => q.package.name === 'lodash-es')).toBe(true);
-    expect(body.queries.map((q: { version: string }) => q.version).sort()).toEqual([
-      '3.0.0',
-      '3.0.5',
-      '4.0.0',
-      '4.17.21',
-    ]);
+    expect(body.queries.map((q: { version: string }) => q.version).sort()).toEqual(['3.0.0', '3.0.5', '4.17.21']);
     // Both lockfile entries now key under "lodash-es" and DISAGREE
     // (3.0.5 vs 4.17.21) → dropped per D-006 → falls back to the manifest
     // floor of the real package (the lower, vulnerable range's floor:

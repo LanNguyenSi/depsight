@@ -116,13 +116,16 @@ A complete list of what depsight does today, beyond the headline value props in 
     `file:` spec, `*`) has every version any lockfile records for the name
     queried, nested copies included (lockfileVersion 2 or 3 and `yarn.lock`;
     a lockfileVersion 1 lockfile is read top-level only). For a name the
-    lockfiles resolve ambiguously, or that no lockfile resolves, the floor of
-    every plain-range declaration and every version any lockfile records for
-    the name are queried (a `yarn.lock` with vite 8.3.5 and 7.3.7, root
-    `^8.3.0`, `docs/` `^6.0.0` queries vite 6.0.0, 8.3.0, 7.3.7 and 8.3.5;
-    plain range: a spec `semver.validRange` accepts that is not a wildcard,
-    floor: the exact version after the operator, else the lowest version the
-    range admits). A project that declares a range the
+    lockfiles resolve ambiguously, or that no lockfile resolves, every version
+    any lockfile records for the name is queried (a nested transitive copy in
+    one `package-lock.json` is enough to make a name ambiguous, and is queried
+    under that name, although another package installs it), and a plain-range
+    declaration adds its floor only when no recorded version satisfies its
+    range, or when no lockfile records the name (a `yarn.lock` with vite 8.3.5
+    and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries vite 6.0.0, 7.3.7 and
+    8.3.5; plain range: a spec `semver.validRange` accepts that is not a
+    wildcard, floor: the exact version after the operator, else the lowest
+    version the range admits). A project that declares a range the
     resolved version satisfies but installs another version, and a name
     declared only in `optionalDependencies`, `peerDependencies` or
     `bundleDependencies` without a lockfile, are not covered. It is not a

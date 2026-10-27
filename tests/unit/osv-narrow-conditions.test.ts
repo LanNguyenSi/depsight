@@ -70,17 +70,17 @@ describe('regression: a name installed at different versions in separate project
   });
 
   it('one declaring project without a lockfile keeps the baseline floor and still adds the others', async () => {
-    expect(await scan('viteOneProjectWithoutLockfile')).toEqual(['vite@6.0.0', 'vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('viteOneProjectWithoutLockfile')).toEqual(['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5']);
   });
 });
 
 describe('drop rule: tree walk complete', () => {
   it('truncated tree: result is the baseline plus the lockfile copies of the name', async () => {
-    expect(await scan('negTruncatedTree')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negTruncatedTree')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('manifest list capped at its limit: result is the baseline plus the lockfile copies of the name', async () => {
-    expect(await scan('negManifestListCapped')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negManifestListCapped')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('a manifest list exactly at its limit is complete: the narrow override applies', async () => {
@@ -94,7 +94,7 @@ describe('drop rule: tree walk complete', () => {
 
   it('a complete manifest list with project manifests that have no lockfile adds the installed versions but keeps the baseline floor', async () => {
     const { queries } = await runScan(fetchOsvAdvisories, { ...SCENARIOS.viteTwoProjects, extraManifests: 98 });
-    expect(queries).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(queries).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('detectEcosystem records the cap and the foreign lockfiles, and nothing when the walk is incomplete', async () => {
@@ -148,7 +148,7 @@ describe('drop rule: no other package manager lockfile anywhere', () => {
     'negShrinkwrapElsewhere',
   ]) {
     it(`${name}: the floor stays and the lockfile copies of the name are queried`, async () => {
-      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
     });
   }
 });
@@ -161,7 +161,7 @@ describe('drop rule: no .npmrc and no packageManager field', () => {
     'negPackageManagerInUnrelatedManifest',
   ]) {
     it(`${name}: the baseline floor stays and the narrow versions are still added`, async () => {
-      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+      expect(await scan(name)).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
     });
   }
 
@@ -198,51 +198,51 @@ describe('drop rule: every project is locked and every lockfile entry is readabl
 
 describe('drop rule: every declaring manifest is narrow for the name', () => {
   it('workspaces key in an ancestor package.json (even an empty array): result is the baseline plus the lockfile copies of the name', async () => {
-    expect(await scan('negWorkspacesKeyInAncestor')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negWorkspacesKeyInAncestor')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('workspaces key in the declaring manifest itself: floor stays, the standalone project adds its version', async () => {
-    expect(await scan('negWorkspacesKeyInSelf')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negWorkspacesKeyInSelf')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('ancestor package.json unreadable (500): result is the baseline plus the lockfile copies of the name', async () => {
-    expect(await scan('negAncestorManifestReadError')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negAncestorManifestReadError')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('ancestor package.json not valid JSON: result is the baseline plus the lockfile copies of the name', async () => {
-    expect(await scan('negAncestorManifestUnparsable')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negAncestorManifestUnparsable')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('an unrelated manifest unreadable (500): floor stays, narrow versions are added', async () => {
-    expect(await scan('negUnrelatedManifestReadError')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negUnrelatedManifestReadError')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaring manifest without a lockfile of its own', async () => {
-    expect(await scan('negDeclarerWithoutOwnLock')).toEqual(['vite@7.3.5', 'vite@8.3.0', 'vite@8.3.5', 'vite@8.3.6']);
+    expect(await scan('negDeclarerWithoutOwnLock')).toEqual(['vite@7.3.5', 'vite@8.3.5', 'vite@8.3.6']);
   });
 
   it('declaring manifest with an unparsable lockfile', async () => {
-    expect(await scan('negDeclarerLockUnparsable')).toEqual(['vite@7.3.5', 'vite@8.3.0', 'vite@8.3.5', 'vite@8.3.6']);
+    expect(await scan('negDeclarerLockUnparsable')).toEqual(['vite@7.3.5', 'vite@8.3.5', 'vite@8.3.6']);
   });
 
   it('declaring manifest whose lockfile cannot be read (500)', async () => {
-    expect(await scan('negDeclarerLockReadError')).toEqual(['vite@7.3.5', 'vite@8.3.0', 'vite@8.3.5', 'vite@8.3.6']);
+    expect(await scan('negDeclarerLockReadError')).toEqual(['vite@7.3.5', 'vite@8.3.5', 'vite@8.3.6']);
   });
 
   it('declaring manifest with a lockfileVersion 1 lockfile', async () => {
-    expect(await scan('negDeclarerLockV1')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negDeclarerLockV1')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaring manifest whose lockfile lists the name only nested', async () => {
-    expect(await scan('negDeclarerLockOnlyNestedKey')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negDeclarerLockOnlyNestedKey')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaring manifest whose lockfile version has no digit', async () => {
-    expect(await scan('negDeclarerLockVersionWithoutDigit')).toEqual(['vite@7.3.5', 'vite@8.3.0', 'vite@8.3.5', 'vite@8.3.6']);
+    expect(await scan('negDeclarerLockVersionWithoutDigit')).toEqual(['vite@7.3.5', 'vite@8.3.5', 'vite@8.3.6']);
   });
 
   it('declaration through an npm: alias', async () => {
-    expect(await scan('negDeclarationIsAlias')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negDeclarationIsAlias')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('declaration that is not a plain semver range (git spec)', async () => {
@@ -252,7 +252,7 @@ describe('drop rule: every declaring manifest is narrow for the name', () => {
   });
 
   it('installed version outside the declared range (stale lockfile)', async () => {
-    expect(await scan('negLockVersionOutsideDeclaredRange')).toEqual(['vite@7.0.1', 'vite@7.3.5', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negLockVersionOutsideDeclaredRange')).toEqual(['vite@7.0.1', 'vite@7.3.5', 'vite@8.3.5']);
   });
 });
 
@@ -267,25 +267,24 @@ describe('drop rule: the baseline version is installed nowhere', () => {
   });
 
   it('installed under an alias key in another lockfile', async () => {
-    expect(await scan('negBaseVersionAliasedInOtherLock')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negBaseVersionAliasedInOtherLock')).toEqual(['vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('installed nested in a lockfileVersion 1 lockfile of a project that does not declare the name', async () => {
     expect(await scan('negBaseVersionInOtherV1Lock')).toEqual([
       'vite@7.3.5',
       'vite@7.3.7',
-      'vite@8.3.0',
       'vite@8.3.5',
       'vitest@0.34.6',
     ]);
   });
 
   it('a lockfile elsewhere cannot be read (500)', async () => {
-    expect(await scan('negOtherLockReadError')).toEqual(['left@1.0.0', 'vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negOtherLockReadError')).toEqual(['left@1.0.0', 'vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 
   it('a lockfile elsewhere is not valid JSON', async () => {
-    expect(await scan('negOtherLockUnparsable')).toEqual(['left@1.0.0', 'vite@7.3.5', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+    expect(await scan('negOtherLockUnparsable')).toEqual(['left@1.0.0', 'vite@7.3.5', 'vite@7.3.7', 'vite@8.3.5']);
   });
 });
 

@@ -1559,7 +1559,8 @@ export const SCENARIOS: Record<string, Scenario> = {
       'tools/package.json': pkg({ name: 'tools', dependencies: { vite: '~5.4.2' } }),
     },
   },
-  // No lockfile records the name: both ranges are plain, so both floors are queried.
+  // No lockfile records the name: nothing can satisfy a range, both ranges are
+  // plain, so both floors are queried.
   declarerRangesWithoutAnyLock: {
     files: {
       'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),
@@ -1567,7 +1568,8 @@ export const SCENARIOS: Record<string, Scenario> = {
     },
   },
   // yarn.lock records vite 8.3.5 and 7.3.7 (ambiguous), root declares ^8.3.0 and
-  // docs/ ^6.0.0: both floors and both lockfile versions are queried.
+  // docs/ ^6.0.0: both lockfile versions are queried, and the ^6.0.0 floor (no
+  // recorded version satisfies it); the ^8.3.0 floor is not, 8.3.5 satisfies it.
   declarerRangesBesideAmbiguousYarnLock: {
     files: {
       'package.json': pkg({ name: 'root', dependencies: { vite: '^8.3.0' } }),

@@ -863,7 +863,7 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     expect(additionsSeen).toBeGreaterThan(500);
     for (const b of BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
     expect(optionalPeerDrops, 'an optional peer that is not listed never coexists with a drop').toBeGreaterThan(20);
-    expect(viteAddedOnlyByPeerOrOptional, 'no case adds vite through a peer or optional declaration alone').toBeGreaterThan(20);
+    expect(viteAddedOnlyByPeerOrOptional, 'the generator reaches a peer or optional vite addition (P7 pins the set exactly)').toBeGreaterThan(20);
     expect(msAddedByPeerOrOptional, 'no case adds ms through a peer or optional declaration').toBeGreaterThan(20);
     expect(optionalPeerAdded, 'no case adds a listed optional peer').toBeGreaterThan(20);
     expect(bundledNarrowNoAdd, 'the generator reaches a narrow bundled extra project').toBeGreaterThan(20);

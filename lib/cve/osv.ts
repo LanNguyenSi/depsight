@@ -400,10 +400,16 @@ function manifestFloor(versionSpec: string): string | null {
  * - A name with no single resolution (the lockfiles record several versions
  *   and disagree, or no lockfile records it): no resolved version exists to
  *   test a range against, and the chain answer is only the floor of the
- *   lowest declared range. Every plain-range declarer's own floor is queried,
- *   and so is every version any lockfile records for the name (a yarn.lock
- *   with vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries
- *   vite@6.0.0, vite@8.3.0, vite@7.3.7 and vite@8.3.5).
+ *   lowest declared range. Every version any lockfile records for the name is
+ *   queried (nested transitive copies in a single package-lock.json included:
+ *   another package installs them, and one such copy is enough to leave the
+ *   name without a single resolution). A plain-range declarer's own floor is
+ *   queried only when no recorded version satisfies its range, the same
+ *   trade-off as the single-resolution branch above; for a name no lockfile
+ *   records, every plain-range declarer's floor is queried. A yarn.lock with
+ *   vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries vite@6.0.0
+ *   (the chain answer, unsatisfied), vite@7.3.7 and vite@8.3.5; the `^8.3.0`
+ *   floor is left out because 8.3.5 satisfies it.
  *
  * A plain range is a spec that `semver.validRange` accepts and that is not
  * the wildcard (`*`, `x`, the empty string): `^`, `~`, `>=`/`<` comparator
@@ -415,8 +421,11 @@ function manifestFloor(versionSpec: string): string | null {
  * `file:` specs are the no-range kind above.
  *
  * Not covered: declarations outside `dependencies` and `devDependencies` (see
- * `declaredOutsideDeps`; the narrow override handles those per project), and
- * workspace monorepos.
+ * `declaredOutsideDeps`; the narrow override handles those per project), the
+ * per-workspace provenance of a copy (which workspace member installs which
+ * version; the merged map cannot attribute it). The narrow override's drop proof
+ * is separate and untouched. The widening applies to workspace repositories
+ * like any other.
  */
 export function repoWideNpmEntries(
   manifests: ParsedNpmManifest[],
@@ -459,16 +468,23 @@ export function repoWideNpmEntries(
   for (const { name, versionSpec } of npmDeclarations(manifests)) {
     const range = semver.validRange(versionSpec);
     if (range !== null && range !== '*') {
-      // A plain range. With one merged resolution it only needs its own floor
-      // when that resolution is not a version this range accepts. Without one
-      // (ambiguous across lockfiles, or recorded by none) there is nothing to
-      // test the range against and the chain answer is the floor of the lowest
-      // declared range, so every plain-range declarer's floor is queried, and
-      // every version the lockfiles record for the name as well.
+      // A plain range needs its own floor only when nothing the lockfiles
+      // installed for the name is a version this range accepts. With one merged
+      // resolution that is the resolution; with observed versions but no single
+      // resolution (ambiguous across lockfiles) it is any observed version; a
+      // name no lockfile records has nothing to test against, so the floor is
+      // always queried. Observed copies of a name without a single resolution
+      // are queried below either way.
       const resolvedVersion = lockfileResolutions.get(name);
-      if (resolvedVersion !== undefined && semver.satisfies(resolvedVersion, versionSpec)) continue;
-      const floor = manifestFloor(versionSpec);
-      if (floor !== null) push({ name, version: floor });
+      const observed = resolvedVersion === undefined ? lockfileVersionsOf(merged, name) : [];
+      const satisfied =
+        resolvedVersion !== undefined
+          ? semver.satisfies(resolvedVersion, versionSpec)
+          : observed.some((version) => semver.satisfies(version, versionSpec));
+      if (!satisfied) {
+        const floor = manifestFloor(versionSpec);
+        if (floor !== null) push({ name, version: floor });
+      }
       if (resolvedVersion !== undefined) continue;
     }
     for (const version of lockfileVersionsOf(merged, name)) push({ name, version });
