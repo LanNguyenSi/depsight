@@ -362,16 +362,30 @@ interface DepEntry {
 
 /**
  * The usable manifest floor of a dependency spec, or null when there is none.
- * Usable as-is when the spec with its leading range operator stripped parses as
- * an exact semver version (fast path); otherwise the RAW spec is tried as a
- * semver RANGE and its `minVersion` is the floor. A digit-free spec (`*`,
- * `latest`, `workspace:*`) is excluded on purpose: `semver.validRange` would
- * accept `*` and `minVersion` would wrongly resolve it to `0.0.0`.
+ * The floor is always a version the spec admits.
+ *
+ * Fast path: a spec that opens with `^`, `~`, `=`, `>=` or nothing (an optional
+ * `v` before the digits) keeps its stripped form when that parses as an exact
+ * semver version (`^1.2.3` gives `1.2.3`, `v1.2.3` gives `1.2.3`). Every other
+ * valid range (`<2.0.0`, `<=1.5.0`, `>1.0.0`, `>1 <3`, hyphen ranges, `||`
+ * unions, `1.x`) takes `semver.minVersion` of the raw spec; stripping a `<`, `<=`
+ * or `>` would name a bound the range excludes. A satisfiable range always has
+ * a minVersion; an unsatisfiable one (`>=2 <1`) yields null, because the
+ * stripped bound is outside the range (null falls back to the lockfile or the
+ * ambiguous map in the caller). An invalid spec has no range to be outside of,
+ * so it keeps the previous behaviour: the stripped form when that parses as an
+ * exact version, else null. A digit-free spec (`*`, `x`, `latest`,
+ * `workspace:*`) is excluded on purpose: `semver.validRange` would accept `*`
+ * and `minVersion` would wrongly resolve it to `0.0.0`.
  */
-function manifestFloor(versionSpec: string): string | null {
+export function manifestFloor(versionSpec: string): string | null {
   const floor = versionSpec.replace(/^[^0-9]*/, '');
-  if (semver.valid(floor) !== null) return floor;
-  if (floor === '' || semver.validRange(versionSpec) === null) return null;
+  if (floor === '') return null;
+  const keepsStrippedForm = /^(?:\^|~|>=|=)?\s*v?\d/.test(versionSpec.trim());
+  if (keepsStrippedForm && semver.valid(floor) !== null) return floor;
+  if (semver.validRange(versionSpec) === null) {
+    return semver.valid(floor) !== null ? floor : null;
+  }
   return semver.minVersion(versionSpec)?.version ?? null;
 }
 
@@ -726,7 +740,8 @@ function raisedNpmVersion(
  * query: when `semver.validRange(versionSpec)` succeeds (`^19`, `~1.2`,
  * `2.x`, `>=1.2` — ordinary ranges whose floor-strip merely isn't a full
  * x.y.z), `semver.minVersion(versionSpec)` supplies the range's lowest
- * version (`^19` -> `19.0.0`) as the query version — more precise than the
+ * version (`^19` -> `19.0.0`) as the query version; a spec that opens with
+ * `<`, `<=` or `>` always takes this path, never the stripped bound (`manifestFloor`) — more precise than the
  * pre-task raw-floor value would have been for the same range. Only when
  * NEITHER the exact-floor nor the range path yields anything (a git ref, a
  * malformed/unsupported `npm:` alias, or a genuinely version-free spec like
