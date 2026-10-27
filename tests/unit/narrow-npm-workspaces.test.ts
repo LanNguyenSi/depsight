@@ -1123,6 +1123,9 @@ describe('repoHasOnlyRegistrySpecs', () => {
     const locks = [{ a: {}, b: {} }, { c: {}, d: {} }];
     expect(repoHasOnlyRegistrySpecs([], locks, 4)).toBe(true);
     expect(repoHasOnlyRegistrySpecs([], locks, 3)).toBe(false);
+    // entries that are not objects hold no spec, and count all the same
+    expect(repoHasOnlyRegistrySpecs([], [{ a: 'x', b: null, c: 1 }], 3)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([], [{ a: 'x', b: null, c: 1 }], 2)).toBe(false);
   });
 
   it('counts the specs of manifests and of lockfile entries against the same budget', () => {
