@@ -716,6 +716,18 @@ const EXPECTED: Record<string, Expectation> = {
     added: ['vite@7.3.6', 'vite@7.3.7'],
     why: 'b/ declares vite as peer and dev dependency (the usual plugin shape): 7.3.6 added once; floor 7.3.5 installed nowhere',
   }),
+  midPeerOnlyOwnLock: narrow({
+    base: ['ms@2.1.3'],
+    dropped: [],
+    added: ['vite@7.3.6'],
+    why: 'vite is declared only as a peer: the chain holds no entry for it and no declarer widens it, so the narrow override alone adds the version its own lockfile installs',
+  }),
+  midOptionalOnlyOwnLock: narrow({
+    base: ['ms@2.1.3'],
+    dropped: [],
+    added: ['vite@7.3.6'],
+    why: 'the same for an optionalDependencies declaration',
+  }),
   midPeerOnLocalPackage: narrow({
     base: ['vite@7.3.7'],
     dropped: [],

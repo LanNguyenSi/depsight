@@ -1467,6 +1467,25 @@ export const SCENARIOS: Record<string, Scenario> = {
       'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
     },
   },
+  // A name declared only as a peer or optional dependency has no repo-wide chain
+  // entry and no declarer, so the lockfile version it installs is queried by the
+  // narrow override alone (no widening of the chain can supply it).
+  midPeerOnlyOwnLock: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { ms: '2.1.3' } }),
+      'a/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+      'b/package.json': pkg({ name: 'b', peerDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
+  midOptionalOnlyOwnLock: {
+    files: {
+      'a/package.json': pkg({ name: 'a', dependencies: { ms: '2.1.3' } }),
+      'a/package-lock.json': v3({ 'node_modules/ms': '2.1.3' }),
+      'b/package.json': pkg({ name: 'b', optionalDependencies: { vite: '^7.3.6' } }),
+      'b/package-lock.json': v3({ 'node_modules/vite': '7.3.6' }),
+    },
+  },
   // A peer on a package that is another project of the repository: local names
   // are never queried.
   midPeerOnLocalPackage: {
