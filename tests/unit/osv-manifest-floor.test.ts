@@ -81,4 +81,43 @@ describe('callers of manifestFloor see the in-range floor', () => {
     const out = repoWideNpmEntries([{ dependencies: { foo: '>1.0.0 <3.0.0' } }], resolved, EMPTY);
     expect(pairs(out)).toEqual(['foo@1.0.1', 'foo@5.0.0']);
   });
+
+  it('chain fallback: a <=x spec queries both its lowest admitted version and x', () => {
+    const out = repoWideNpmEntries([{ dependencies: { foo: '<=1.5.0' } }], EMPTY, EMPTY);
+    expect(pairs(out)).toEqual(['foo@0.0.0', 'foo@1.5.0']);
+  });
+
+  it('chain fallback: a lockfile resolution wins over a <=x spec (no extra pairs)', () => {
+    const resolved: LockfileResolutions = { resolved: new Map([['foo', '1.2.0']]), ambiguous: new Map() };
+    const out = repoWideNpmEntries([{ dependencies: { foo: '<=1.5.0' } }], resolved, EMPTY);
+    expect(pairs(out)).toEqual(['foo@1.2.0']);
+  });
+
+  it('declarer floor: a <=x range above the resolved version queries 0.0.0 and x', () => {
+    const resolved: LockfileResolutions = { resolved: new Map([['foo', '5.0.0']]), ambiguous: new Map() };
+    const out = repoWideNpmEntries([{ dependencies: { foo: '<=1.5.0' } }], resolved, EMPTY);
+    expect(pairs(out)).toEqual(['foo@0.0.0', 'foo@1.5.0', 'foo@5.0.0']);
+  });
+
+  it('<x and >x keep a single lowest-admitted query in both caller paths', () => {
+    const resolved: LockfileResolutions = { resolved: new Map([['foo', '5.0.0']]), ambiguous: new Map() };
+    expect(pairs(repoWideNpmEntries([{ dependencies: { foo: '<2.0.0' } }], EMPTY, EMPTY))).toEqual(['foo@0.0.0']);
+    expect(pairs(repoWideNpmEntries([{ dependencies: { foo: '>1.0.0' } }], EMPTY, EMPTY))).toEqual(['foo@1.0.1']);
+    expect(pairs(repoWideNpmEntries([{ dependencies: { foo: '<2.0.0' } }], resolved, EMPTY))).toEqual([
+      'foo@0.0.0',
+      'foo@5.0.0',
+    ]);
+  });
+
+  it('a <=0.0.0 spec does not duplicate its floor', () => {
+    const out = repoWideNpmEntries([{ dependencies: { foo: '<=0.0.0' } }], EMPTY, EMPTY);
+    expect(pairs(out)).toEqual(['foo@0.0.0']);
+  });
+
+  it('chain fallback only: a <=x spec whose observed copies satisfy it still queries 0.0.0 and x', () => {
+    const npm: LockfileResolutions = { resolved: new Map([['foo', '1.0.0']]), ambiguous: new Map() };
+    const yarn: LockfileResolutions = { resolved: new Map([['foo', '1.2.0']]), ambiguous: new Map() };
+    const out = repoWideNpmEntries([{ dependencies: { foo: '<=1.5.0' } }], npm, yarn);
+    expect(pairs(out)).toEqual(['foo@0.0.0', 'foo@1.0.0', 'foo@1.2.0', 'foo@1.5.0']);
+  });
 });

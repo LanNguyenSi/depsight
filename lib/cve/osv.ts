@@ -362,7 +362,7 @@ interface DepEntry {
 
 /**
  * The usable manifest floor of a dependency spec, or null when there is none.
- * The floor is always a version the spec admits.
+ * The floor is a version the spec admits, for any valid range.
  *
  * Fast path: a spec that opens with `^`, `~`, `=`, `>=` or nothing (an optional
  * `v` before the digits) keeps its stripped form when that parses as an exact
@@ -387,6 +387,23 @@ export function manifestFloor(versionSpec: string): string | null {
     return semver.valid(floor) !== null ? floor : null;
   }
   return semver.minVersion(versionSpec)?.version ?? null;
+}
+
+/**
+ * The versions to query OSV for under one dependency spec: its `manifestFloor`
+ * and, for a `<=x` spec whose bound `x` is an exact version (always admitted by
+ * `<=x`), `x` too. OSV queries are single-version lookups, and with no lockfile a
+ * `<=x` range installs a version at or near `x`, which the lowest admitted
+ * version (`0.0.0`) does not stand in for. `<x` excludes `x`, so it gets no
+ * extra query. Empty when the spec has no floor. Only the query callers use
+ * this; the dependency-age proof floor stays on `manifestFloor`.
+ */
+function manifestQueryVersions(versionSpec: string): string[] {
+  const floor = manifestFloor(versionSpec);
+  if (floor === null) return [];
+  const bound = /^<=\s*(v?\d\S*)$/.exec(versionSpec.trim())?.[1];
+  const exact = bound !== undefined ? semver.valid(bound) : null;
+  return exact === null ? [floor] : [floor, exact];
 }
 
 /**
@@ -449,23 +466,23 @@ export function repoWideNpmEntries(
   const merged = mergeLockfileResolutions([npmLockfileResolutions, yarnLockfileResolutions]);
   const { resolved: lockfileResolutions, ambiguous: ambiguousLockfileResolutions } = merged;
   const chain = unionNpmDeps(manifests)
-    .map(({ name, versionSpec }) => {
+    .flatMap(({ name, versionSpec }): DepEntry[] => {
       // Prefer the lockfile-resolved version (exact installed version) to
       // avoid false positives from the manifest floor. Fall back to the
       // floor-strip when neither lockfile is present or lists this dep;
       // full rationale for what counts as a "usable" floor (exact vs.
       // range-derived), the ambiguous last-resort, and the one documented
       // drop case is in the doc comment above `collectDeps`. Mechanics: the
-      // usable floor is `manifestFloor` (above); only when it yields nothing
-      // does the `ambiguous` map (or, failing that, an empty string that drops
-      // the dep) apply. D-006 ordering is unchanged: resolved > usable floor
-      // (exact or range-derived) > ambiguous.
-      const version =
-        lockfileResolutions.get(name) ??
-        manifestFloor(versionSpec) ??
-        ambiguousLockfileResolutions.get(name) ??
-        '';
-      return { name, version };
+      // usable floor is `manifestFloor` (above, plus the `<=x` bound from
+      // `manifestQueryVersions`); only when it yields nothing does the
+      // `ambiguous` map (or, failing that, an empty string that drops the dep)
+      // apply. D-006 ordering is unchanged: resolved > usable floor (exact or
+      // range-derived) > ambiguous.
+      const resolvedVersion = lockfileResolutions.get(name);
+      if (resolvedVersion !== undefined) return [{ name, version: resolvedVersion }];
+      const floors = manifestQueryVersions(versionSpec);
+      if (floors.length > 0) return floors.map((version) => ({ name, version }));
+      return [{ name, version: ambiguousLockfileResolutions.get(name) ?? '' }];
     })
     .filter(({ version }) => /\d/.test(version));
 
@@ -496,8 +513,7 @@ export function repoWideNpmEntries(
           ? semver.satisfies(resolvedVersion, versionSpec)
           : observed.some((version) => semver.satisfies(version, versionSpec));
       if (!satisfied) {
-        const floor = manifestFloor(versionSpec);
-        if (floor !== null) push({ name, version: floor });
+        for (const version of manifestQueryVersions(versionSpec)) push({ name, version });
       }
       if (resolvedVersion !== undefined) continue;
     }
