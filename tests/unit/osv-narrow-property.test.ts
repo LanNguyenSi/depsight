@@ -64,6 +64,11 @@
  *       added, modelled here as the same drop rule and the additions of
  *       dependencies and devDependencies only) queried for the same input
  *
+ * Note: base is the repo-wide chain with the declarer floors, which also queries
+ * every lockfile copy of a name with no single resolution. A narrow addition of
+ * vite is therefore often already in base (`added` is then empty for it), and the
+ * counts below that used to read "not in base" count what P7 pins instead.
+ *
  * Non-vacuity: the generator reaches drops, kept floors and additions, and for
  * each varied dimension there are cases where only that dimension keeps the
  * floor (the oracle with that dimension blinded would drop it).
@@ -791,7 +796,6 @@ describe('narrow override properties (seeded, generated repositories)', () => {
           model.manifests.some((m) => m.key === 'vite' && m.lockVersion === v && narrowInModel(model, m)) ||
           extraAdds.includes(v);
         if (!ok) fail(`P4 added ${q} is not what a narrow declaration's own lockfile installs`);
-        additionsSeen++;
       }
 
       // P7: the head set is the kept baseline entries plus the narrow additions, nothing else.
@@ -802,6 +806,11 @@ describe('narrow override properties (seeded, generated repositories)', () => {
       {
         const expectedAdds = incomplete ? [] : [...manifestAdds, ...extraAdds];
         const expected = [...new Set([...keptVite, ...expectedAdds])].sort();
+        // The repo-wide chain now queries every version a lockfile records for a
+        // declared name, so a narrow addition of vite is usually in base already
+        // and `added` above stays empty for it; count the additions the override
+        // guarantees (P7 pins them exactly) for the non-vacuity check below.
+        additionsSeen += expectedAdds.length;
         const actual = head.filter((q) => q.startsWith('vite@')).map((q) => q.slice(5)).sort();
         if (JSON.stringify(expected) !== JSON.stringify(actual)) fail(`P7 head vite set ${actual} != expected ${expected}`);
       }
@@ -818,7 +827,11 @@ describe('narrow override properties (seeded, generated repositories)', () => {
         previousHeadEntries += previousHead.length;
         // Positive controls: peer or optional declarations add what the previous
         // head did not query; a narrow bundled name adds nothing.
-        if (extraAdds.some((v) => !previousHead.includes(`vite@${v}`))) viteAddedOnlyByPeerOrOptional++;
+        // (The repo-wide chain also queries the lockfile copies of a declared
+        // name now, so the version may be in base already; the count is of the
+        // cases where the generator reaches a peer or optional addition at all,
+        // and P7 pins it exactly.)
+        if (!incomplete && extraAdds.length > 0) viteAddedOnlyByPeerOrOptional++;
         if (expectedMsAdds.length > 0) {
           msAddedByPeerOrOptional++;
           if (model.manifests.some((m) => m.ms?.peerOptional && m.ms.state === 'listed')) optionalPeerAdded++;
@@ -828,9 +841,12 @@ describe('narrow override properties (seeded, generated repositories)', () => {
           model.extra?.field === 'bundleDependencies' &&
           NARROW_SHAPES.includes(model.extra.lock) &&
           model.extra.entry === 'semver' &&
-          extraNarrowInModel(model, model.extra) &&
-          !head.includes(`vite@${model.extra.lockVersion}`)
+          extraNarrowInModel(model, model.extra)
         ) {
+          // The bundled project's own lockfile version is not an addition of the
+          // narrow override (P7 pins that exactly), but it can still be queried as
+          // a lockfile copy of the declared name, so membership in head is no
+          // longer the signal; the count is of the cases the generator reaches.
           bundledNarrowNoAdd++;
         }
       }
@@ -850,7 +866,7 @@ describe('narrow override properties (seeded, generated repositories)', () => {
     expect(viteAddedOnlyByPeerOrOptional, 'no case adds vite through a peer or optional declaration alone').toBeGreaterThan(20);
     expect(msAddedByPeerOrOptional, 'no case adds ms through a peer or optional declaration').toBeGreaterThan(20);
     expect(optionalPeerAdded, 'no case adds a listed optional peer').toBeGreaterThan(20);
-    expect(bundledNarrowNoAdd, 'a narrow bundled name never coexists with a missing addition').toBeGreaterThan(20);
+    expect(bundledNarrowNoAdd, 'the generator reaches a narrow bundled extra project').toBeGreaterThan(20);
     expect(previousHeadEntries).toBeGreaterThan(500);
     expect(reflectedOverrideDrops, 'a reflected string override never coexists with a drop').toBeGreaterThan(20);
     expect(exemptEdgeDrops, 'an exempt edge without an entry never coexists with a drop').toBeGreaterThan(20);

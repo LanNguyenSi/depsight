@@ -397,14 +397,26 @@ function manifestFloor(versionSpec: string): string | null {
  *   holds, which the merged map cannot attribute to it, so every version any
  *   lockfile records for the name is queried.
  *
- * Not covered: a name the lockfiles resolve ambiguously, or that no lockfile
- * resolves. The range branch only acts on a single merged `resolved` version,
- * so for such a name only the chain answer, the floor of the lowest declared
- * range, is queried: a declarer of a higher range and the lockfile copies of
- * that name are not queried (a yarn.lock with vite 8.3.5 and 7.3.7, root
- * `^8.3.0`, `docs/` `^6.0.0` queries only vite@6.0.0). Also not covered:
- * declarations outside `dependencies` and `devDependencies` (see
- * `declaredOutsideDeps`; the narrow override handles those per project).
+ * - A name with no single resolution (the lockfiles record several versions
+ *   and disagree, or no lockfile records it): no resolved version exists to
+ *   test a range against, and the chain answer is only the floor of the
+ *   lowest declared range. Every plain-range declarer's own floor is queried,
+ *   and so is every version any lockfile records for the name (a yarn.lock
+ *   with vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries
+ *   vite@6.0.0, vite@8.3.0, vite@7.3.7 and vite@8.3.5).
+ *
+ * A plain range is a spec that `semver.validRange` accepts and that is not
+ * the wildcard (`*`, `x`, the empty string): `^`, `~`, `>=`/`<` comparator
+ * sets, x-ranges (`7.x`), hyphen ranges, `||` unions and exact pins. Its floor
+ * is `manifestFloor`: the exact version after stripping the operator, else the
+ * `minVersion` of the whole range (for a `||` union that is the lowest
+ * alternative; a higher alternative gets no floor of its own). A range that
+ * admits no version has no floor and adds nothing. Wildcards, tags, git and
+ * `file:` specs are the no-range kind above.
+ *
+ * Not covered: declarations outside `dependencies` and `devDependencies` (see
+ * `declaredOutsideDeps`; the narrow override handles those per project), and
+ * workspace monorepos.
  */
 export function repoWideNpmEntries(
   manifests: ParsedNpmManifest[],
@@ -447,13 +459,17 @@ export function repoWideNpmEntries(
   for (const { name, versionSpec } of npmDeclarations(manifests)) {
     const range = semver.validRange(versionSpec);
     if (range !== null && range !== '*') {
-      // A plain range: it only needs its own floor when the one resolution the
-      // chain queried for the name is not a version this range accepts.
+      // A plain range. With one merged resolution it only needs its own floor
+      // when that resolution is not a version this range accepts. Without one
+      // (ambiguous across lockfiles, or recorded by none) there is nothing to
+      // test the range against and the chain answer is the floor of the lowest
+      // declared range, so every plain-range declarer's floor is queried, and
+      // every version the lockfiles record for the name as well.
       const resolvedVersion = lockfileResolutions.get(name);
-      if (resolvedVersion === undefined || semver.satisfies(resolvedVersion, versionSpec)) continue;
+      if (resolvedVersion !== undefined && semver.satisfies(resolvedVersion, versionSpec)) continue;
       const floor = manifestFloor(versionSpec);
       if (floor !== null) push({ name, version: floor });
-      continue;
+      if (resolvedVersion !== undefined) continue;
     }
     for (const version of lockfileVersionsOf(merged, name)) push({ name, version });
   }

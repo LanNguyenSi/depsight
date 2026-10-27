@@ -8,8 +8,12 @@
  *   non-range branch  a declarer with no range to compare (`latest`, a tag, a
  *                     git or `file:` spec, `*`): every version any lockfile
  *                     records for the name is queried
+ *   no-resolution     a plain-range declarer of a name with no single merged
+ *                     resolution (ambiguous across lockfiles, or recorded by
+ *                     none): its floor, and every version any lockfile records
+ *                     for the name, are queried
  *
- * Both only ever ADD to the chain the code produced before. The exact query
+ * All three only ever ADD to the chain the code produced before. The exact query
  * sets of the two shapes found by review run through the real pipeline in
  * osv-narrow-scenarios.test.ts (declarerRangeBelowRootLock and
  * latestDeclarerBesideLockedRange); this file pins the branches and the input
@@ -125,32 +129,11 @@ describe('range branch: a declared plain range the resolved version does not sat
     expect(asPairs(out)).toEqual(['other@1.0.0']);
   });
 
-  it('adds nothing for a name without a resolved version (floor or ambiguous answers it)', () => {
-    // No lockfile at all: the lowest declared range is the chain answer.
-    expect(
-      asPairs(repoWideNpmEntries([deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })], EMPTY, EMPTY)),
-    ).toEqual(['vite@6.0.0']);
-    // Conflicting lockfile copies: the name is ambiguous, not resolved; the
-    // chain keeps the floor of the lowest range and the range branch is silent.
-    expect(
-      asPairs(
-        repoWideNpmEntries(
-          [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })],
-          npmLock({ vite: ['8.3.5', '7.3.7'] }),
-          EMPTY,
-        ),
-      ),
-    ).toEqual(['vite@6.0.0']);
-  });
-
-  it('documented residual: an ambiguous or unresolved name queries only the lowest range floor', () => {
-    const ranges = [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })];
-    // yarn.lock with two versions: root's installed 8.3.5 and the 7.3.7 copy stay unqueried.
-    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, yarnLock({ vite: ['8.3.5', '7.3.7'] })))).toEqual([
-      'vite@6.0.0',
+  it('keeps the resolved-name behaviour when the one resolution satisfies the range', () => {
+    // The ambiguous/unresolved branch does not run for a single resolution.
+    expect(asPairs(repoWideNpmEntries([deps({ vite: '^8.3.0' })], npmLock({ vite: ['8.3.5'] }), EMPTY))).toEqual([
+      'vite@8.3.5',
     ]);
-    // No lockfile: the higher range's floor 8.3.0 stays unqueried.
-    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, EMPTY))).toEqual(['vite@6.0.0']);
   });
 
   it('uses the resolution both lockfile formats agree on, and nothing when they disagree', () => {
@@ -165,8 +148,9 @@ describe('range branch: a declared plain range the resolved version does not sat
       npmLock({ vite: ['8.3.5'] }),
       yarnLock({ vite: ['8.4.0'] }),
     );
-    // Disagreement leaves the name ambiguous: the chain answers with the floor 6.0.0.
-    expect(asPairs(disagree)).toEqual(['vite@6.0.0']);
+    // Disagreement leaves the name ambiguous: the chain answers with the floor
+    // 6.0.0 and both formats' versions are queried next to it.
+    expect(asPairs(disagree)).toEqual(['vite@6.0.0', 'vite@8.3.5', 'vite@8.4.0']);
   });
 });
 
@@ -213,8 +197,171 @@ describe('non-range branch: a declared spec with no range to compare', () => {
       npmLock({ vite: ['8.3.5', '7.3.7'], ms: ['2.1.3', '2.0.0'] }),
       EMPTY,
     );
-    // ms keeps its chain answer, the floor of ^2.0.0; vite gains every copy.
-    expect(asPairs(out)).toEqual(['ms@2.0.0', 'vite@7.3.7', 'vite@8.3.5']);
+    // ms is a plain range with two lockfile copies (no single resolution): its
+    // floor 2.0.0 and both copies; vite gains every copy.
+    expect(asPairs(out)).toEqual(['ms@2.0.0', 'ms@2.1.3', 'vite@7.3.7', 'vite@8.3.5']);
+  });
+});
+
+describe('no single resolution: ambiguous or unresolved name', () => {
+  const ambiguousLock = () => npmLock({ vite: ['8.3.5', '7.3.7'] });
+  const singleLock = () => npmLock({ vite: ['8.3.5'] });
+
+  // Each row: the declared specs, then the expected pairs for a name with a single
+  // resolution (8.3.5), an ambiguous one (8.3.5 and 7.3.7 in one lockfile) and an
+  // unresolved one (no lockfile). The chain answer is part of every set.
+  const matrix: Array<[string, string[], string[], string[], string[]]> = [
+    ['one plain range', ['^8.3.0'], ['vite@8.3.5'], ['vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5'], ['vite@8.3.0']],
+    [
+      'two plain ranges',
+      ['^8.3.0', '^6.0.0'],
+      ['vite@6.0.0', 'vite@8.3.5'],
+      ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5'],
+      ['vite@6.0.0', 'vite@8.3.0'],
+    ],
+    ['one non-range (latest)', ['latest'], ['vite@8.3.5'], ['vite@7.3.7', 'vite@8.3.5'], []],
+    ['one wildcard', ['*'], ['vite@8.3.5'], ['vite@7.3.7', 'vite@8.3.5'], []],
+    [
+      'plain range and non-range',
+      ['^6.0.0', 'latest'],
+      ['vite@6.0.0', 'vite@8.3.5'],
+      ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5'],
+      ['vite@6.0.0'],
+    ],
+    [
+      'plain range and wildcard',
+      ['^6.0.0', '*'],
+      ['vite@6.0.0', 'vite@8.3.5'],
+      ['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.5'],
+      ['vite@6.0.0'],
+    ],
+  ];
+
+  it.each(matrix)('%s: single resolution', (_label, specs, single) => {
+    const out = repoWideNpmEntries(specs.map((spec) => deps({ vite: spec })), singleLock(), EMPTY);
+    expect(asPairs(out)).toEqual(single);
+  });
+
+  it.each(matrix)('%s: ambiguous name', (_label, specs, _single, ambiguous) => {
+    const out = repoWideNpmEntries(specs.map((spec) => deps({ vite: spec })), ambiguousLock(), EMPTY);
+    expect(asPairs(out)).toEqual(ambiguous);
+  });
+
+  it.each(matrix)('%s: unresolved name', (_label, specs, _single, _ambiguous, unresolved) => {
+    const out = repoWideNpmEntries(specs.map((spec) => deps({ vite: spec })), EMPTY, EMPTY);
+    expect(asPairs(out)).toEqual(unresolved);
+  });
+
+  it('a single resolution in one format keeps the old answer even when the other format holds several', () => {
+    // npm resolves vite to 8.3.5; yarn records 8.3.5 and 7.3.7. The name has one
+    // merged resolution, so the range branch alone applies: the unsatisfied
+    // ^6.0.0 floor joins, the yarn copy 7.3.7 does not.
+    const out = repoWideNpmEntries(
+      [deps({ vite: '^6.0.0' })],
+      npmLock({ vite: ['8.3.5'] }),
+      yarnLock({ vite: ['8.3.5', '7.3.7'] }),
+    );
+    expect(asPairs(out)).toEqual(['vite@6.0.0', 'vite@8.3.5']);
+    // The same repository with a wildcard declarer: every recorded version.
+    const wildcard = repoWideNpmEntries(
+      [deps({ vite: '*' })],
+      npmLock({ vite: ['8.3.5'] }),
+      yarnLock({ vite: ['8.3.5', '7.3.7'] }),
+    );
+    expect(asPairs(wildcard)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it('yarn.lock with two versions beside a higher and a lower range: both floors and both copies', () => {
+    const ranges = [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })];
+    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, yarnLock({ vite: ['8.3.5', '7.3.7'] })))).toEqual([
+      'vite@6.0.0',
+      'vite@7.3.7',
+      'vite@8.3.0',
+      'vite@8.3.5',
+    ]);
+  });
+
+  it('no lockfile: the higher range floor is queried too (the chain keeps only the lowest)', () => {
+    const ranges = [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })];
+    expect(asPairs(repoWideNpmEntries(ranges, EMPTY, EMPTY))).toEqual(['vite@6.0.0', 'vite@8.3.0']);
+  });
+
+  it('a lockfile copy outside every declared range is queried as well (a stale lockfile can still install it)', () => {
+    const out = repoWideNpmEntries([deps({ vite: '^8.3.0' })], npmLock({ vite: ['8.3.5', '4.0.0'] }), EMPTY);
+    expect(asPairs(out)).toEqual(['vite@4.0.0', 'vite@8.3.0', 'vite@8.3.5']);
+  });
+
+  it('reads devDependencies and an npm: alias of an ambiguous name like a dependency', () => {
+    const out = repoWideNpmEntries(
+      [deps({ vite: '^8.3.0' }), { devDependencies: { vite: '^6.0.0' } }, deps({ bundler: 'npm:vite@~5.4.2' })],
+      ambiguousLock(),
+      EMPTY,
+    );
+    expect(asPairs(out)).toEqual(['vite@5.4.2', 'vite@6.0.0', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+  });
+
+  it('only the ambiguous name widens; a neighbour with a single resolution keeps the old behaviour', () => {
+    const out = repoWideNpmEntries(
+      [deps({ vite: '^8.3.0', ms: '^2.0.0' }), deps({ ms: '^1.0.0' })],
+      npmLock({ vite: ['8.3.5', '7.3.7'], ms: ['2.1.3'] }),
+      EMPTY,
+    );
+    // ms: resolved 2.1.3 satisfies ^2.0.0, not ^1.0.0, so only the ^1.0.0 floor joins.
+    expect(asPairs(out)).toEqual(['ms@1.0.0', 'ms@2.1.3', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
+  });
+
+  // Which spec counts as a plain range, and what its floor is, for a name with no
+  // single resolution. A plain range is what semver.validRange accepts and is not
+  // the wildcard; its floor is the exact version after the operator or the
+  // minVersion of the whole range. The lockfile holds 8.3.5 and 7.3.7.
+  it.each([
+    ['^8.3.0', ['vite@8.3.0']],
+    ['~5.4.2', ['vite@5.4.2']],
+    ['>=6.1.0 <7', ['vite@6.1.0']],
+    ['7.x', ['vite@7.0.0']],
+    ['8.3.5', ['vite@8.3.5']],
+    ['6.0.0 - 6.5.0', ['vite@6.0.0']],
+    ['1.x || 8.x', ['vite@1.0.0']],
+    ['^6.0.0-beta.1', ['vite@6.0.0-beta.1']],
+  ])('plain range %j: floor is queried beside both lockfile copies', (spec, floor) => {
+    const out = repoWideNpmEntries([deps({ vite: spec })], ambiguousLock(), EMPTY);
+    expect(asPairs(out)).toEqual([...new Set([...floor, 'vite@7.3.7', 'vite@8.3.5'])].sort());
+  });
+
+  it('a `||` union gets the floor of its lowest alternative only', () => {
+    const out = repoWideNpmEntries([deps({ vite: '^1.0.0 || ^8.0.0' })], EMPTY, EMPTY);
+    expect(asPairs(out)).toEqual(['vite@1.0.0']);
+  });
+
+  it('a range that admits no version has no floor: the copies and the chain answer are queried', () => {
+    const out = repoWideNpmEntries([deps({ vite: '>2 <1' })], ambiguousLock(), EMPTY);
+    expect(asPairs(out)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it.each(['*', 'x', 'X', ''])('wildcard %j is not a plain range: no floor, only the copies', (spec) => {
+    const out = repoWideNpmEntries([deps({ vite: spec })], ambiguousLock(), EMPTY);
+    expect(asPairs(out)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+  });
+
+  it.each(['latest', 'beta', 'github:acme/vite#main', 'file:../vite', 'workspace:*'])(
+    'non-range %j beside an ambiguous name: no floor, only the copies',
+    (spec) => {
+      const out = repoWideNpmEntries([deps({ vite: spec })], ambiguousLock(), EMPTY);
+      expect(asPairs(out)).toEqual(['vite@7.3.7', 'vite@8.3.5']);
+    },
+  );
+
+  it('an unresolved name with only non-range declarers queries nothing', () => {
+    expect(asPairs(repoWideNpmEntries([deps({ vite: 'latest' }), deps({ vite: '*' })], EMPTY, EMPTY))).toEqual([]);
+  });
+
+  it('the copies of both lockfile formats are queried when the formats disagree', () => {
+    const out = repoWideNpmEntries(
+      [deps({ vite: '^8.3.0' }), deps({ vite: '^6.0.0' })],
+      npmLock({ vite: ['8.3.5'] }),
+      yarnLock({ vite: ['7.3.7'] }),
+    );
+    expect(asPairs(out)).toEqual(['vite@6.0.0', 'vite@7.3.7', 'vite@8.3.0', 'vite@8.3.5']);
   });
 });
 
@@ -366,6 +513,7 @@ describe('additions only: head is the previous chain plus exactly the declarer a
   it('holds over seeded random repositories', () => {
     let withRangeAddition = 0;
     let withNonRangeAddition = 0;
+    let withNoResolutionAddition = 0;
     let unchanged = 0;
     for (let seed = 1; seed <= 600; seed++) {
       const rand = rng(seed);
@@ -408,9 +556,10 @@ describe('additions only: head is the previous chain plus exactly the declarer a
       expect(head, `seed ${seed}`).toEqual(expect.arrayContaining(base));
       expect(new Set(head).size, `seed ${seed}`).toBe(head.length);
 
-      // Exactly the additions the two branches define, written from the generator's own facts.
+      // Exactly the additions the branches define, written from the generator's own facts.
       const lockVersions = (name: string) => new Set([...(npmEntries[name] ?? []), ...(yarnEntries[name] ?? [])]);
       const expectedExtra = new Set<string>();
+      let noResolutionSeed = false;
       for (const { name, spec, floor } of declared) {
         const all = lockVersions(name);
         if (floor !== null) {
@@ -421,13 +570,19 @@ describe('additions only: head is the previous chain plus exactly the declarer a
             .filter((versions): versions is string[] => versions !== undefined && versions.length === 1)
             .map((versions) => versions[0]);
           const resolved = perFormat.length > 0 && new Set(perFormat).size === 1 ? perFormat[0] : null;
-          if (resolved !== null && !semver.satisfies(resolved, spec)) expectedExtra.add(`${name}@${floor}`);
+          if (resolved === null) {
+            // No single resolution: the declarer's floor and every lockfile version.
+            expectedExtra.add(`${name}@${floor}`);
+            for (const version of all) expectedExtra.add(`${name}@${version}`);
+            if (all.size > 0 && ![...all].every((version) => version === floor)) noResolutionSeed = true;
+          } else if (!semver.satisfies(resolved, spec)) expectedExtra.add(`${name}@${floor}`);
         } else {
           for (const version of all) expectedExtra.add(`${name}@${version}`);
         }
       }
       expect(head, `seed ${seed}`).toEqual([...new Set([...base, ...expectedExtra])].sort());
 
+      if (noResolutionSeed) withNoResolutionAddition++;
       const added = head.filter((p) => !base.includes(p));
       if (added.length === 0) unchanged++;
       if (added.some((p) => declared.some((d) => d.floor !== null && p === `${d.name}@${d.floor}`))) withRangeAddition++;
@@ -437,5 +592,6 @@ describe('additions only: head is the previous chain plus exactly the declarer a
     expect(unchanged).toBeGreaterThan(20);
     expect(withRangeAddition).toBeGreaterThan(20);
     expect(withNonRangeAddition).toBeGreaterThan(20);
+    expect(withNoResolutionAddition).toBeGreaterThan(20);
   });
 });

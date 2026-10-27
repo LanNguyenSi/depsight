@@ -67,7 +67,7 @@ A complete list of what depsight does today, beyond the headline value props in 
     `devDependencies`, `optionalDependencies` and `peerDependencies` all count,
     since `npm ci` installs them; a peer marked optional in
     `peerDependenciesMeta` counts when the lockfile lists it, a bundled name
-    carries no range and never adds a query), and the repository-wide
+    carries no range and never adds a query of its own), and the repository-wide
     entry for it (a manifest floor that no project installs) is removed only
     when everything the scan reads is positively accounted for and no
     `package-lock.json` the scan reads installs it (vendored, build and fixture
@@ -116,11 +116,13 @@ A complete list of what depsight does today, beyond the headline value props in 
     `file:` spec, `*`) has every version any lockfile records for the name
     queried, nested copies included (lockfileVersion 2 or 3 and `yarn.lock`;
     a lockfileVersion 1 lockfile is read top-level only). For a name the
-    lockfiles resolve ambiguously, or that no lockfile resolves, only the
-    floor of the lowest declared range is queried: a declarer of a higher
-    range and the lockfile copies of that name are not covered (a `yarn.lock`
-    with vite 8.3.5 and 7.3.7, root `^8.3.0`, `docs/` `^6.0.0` queries only
-    vite 6.0.0). A project that declares a range the
+    lockfiles resolve ambiguously, or that no lockfile resolves, the floor of
+    every plain-range declaration and every version any lockfile records for
+    the name are queried (a `yarn.lock` with vite 8.3.5 and 7.3.7, root
+    `^8.3.0`, `docs/` `^6.0.0` queries vite 6.0.0, 8.3.0, 7.3.7 and 8.3.5;
+    plain range: a spec `semver.validRange` accepts that is not a wildcard,
+    floor: the exact version after the operator, else the lowest version the
+    range admits). A project that declares a range the
     resolved version satisfies but installs another version, and a name
     declared only in `optionalDependencies`, `peerDependencies` or
     `bundleDependencies` without a lockfile, are not covered. It is not a
