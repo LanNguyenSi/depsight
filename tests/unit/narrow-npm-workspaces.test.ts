@@ -452,7 +452,7 @@ describe('workspace: positive control', () => {
   it('the linked member version comes from its package.json and must equal the lockfile folder entry', () => {
     expect(droppable(withManifest('packages/b/package.json', memberB({ version: '1.1.0' })))).toBe(false);
     expect(droppable(manifests(), withPackages((p) => (p['packages/b'] = { name: 'b', version: '1.1.0', dependencies: { vite: '^7.0.0' } })))).toBe(false);
-    for (const version of [undefined, '', 'one', 1]) {
+    for (const version of [undefined, '', 'one', 1, '01.0.0']) {
       const m = withManifest('packages/b/package.json', { name: 'b', version, dependencies: { vite: '^7.0.0' } });
       const l = withPackages((p) => (p['packages/b'] = { name: 'b', version, dependencies: { vite: '^7.0.0' } }));
       expect(droppable(m, l), JSON.stringify(version)).toBe(false);
@@ -739,6 +739,12 @@ describe('workspace: adversarial lockfiles never widen a drop', () => {
     const m = { ...manifests(), 'packages/c/package.json': pkg({ name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } }) };
     const l = withPackages((p) => (p['node_modules/c'] = { resolved: 'packages/b', link: true }));
     expect(droppable(m, l)).toBe(false);
+    // also when c has a folder entry of its own: its link resolves to b's folder, not to c's
+    const withFolder = withPackages((p) => {
+      p['node_modules/c'] = { resolved: 'packages/b', link: true };
+      p['packages/c'] = { name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } };
+    });
+    expect(droppable(m, withFolder)).toBe(false);
   });
 
   it('duplicate JSON keys: the last one wins, as for npm', () => {

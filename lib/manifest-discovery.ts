@@ -1684,7 +1684,7 @@ function hasWorkspacePatterns(value: unknown): boolean {
 // lockfile: `/`-separated segments, none empty, `.`, `..` or `node_modules`,
 // and no backslash. Anything else is never a proven member folder.
 function isMemberFolder(folder: string): boolean {
-  if (folder === '' || folder.includes('\\')) return false;
+  if (folder.includes('\\')) return false;
   return folder
     .split('/')
     .every((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment.toLowerCase() !== 'node_modules');
@@ -1759,7 +1759,7 @@ export function provenWorkspaceFolders(
   for (const entry of Object.values(packages)) {
     if (++visited > MAX_LOCK_INDEX_NODES) return null;
     if (!isPlainObject(entry) || !entry.link) continue;
-    if (entry.link !== true || typeof entry.resolved !== 'string' || !proven.has(entry.resolved)) return null;
+    if (entry.link !== true || !proven.has(entry.resolved as string)) return null;
   }
   return proven;
 }
@@ -2199,7 +2199,6 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // between, keeps the floor).
   const narrowVersion = (m: NarrowManifest, decl: NarrowDeclaration): string | null => {
     const g = governanceOf(m);
-    if (g.kind === 'unknown') return null;
     if (decl.aliasForm) return null; // the lockfile key is the local alias, not the name
     const topKey = `${NODE_MODULES}${decl.key}`;
     if (g.kind !== 'standalone') {
