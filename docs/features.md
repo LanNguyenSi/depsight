@@ -94,7 +94,14 @@ A complete list of what depsight does today, beyond the headline value props in 
     `workspaces` value of the root package.json unchanged (the patterns are
     compared, never evaluated), an entry for each member's folder and a
     `node_modules/<member name>` `link: true` entry resolving to exactly that
-    folder, every link entry of the lockfile resolving to such a member, and a
+    folder, every link entry of the lockfile resolving to such a member, every
+    dependency spec the scan reads (the four dependency maps and every value
+    inside `overrides` of every `package.json`, and the same maps of every
+    entry of a workspace root's lockfile) a registry range, version, dist-tag,
+    `npm:` alias or `workspace:` spec (any other spec, such as `file:`,
+    `link:`, a path in any spelling, git, a URL or a tarball, can install a
+    folder as a project of its own with the lockfile shape of a member, so one
+    anywhere leaves every workspace root unproven), and a
     link that satisfies a declared range only where the member's package.json
     version (equal to its folder entry's) is in that range; in a workspace only
     `dependencies` and `devDependencies` declarations that resolve the root's
@@ -127,8 +134,8 @@ A complete list of what depsight does today, beyond the headline value props in 
     repository-wide entry. A workspace manifest the root lockfile does not
     prove (lockfileVersion 1, a missing root lockfile, a `workspaces` value it
     does not record, a member it does not list, a member that is a workspace
-    root itself, a folder named by a `file:`, `link:` or path dependency spec,
-    a member folder nested deeper than 16 folders or longer than 256
+    root itself, a dependency spec that is no registry spec anywhere the scan
+    reads, a member folder nested deeper than 16 folders or longer than 256
     characters) adds nothing, and one below the root keeps every
     repository-wide entry; repositories with another
     package manager's lockfile and truncated trees keep the

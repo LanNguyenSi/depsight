@@ -23,6 +23,10 @@
  *   - a link entry outside the repository or to a folder the scan does not
  *     read, a manifest below the root that is no member, `.npmrc`, a foreign
  *     lockfile, a truncated tree
+ *   - a dependency spec that is no registry spec (a git edge of a root
+ *     lockfile entry, a `file:` dependency of a member, a git dependency of
+ *     the standalone project beside the workspace), which leaves every
+ *     workspace root unproven
  *
  * Each case runs the real pipeline with the override (head) and with the tree
  * facts withheld, which switches it off (base). The oracle below is written
@@ -85,6 +89,7 @@ type NameKind = 'ok' | 'none' | 'unlinkable';
 type MemberDep = 'none' | 'inRange' | 'outOfRange';
 type MsState = 'listed' | 'missing' | 'outOfRange';
 type Stray = 'none' | 'outside' | 'unread';
+type Unsafe = 'none' | 'lockEdge' | 'memberDep' | 'appDep';
 
 interface ModelMember {
   folder: string; // relative to the workspace root
@@ -118,12 +123,15 @@ interface Model {
   npmrc: boolean;
   foreign: boolean;
   truncated: boolean;
+  unsafe: Unsafe; // a spec other than a registry spec, outside vite
 }
 
 const SPECS = ['^7.3.5', '^7.0.0', '^8.3.0', '~8.3.1', '^6.0.0', '^7.3.5-beta.1'];
 const VERSIONS = ['6.3.0', '7.0.0', '7.3.5', '7.3.5-beta.2', '7.3.7', '8.3.0', '8.3.5', '8.3.6'];
 const ALIAS_SPEC = 'npm:vite@^7.0.0';
 const GIT_SPEC = 'github:vitejs/vite#v7.3.7';
+const GIT_DEP = 'github:o/gitdep';
+const FILE_DEP = 'file:../local';
 const FOLDERS = ['packages/m1', 'packages/m2', 'packages/group/m3'];
 const MS_LISTED = '2.1.3';
 const MS_OUT = '1.0.0';
@@ -178,6 +186,7 @@ function generate(rand: () => number): Model {
     npmrc: chance(0.05),
     foreign: chance(0.05),
     truncated: chance(0.04),
+    unsafe: chance(0.08) ? pick<Unsafe>(['lockEdge', 'memberDep', 'appDep']) : 'none',
   };
 }
 
@@ -237,6 +246,11 @@ function rootLockText(model: Model): string | null {
     packages['node_modules/tool'] = { resolved: 'tools/tool', link: true };
     packages['tools/tool'] = { name: 'tool', version: '1.0.0' };
   }
+  if (model.unsafe === 'lockEdge') {
+    packages['node_modules/carrier'] = { version: '1.0.0', dependencies: { gitdep: GIT_DEP } };
+    packages['node_modules/gitdep'] = { version: '1.0.0', resolved: 'git+ssh://git@github.com/o/gitdep.git#abc' };
+  }
+  if (model.unsafe === 'memberDep') packages['node_modules/local'] = { version: '1.0.0' };
   return JSON.stringify({ lockfileVersion: model.lock === 'v2' ? 2 : 3, requires: true, packages });
 }
 
@@ -260,6 +274,7 @@ function toScenario(model: Model): Scenario {
     else if (m.field !== 'none') body[m.field] = { [memberKey(m)]: m.spec };
     if (m.dep !== 'none' && memberNameOf(first) !== null) deps[memberNameOf(first)!] = depSpec(m.dep);
     if (m.ms) deps.ms = '^2.0.0';
+    if (i === 0 && model.unsafe === 'memberDep') deps.local = FILE_DEP;
     if (Object.keys(deps).length > 0) {
       body.dependencies = { ...((body.dependencies as Record<string, string> | undefined) ?? {}), ...deps };
     }
@@ -274,8 +289,12 @@ function toScenario(model: Model): Scenario {
     files['package.json'] = pkg({ name: 'top', private: true });
     files['package-lock.json'] = JSON.stringify({ lockfileVersion: 3, packages: { '': { name: 'top' } } });
     if (model.app) {
-      files['app/package.json'] = pkg({ name: 'app', dependencies: { vite: model.app.spec } });
-      files['app/package-lock.json'] = JSON.stringify({ lockfileVersion: 3, packages: { '': { name: 'app' }, 'node_modules/vite': { version: model.app.version } } });
+      const appGit = model.unsafe === 'appDep';
+      files['app/package.json'] = pkg({ name: 'app', dependencies: { vite: model.app.spec, ...(appGit ? { gitdep: GIT_DEP } : {}) } });
+      files['app/package-lock.json'] = JSON.stringify({
+        lockfileVersion: 3,
+        packages: { '': { name: 'app' }, 'node_modules/vite': { version: model.app.version }, ...(appGit ? { 'node_modules/gitdep': { version: '1.0.0' } } : {}) },
+      });
     }
   }
   if (model.npmrc) files['.npmrc'] = 'package-lock=false\n';
@@ -296,8 +315,20 @@ interface Facts {
   proven: boolean[]; // per member
 }
 
+// A spec other than a registry spec anywhere the scan reads (a read
+// manifest, or an entry of the root lockfile) leaves every workspace root
+// unproven: the member's git spec for vite in one of the four dependency maps,
+// or the `unsafe` dimension where the model writes it (the git edge only into a
+// lockfile of version 2 or 3, the standalone project only beside a root in ws/).
+function unsafeSpecAnywhere(model: Model): boolean {
+  if (model.members.some((m) => m.spec === GIT_SPEC && LOCK_REQUIRED.includes(m.field))) return true;
+  if (model.unsafe === 'memberDep') return true;
+  if (model.unsafe === 'lockEdge') return model.lock === 'v3' || model.lock === 'v2';
+  return model.unsafe === 'appDep' && model.app !== undefined;
+}
+
 function facts(model: Model): Facts {
-  const lockOk = (model.lock === 'v3' || model.lock === 'v2') && (model.shape === 'array' || model.shape === 'object') && model.recorded === 'same';
+  const lockOk = (model.lock === 'v3' || model.lock === 'v2') && (model.shape === 'array' || model.shape === 'object') && model.recorded === 'same' && !unsafeSpecAnywhere(model);
   const links = linkEntries(model);
   const proven = model.members.map((m, i) => {
     if (m.nameKind !== 'ok' || !m.folderEntry || m.link !== 'exact') return false;
@@ -424,8 +455,9 @@ type Blinder =
   | 'overrides'
   | 'memberDep'
   | 'versionMismatch'
-  | 'rootField';
-const BLINDERS: Blinder[] = ['lockKind', 'recorded', 'shape', 'link', 'folderEntry', 'name', 'stray', 'nonMember', 'ownCopy', 'between', 'field', 'alias', 'overrides', 'memberDep', 'versionMismatch', 'rootField'];
+  | 'rootField'
+  | 'unsafe';
+const BLINDERS: Blinder[] = ['lockKind', 'recorded', 'shape', 'link', 'folderEntry', 'name', 'stray', 'nonMember', 'ownCopy', 'between', 'field', 'alias', 'overrides', 'memberDep', 'versionMismatch', 'rootField', 'unsafe'];
 function blind(model: Model, what: Blinder): Model {
   const m: Model = JSON.parse(JSON.stringify(model));
   if (what === 'lockKind' && m.lock !== 'none') m.lock = 'v3';
@@ -436,6 +468,7 @@ function blind(model: Model, what: Blinder): Model {
   if (what === 'between') m.between = null;
   if (what === 'versionMismatch') m.firstVersionMismatch = false;
   if (what === 'rootField') m.rootField = 'devDependencies';
+  if (what === 'unsafe') m.unsafe = 'none';
   m.members.forEach((x, i) => {
     if (what === 'link') x.link = 'exact';
     if (what === 'folderEntry') x.folderEntry = true;

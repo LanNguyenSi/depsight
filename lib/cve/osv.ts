@@ -804,7 +804,12 @@ function raisedNpmVersion(
  * 3) records the root's `workspaces` value unchanged, has an entry for the
  * member's folder and a `node_modules/<member name>` `link: true` entry that
  * resolves to exactly that folder, and every link entry it has resolves to
- * such a member. The proof needs everything to be
+ * such a member. A workspace is narrowed only when every dependency spec of
+ * every read manifest and of every entry of a workspace root's lockfile is a
+ * registry range, version, dist-tag, `npm:` alias or `workspace:` spec: any
+ * other spec (`file:`, `link:`, a path, git, a URL, a tarball) can install a
+ * folder as a project of its own with the lockfile shape of a member, so one
+ * anywhere leaves every workspace root unproven. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
  * tree; no other package manager's lockfile (yarn.lock, pnpm-lock.yaml,
  * bun.lock, bun.lockb, npm-shrinkwrap.json, deno.lock), no `.npmrc`, no
@@ -847,8 +852,8 @@ function raisedNpmVersion(
  * A workspace manifest the root lockfile does not prove (a lockfileVersion 1,
  * missing or unreadable root lockfile, a `workspaces` value the lockfile does
  * not record, a member it does not list, a member that is a workspace root
- * itself, a folder named by a `file:`, `link:` or path spec of a read manifest
- * or lockfile entry, a member folder nested deeper than 16 folders or longer
+ * itself, a dependency spec other than a registry spec anywhere the scan reads
+ * for it, a member folder nested deeper than 16 folders or longer
  * than 256 characters) adds nothing, and one below the root keeps every chain
  * entry of the repository. Repos with another package
  * manager's lockfile, and trees or manifest lists that could not be read

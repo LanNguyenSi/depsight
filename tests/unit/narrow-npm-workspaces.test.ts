@@ -23,18 +23,22 @@
  * time.
  *
  * Part 4 covers the folder bounds (depth and length of a member folder), the
- * folders that `file:`, `link:` and path specs name (never members), a member
- * in a directory the scan does not read, and a surviving-mutant scenario for
- * the root-containment check of the candidate list.
+ * dependency spec rule (a workspace is narrowed only when every spec the scan
+ * reads is a registry spec: `isRegistrySpec`, `registrySpecCount`,
+ * `repoHasOnlyRegistrySpecs`, and the same through `resolveNarrowNpm`), a
+ * member in a directory the scan does not read, and a surviving-mutant
+ * scenario for the root-containment check of the candidate list.
  */
 import { describe, it, expect } from 'vitest';
+import semver from 'semver';
 import {
   MAX_LOCK_INDEX_NODES,
   MAX_MEMBER_FOLDER_CHARS,
   MAX_MEMBER_FOLDER_SEGMENTS,
-  collectPathSpecTargets,
-  pathSpecTarget,
+  isRegistrySpec,
   provenWorkspaceFolders,
+  registrySpecCount,
+  repoHasOnlyRegistrySpecs,
   resolveNarrowNpm,
   workspaceMemberLockKey,
   type NarrowNpmInputs,
@@ -43,9 +47,6 @@ import { pkg } from './helpers/npm-repo-fixture';
 
 type Files = Record<string, string>;
 type Packages = Record<string, unknown>;
-
-// No manifest names a folder through a file:, link: or path spec.
-const NO_TARGETS: ReadonlySet<string> = new Set();
 
 // ---- part 1: truth tables of the pure predicates ------------------------------
 
@@ -108,7 +109,7 @@ describe('provenWorkspaceFolders: truth table', () => {
     let empty = 0;
     for (const on of combos) {
       const { pkgWorkspaces, lock, folder, name } = build(on);
-      const got = provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }], NO_TARGETS);
+      const got = provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }]);
       const want = expected(on);
       const gotList = got === null ? null : [...got];
       if (JSON.stringify(gotList) !== JSON.stringify(want)) mismatches.push(`${JSON.stringify(on)} got ${JSON.stringify(gotList)} want ${JSON.stringify(want)}`);
@@ -124,11 +125,11 @@ describe('provenWorkspaceFolders: truth table', () => {
   it('each condition alone, with all others true, decides the outcome', () => {
     const all = Object.fromEntries(DIMENSIONS.map((d) => [d, true])) as Record<Dim, boolean>;
     const { pkgWorkspaces, lock, folder, name } = build(all);
-    expect([...(provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }], NO_TARGETS) ?? [])]).toEqual(['packages/a']);
+    expect([...(provenWorkspaceFolders(pkgWorkspaces, lock, [{ folder, name }]) ?? [])]).toEqual(['packages/a']);
     for (const d of DIMENSIONS) {
       const on = { ...all, [d]: false };
       const b = build(on);
-      const got = provenWorkspaceFolders(b.pkgWorkspaces, b.lock, [{ folder: b.folder, name: b.name }], NO_TARGETS);
+      const got = provenWorkspaceFolders(b.pkgWorkspaces, b.lock, [{ folder: b.folder, name: b.name }]);
       expect(got === null ? null : [...got], d).toEqual(expected(on));
       expect(got === null || got.size === 0, `${d} false must not prove the member`).toBe(true);
     }
@@ -141,20 +142,19 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
     'node_modules/a': { resolved: 'packages/a', link: true },
     'packages/a': { name: 'a', version: '1.0.0' },
   });
-  const prove = (packages: Packages, extra: { workspaces?: unknown; folder?: string; name?: unknown; lock?: unknown; targets?: ReadonlySet<string> | null } = {}) => {
+  const prove = (packages: Packages, extra: { workspaces?: unknown; folder?: string; name?: unknown; lock?: unknown } = {}) => {
     const lock = 'lock' in extra ? extra.lock : { lockfileVersion: 3, packages };
     const got = provenWorkspaceFolders(
       'workspaces' in extra ? extra.workspaces : ['packages/*'],
       lock,
       [{ folder: extra.folder ?? 'packages/a', name: 'name' in extra ? extra.name : 'a' }],
-      'targets' in extra ? extra.targets! : NO_TARGETS,
     );
     return got === null ? null : [...got];
   };
 
   it('positive control, version 2 and 3', () => {
     expect(prove(okPackages())).toEqual(['packages/a']);
-    expect(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 2, packages: okPackages(), dependencies: {} }, [{ folder: 'packages/a', name: 'a' }], NO_TARGETS)).toEqual(new Set(['packages/a']));
+    expect(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 2, packages: okPackages(), dependencies: {} }, [{ folder: 'packages/a', name: 'a' }])).toEqual(new Set(['packages/a']));
   });
 
   it('a lockfile of another shape proves nothing', () => {
@@ -295,9 +295,9 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
 
   it('own properties only: __proto__ and constructor keys are not looked up on the prototype', () => {
     const packages = JSON.parse('{"": {"workspaces": ["packages/*"]}, "__proto__": {"version": "1.0.0"}, "node_modules/__proto__": {"resolved": "__proto__", "link": true}}');
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }], NO_TARGETS) ?? [])]).toEqual(['__proto__']);
+    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }]) ?? [])]).toEqual(['__proto__']);
     const missing = { '': { workspaces: ['packages/*'] } };
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }], NO_TARGETS) ?? ['x'])]).toEqual([]);
+    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }]) ?? ['x'])]).toEqual([]);
   });
 
   it('a lockfile above the entry budget proves nothing', () => {
@@ -841,7 +841,7 @@ describe('member folder bounds', () => {
       'node_modules/m': { resolved: folder, link: true },
     },
   });
-  const proves = (folder: string) => provenWorkspaceFolders(['**'], lockFor(folder), [{ folder, name: 'm' }], NO_TARGETS)?.has(folder) ?? false;
+  const proves = (folder: string) => provenWorkspaceFolders(['**'], lockFor(folder), [{ folder, name: 'm' }])?.has(folder) ?? false;
 
   it('the limits are the documented ones', () => {
     expect([MAX_MEMBER_FOLDER_SEGMENTS, MAX_MEMBER_FOLDER_CHARS]).toEqual([16, 256]);
@@ -850,7 +850,7 @@ describe('member folder bounds', () => {
   it('a folder of up to the segment limit is proven, one segment more is not (and takes the whole root with it)', () => {
     expect(proves(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS))).toBe(true);
     expect(proves(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1))).toBe(false);
-    expect(provenWorkspaceFolders(['**'], lockFor(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1)), [{ folder: deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1), name: 'm' }], NO_TARGETS)).toBeNull();
+    expect(provenWorkspaceFolders(['**'], lockFor(deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1)), [{ folder: deepFolder(MAX_MEMBER_FOLDER_SEGMENTS + 1), name: 'm' }])).toBeNull();
   });
 
   it('a folder of up to the character limit is proven, one character more is not', () => {
@@ -928,150 +928,217 @@ describe('member folder bounds', () => {
   });
 });
 
-describe('pathSpecTarget', () => {
+describe('isRegistrySpec: only the registry forms are accepted', () => {
   it.each([
-    ['file:tools/t', 'packages/a', 'packages/a/tools/t'],
-    ['file:../b', 'packages/a', 'packages/b'],
-    ['file:./x/', '', 'x'],
-    ['file:', 'packages/a', 'packages/a'],
-    ['link:../b', 'packages/a', 'packages/b'],
-    ['LINK:Tools/T', '', 'tools/t'],
-    ['  file:x  ', '', 'x'],
-    ['../b', 'packages/a', 'packages/b'],
-    ['./b', 'packages/a', 'packages/a/b'],
-    ['file:a/./b/../c', '', 'a/c'],
-    ['file:../..', 'packages/a', ''],
-    ['file:../../out', 'packages/a', 'out'],
-    ['file:../../../out', 'packages/a', '..'],
-    ['../x', '', '..'],
-  ])('%s from %j names %j', (spec, base, want) => {
-    expect(pathSpecTarget(spec, base)).toBe(want);
+    // versions and ranges (semver.validRange, strict)
+    '^1.0.0',
+    '~1.2.3',
+    '1.2.3',
+    '=1.2.3',
+    'v1.2.3',
+    '>=1.0.0 <2.0.0',
+    '>=1 <2',
+    '1.x',
+    '1.x || 2.x',
+    '1.2.3 - 2.0.0',
+    '^1.0.0-beta.1',
+    '^0.0.0',
+    ' ^1.0.0 ',
+    '*',
+    '',
+    'x',
+    `^1.2.${'9'.repeat(15)}`,
+    // dist-tags
+    'latest',
+    'next',
+    'beta-1',
+    'v2_rc.1',
+    // npm: aliases of a version, range or tag
+    'npm:string-width@^4.2.0',
+    'npm:@scope/pkg@1.0.0',
+    'npm:vite@latest',
+    'npm:Old.Name@1.0.0',
+    'npm:left@',
+    // workspace: followed by a range, version, tag, or one of * ^ ~
+    'workspace:*',
+    'workspace:^',
+    'workspace:~',
+    'workspace:^1.0.0',
+    'workspace:1.2.3',
+    'workspace:latest',
+    'workspace:',
+  ])('%j is a registry spec', (spec) => {
+    expect(isRegistrySpec(spec)).toBe(true);
   });
 
-  it.each(['^1.0.0', '*', 'latest', '', '1.2.3', '~1.2.3', '>=1 <2', 'npm:left@^1.0.0', 'git+https://example.com/x.git', 'github:a/b', 'workspace:*', 'https://example.com/x.tgz', 'x/y'])(
-    '%j names no folder',
-    (spec) => {
-      expect(pathSpecTarget(spec, 'packages/a')).toBeUndefined();
-    },
-  );
-
-  it.each([1, null, undefined, {}, ['file:x']])('a non-string (%j) names no folder', (spec) => {
-    expect(pathSpecTarget(spec, '')).toBeUndefined();
-  });
-
-  it.each(['file:/abs/x', 'file:///abs/x', 'file:~/x', 'file:C:\\x', 'file:a\\b', '/abs/x', '~/x', 'C:\\x', 'C:/x', '.\\x', '\\x'])('%j cannot be placed', (spec) => {
-    expect(pathSpecTarget(spec, 'packages/a')).toBeNull();
-  });
-
-  it('collectPathSpecTargets reads the four dependency maps and every string of overrides', () => {
-    const into = new Set<string>();
-    const placeable = collectPathSpecTargets(
-      {
-        dependencies: { a: 'file:../a' },
-        devDependencies: { b: 'link:../b' },
-        optionalDependencies: { c: './c' },
-        peerDependencies: { d: 'file:d', e: '^1.0.0' },
-        overrides: { f: 'file:../f', g: { h: 'file:../h', i: '1.0.0' } },
-        bundleDependencies: ['file:../ignored'],
-        description: 'file:../ignored-too',
-      },
-      'packages/x',
-      into,
-    );
-    expect(placeable).toBe(true);
-    expect([...into].sort()).toEqual(['packages/a', 'packages/b', 'packages/f', 'packages/h', 'packages/x/c', 'packages/x/d']);
-  });
-
-  it('collectPathSpecTargets reports a spec it cannot place, in each place it reads', () => {
-    for (const data of [
-      { dependencies: { a: 'file:/abs' } },
-      { devDependencies: { a: 'file:/abs' } },
-      { optionalDependencies: { a: '/abs' } },
-      { peerDependencies: { a: '~/abs' } },
-      { overrides: { a: { b: 'file:/abs' } } },
-    ]) {
-      expect(collectPathSpecTargets(data, '', new Set()), JSON.stringify(data)).toBe(false);
-    }
-    expect(collectPathSpecTargets({ dependencies: 'file:/abs', overrides: 7 }, '', new Set())).toBe(true);
-  });
-
-  it('collectPathSpecTargets reads own properties only', () => {
-    const data = JSON.parse('{"__proto__": {"dependencies": {"a": "file:/abs"}}}');
-    expect(collectPathSpecTargets(data, '', new Set())).toBe(true);
-  });
-});
-
-describe('provenWorkspaceFolders: a folder named by a file:, link: or path spec is never a member', () => {
-  const okPackages = (): Packages => ({
-    '': { name: 'root', workspaces: ['packages/*'] },
-    'node_modules/a': { resolved: 'packages/a', link: true },
-    'packages/a': { name: 'a', version: '1.0.0' },
-  });
-  const prove = (packages: Packages, targets: ReadonlySet<string> | null, folder = 'packages/a') => {
-    const got = provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder, name: 'a' }], targets);
-    return got === null ? null : [...got];
+  const notRegistry: Record<string, string[]> = {
+    'file: and link: specs': ['file:tools/t', 'file:../b', 'file:', 'link:../b', 'FILE:x', ' file:x', 'file:x.tgz'],
+    'bare paths in any spelling': ['tools/t', 'tools/t/', 'tools//t', 'tools/t/.', 'packages/../tools/t', 'a/b/c', '@s/x', './x', '../x', '.', '..', 'x/'],
+    'absolute, home and Windows paths': ['/srv/x', '~/x', 'C:\\x', 'C:/x', '.\\x', 'a\\b', '\\x'],
+    'git, hosted git and URL specs': ['git+https://example.com/x.git', 'git://example.com/x.git', 'git+ssh://git@example.com/x.git', 'github:a/b', 'gitlab:a/b', 'a/b#v1', 'git@example.com:a/b.git', 'https://example.com/x.tgz', 'http://example.com/x'],
+    'tarball names': ['1.0.0-x.tgz', '1.0.0-x.TGZ', 'latest.tgz', 'x.tar', '1.0.0-a.tar.gz', '1.0.0-x.tgz ', 'npm:left@1.0.0-x.tgz', 'workspace:1.0.0-x.tgz'],
+    'ranges only loose parsing accepts, which npm reads as folders': ['^1.0.0 || ./x', '1.0.0 ../tools/t', '1.0.0 tools/t/', '^1.0.0 || tools/t'],
+    'aliases of anything but a version, range or tag': ['npm:foo', 'npm:@1.0.0', 'npm:@s@1.0.0', 'npm:a/b@1.0.0', 'npm:../x@1.0.0', 'npm:foo@file:../x', 'npm:foo@../x', 'npm:foo@github:a/b', 'npm:foo@npm:bar@1.0.0', 'npm:foo@workspace:*', 'NPM:foo@1.0.0', ' npm:foo@1.0.0'],
+    'workspace: of anything else': ['workspace:../x', 'workspace:file:x', 'workspace:npm:foo@1.0.0', 'workspace:^^', 'workspace:a/b', 'Workspace:*'],
+    // `latest!` is a tag npm would ask the registry for; the tag rule is stricter
+    'other strings': ['$foo', '.next', 'a tag', 'latest!', 'x:', '%2E%2E'],
   };
+  for (const [family, specs] of Object.entries(notRegistry)) {
+    it.each(specs)(`${family}: %j is not a registry spec`, (spec) => {
+      expect(isRegistrySpec(spec)).toBe(false);
+    });
+  }
 
-  it('positive control, and a target elsewhere changes nothing', () => {
-    expect(prove(okPackages(), NO_TARGETS)).toEqual(['packages/a']);
-    expect(prove(okPackages(), new Set(['packages/other', 'packages', 'packages/a/sub', '..']))).toEqual(['packages/a']);
+  it.each([1, 0, null, undefined, true, {}, ['^1.0.0']])('a value that is not a string (%j) is not a registry spec', (spec) => {
+    expect(isRegistrySpec(spec)).toBe(false);
   });
 
-  it('a manifest target on the folder leaves its link unresolved: the root proves nothing', () => {
-    expect(prove(okPackages(), new Set(['packages/a']))).toBeNull();
-  });
-
-  it('the comparison ignores case, as a case-insensitive file system does', () => {
-    const packages: Packages = {
-      '': { name: 'root', workspaces: ['packages/*'] },
-      'node_modules/a': { resolved: 'Packages/A', link: true },
-      'Packages/A': { name: 'a', version: '1.0.0' },
-    };
-    expect(prove(packages, NO_TARGETS, 'Packages/A')).toEqual(['Packages/A']);
-    expect(prove(packages, new Set(['packages/a']), 'Packages/A')).toBeNull();
-  });
-
-  it('a manifest spec that cannot be placed (null targets) proves nothing', () => {
-    expect(prove(okPackages(), null)).toBeNull();
-  });
-
-  it('a lockfile entry that declares a spec naming the folder, from the entry it sits in', () => {
-    for (const [entryKey, spec] of [
-      ['', 'file:packages/a'],
-      ['', 'link:./packages/a'],
-      ['', './packages/a/'],
-      ['packages/b', 'file:../a'],
-      ['node_modules/x', 'file:../../packages/a'],
-      ['packages/b/node_modules/x', 'file:../../../a'],
-    ] as const) {
-      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
-        const packages = okPackages();
-        packages[entryKey] = { ...(packages[entryKey] as object), name: 'x', [field]: { t: spec } };
-        expect(prove(packages, NO_TARGETS), `${entryKey} ${field} ${spec}`).toBeNull();
-      }
+  it('a plain version range agrees with semver at the 15 and 16 digit boundary', () => {
+    // `^` and `~` keep these out of the dist-tag form, so only the version
+    // range rules decide
+    for (const spec of [`^1.2.${'9'.repeat(15)}`, `~1.2.${'9'.repeat(15)}`, `^1.2.1${'0'.repeat(15)}`, `^1.2.${'9'.repeat(16)}`, `~${'9'.repeat(17)}.0.0`, '^01.0.0', '^1.02.0']) {
+      expect(isRegistrySpec(spec), spec).toBe(semver.validRange(spec) !== null);
     }
   });
 
-  it('a lockfile entry spec that names another folder, or no folder, changes nothing', () => {
-    const packages = okPackages();
-    packages[''] = { name: 'root', workspaces: ['packages/*'], dependencies: { t: 'file:tools/t', u: '^1.0.0', v: 'file:packages/a/sub' } };
-    expect(prove(packages, NO_TARGETS)).toEqual(['packages/a']);
+  it('seeded fuzz: an accepted spec never carries a path, URL or tarball part', () => {
+    // An independent check on the accepted set: strip a leading `npm:<name>@`
+    // or `workspace:`; what remains has no `/`, `\`, `:`, `@` or `#`, and no
+    // accepted spec ends like a tarball file.
+    const rand = (() => {
+      let a = 20261027;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    })();
+    const PIECES = ['1', '0', '2', '.', '.', '^', '~', '>', '<', '=', ' ', '|', '-', '+', '*', 'x', 'v', 'a', 't', 'g', 'z', 'r', '/', '\\', ':', '@', '#', 'npm:', 'workspace:', 'file:', 'git+', '.tgz', '..', '%2F', '$'];
+    let accepted = 0;
+    let rejected = 0;
+    for (let i = 0; i < 40_000; i++) {
+      const length = 1 + Math.floor(rand() * 8);
+      let spec = '';
+      for (let j = 0; j < length; j++) spec += PIECES[Math.floor(rand() * PIECES.length)];
+      if (rand() < 0.3) spec = `${rand() < 0.5 ? '^' : ''}${Math.floor(rand() * 3)}.${Math.floor(rand() * 3)}.${Math.floor(rand() * 3)}${spec}`;
+      if (!isRegistrySpec(spec)) {
+        rejected++;
+        continue;
+      }
+      accepted++;
+      let rest = spec;
+      const alias = /^npm:(@?[^@]*)@/.exec(rest);
+      if (alias) rest = rest.slice(alias[0].length);
+      else if (rest.startsWith('workspace:')) rest = rest.slice('workspace:'.length);
+      expect(/[/\\:@#]/.test(rest), spec).toBe(false);
+      expect(/[.](?:tgz|tar|tar.gz)\s*$/i.test(spec), spec).toBe(false);
+    }
+    expect(accepted).toBeGreaterThan(2_000);
+    expect(rejected).toBeGreaterThan(2_000);
   });
-
-  it('a lockfile entry spec that cannot be placed proves nothing', () => {
-    const packages = okPackages();
-    packages['packages/a'] = { name: 'a', version: '1.0.0', dependencies: { t: 'file:/abs/t' } };
-    expect(prove(packages, NO_TARGETS)).toBeNull();
-  });
-
-  it('a lockfile above the entry budget still proves nothing (the spec pass counts entries)', () => {
-    const packages = okPackages();
-    for (let i = 0; i <= MAX_LOCK_INDEX_NODES; i++) packages[`node_modules/f${i}`] = { version: '1.0.0' };
-    expect(prove(packages, NO_TARGETS)).toBeNull();
-  }, 30_000);
 });
 
-describe('workspace: a file: dependency on a folder (npm installs it as a project of its own)', () => {
+describe('registrySpecCount', () => {
+  const FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+  const hasOnlyRegistrySpecs = (data: Record<string, unknown>) => registrySpecCount(data) !== null;
+
+  it('counts each map value and each value inside overrides once', () => {
+    expect(registrySpecCount({})).toBe(0);
+    expect(registrySpecCount({ dependencies: { a: '^1.0.0', b: '1.0.0' }, peerDependencies: { c: '*' } })).toBe(3);
+    // overrides: the object, its two values, the nested object and its value
+    expect(registrySpecCount({ overrides: { a: '1.0.0', b: { '.': '2.0.0' } } })).toBe(4);
+    expect(registrySpecCount({ dependencies: { a: '^1.0.0' }, overrides: ['1.0.0'] })).toBe(3);
+  });
+
+  it('every spec of the four dependency maps and every value inside overrides is read', () => {
+    const data = {
+      dependencies: { a: '^1.0.0' },
+      devDependencies: { b: 'latest' },
+      optionalDependencies: { c: 'npm:c-real@^1.0.0' },
+      peerDependencies: { d: '>=1 <3' },
+      overrides: { e: '1.0.0', f: { '.': '2.0.0', g: '^3.0.0' }, h: ['1.0.0'] },
+    };
+    expect(hasOnlyRegistrySpecs(data)).toBe(true);
+    for (const field of FIELDS) {
+      expect(hasOnlyRegistrySpecs({ ...data, [field]: { x: '^1.0.0', y: 'file:../y' } }), field).toBe(false);
+    }
+    for (const overrides of [{ e: 'file:../e' }, { f: { g: 'github:a/b' } }, { f: { '.': 'tools/f' } }, { h: ['^1.0.0', 'link:../h'] }, { e: '$e' }, 'file:x']) {
+      expect(hasOnlyRegistrySpecs({ ...data, overrides }), JSON.stringify(overrides)).toBe(false);
+    }
+  });
+
+  it('a map that is not an object, or an overrides value of another kind, is not read as registry-only', () => {
+    for (const field of FIELDS) {
+      for (const map of ['^1.0.0', null, ['^1.0.0'], 1]) {
+        expect(hasOnlyRegistrySpecs({ [field]: map }), `${field} ${JSON.stringify(map)}`).toBe(false);
+      }
+      expect(hasOnlyRegistrySpecs({ [field]: { x: 1 } }), field).toBe(false);
+    }
+    for (const leaf of [1, null, true]) {
+      expect(hasOnlyRegistrySpecs({ overrides: { x: leaf } }), JSON.stringify(leaf)).toBe(false);
+      expect(hasOnlyRegistrySpecs({ overrides: leaf }), JSON.stringify(leaf)).toBe(false);
+    }
+  });
+
+  it('fields that hold no dependency spec are not read', () => {
+    expect(
+      hasOnlyRegistrySpecs({
+        bundleDependencies: ['file:../x'],
+        resolved: 'file:../x',
+        version: 'git+https://example.com/x.git',
+        description: 'tools/t',
+        workspaces: ['packages/*'],
+      }),
+    ).toBe(true);
+    expect(hasOnlyRegistrySpecs({})).toBe(true);
+  });
+
+  it('own properties only', () => {
+    expect(hasOnlyRegistrySpecs(JSON.parse('{"__proto__": {"dependencies": {"a": "file:/abs"}, "overrides": "file:x"}}'))).toBe(true);
+    expect(hasOnlyRegistrySpecs(JSON.parse('{"overrides": {"__proto__": "file:x"}}'))).toBe(false);
+  });
+
+  it('a deeply nested overrides value is read without recursion', () => {
+    let overrides: unknown = 'file:../x';
+    for (let i = 0; i < 100_000; i++) overrides = { [`k${i}`]: overrides };
+    expect(hasOnlyRegistrySpecs({ overrides })).toBe(false);
+  });
+});
+
+describe('repoHasOnlyRegistrySpecs', () => {
+  it('every manifest and every entry of every root lockfile', () => {
+    expect(repoHasOnlyRegistrySpecs([], [])).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: '^1.0.0' } }, { devDependencies: { b: '1.0.0' } }], [{ '': {}, 'node_modules/a': { dependencies: { c: '^2.0.0' } } }])).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([{ dependencies: { a: '^1.0.0' } }, { devDependencies: { b: 'tools/b' } }], [])).toBe(false);
+    expect(repoHasOnlyRegistrySpecs([], [{ '': {} }, { 'node_modules/a/node_modules/c': { peerDependencies: { d: 'link:../d' } } }])).toBe(false);
+  });
+
+  it('a lockfile entry that is not an object is skipped (other checks reject it)', () => {
+    expect(repoHasOnlyRegistrySpecs([], [{ 'node_modules/a': 'file:../a', 'node_modules/b': null, 'node_modules/c': ['x'] }])).toBe(true);
+  });
+
+  it('counts entries across all root lockfiles against one budget', () => {
+    const locks = [{ a: {}, b: {} }, { c: {}, d: {} }];
+    expect(repoHasOnlyRegistrySpecs([], locks, 4)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([], locks, 3)).toBe(false);
+  });
+
+  it('counts the specs of manifests and of lockfile entries against the same budget', () => {
+    const manifests = [{ dependencies: { a: '^1.0.0', b: '^1.0.0' } }, { overrides: { c: '1.0.0' } }];
+    expect(repoHasOnlyRegistrySpecs(manifests, [], 4)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs(manifests, [], 3)).toBe(false);
+    expect(repoHasOnlyRegistrySpecs(manifests.slice(0, 1), [], 2)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs(manifests.slice(0, 1), [], 1)).toBe(false);
+    // two entries plus the two specs of the second
+    const locks = [{ '': {}, 'node_modules/a': { dependencies: { b: '^1.0.0', c: '^1.0.0' } } }];
+    expect(repoHasOnlyRegistrySpecs([], locks, 4)).toBe(true);
+    expect(repoHasOnlyRegistrySpecs([], locks, 3)).toBe(false);
+  });
+});
+
+describe('workspace: only registry specs anywhere (npm installs a folder named by any other spec as a project of its own)', () => {
   // root + packages/a + tools/t. tools/t is a member only where the workspace
   // patterns say so; a file: dependency on it records the same lockfile shape
   // (a folder entry and a link) without making it one.
@@ -1094,7 +1161,7 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
   };
 
-  it('control: tools/t is a workspace member (pattern lists it), nothing declares a file: spec', () => {
+  it('control: tools/t is a workspace member (pattern lists it), every spec is a registry spec', () => {
     const r = build({ workspaces: ['packages/*', 'tools/*'] });
     expect(r.dropSafe('ra', '1.0.0')).toBe(true);
     expect(r.dropSafe('rb', '1.0.0')).toBe(true);
@@ -1108,13 +1175,17 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     expect(r.additions).toEqual([]);
   });
 
-  it('each spelling of the spec, declared by the root or by a member', () => {
-    for (const spec of ['file:tools/t', 'file:./tools/t/', 'link:tools/t', 'LINK:Tools/T', './tools/t', 'file:packages/../tools/t']) {
+  it('each spelling of a folder spec, with or without a prefix, declared by the root or by a member', () => {
+    // npm reads every one of these as the folder tools/t (from the root) or
+    // ../../tools/t (from packages/a)
+    for (const spec of ['file:tools/t', 'file:./tools/t/', 'link:tools/t', 'LINK:Tools/T', './tools/t', 'file:packages/../tools/t', 'tools/t', 'tools/t/', 'tools//t', 'tools/t/.', 'packages/../tools/t', 'a/b/c', '@s/x']) {
       const root = build({ workspaces: ['packages/*'], rootDeps: { t: spec } });
       expect(root.dropSafe('ra', '1.0.0'), `root ${spec}`).toBe(false);
+      expect(root.dropSafe('ra', '1.1.0'), `root ${spec}`).toBe(false);
+      expect(root.dropSafe('rb', '1.0.0'), `root ${spec}`).toBe(false);
       expect(root.additions, `root ${spec}`).toEqual([]);
     }
-    for (const spec of ['file:../../tools/t', 'link:../../tools/t', '../../tools/t']) {
+    for (const spec of ['file:../../tools/t', 'link:../../tools/t', '../../tools/t', '../../tools/t/', '../..//tools/t', '../../tools/t/.']) {
       const member = build({ workspaces: ['packages/*'], aDeps: { t: spec } });
       expect(member.dropSafe('ra', '1.0.0'), `member ${spec}`).toBe(false);
       expect(member.additions, `member ${spec}`).toEqual([]);
@@ -1128,18 +1199,129 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     expect(r.additions).toEqual([]);
   });
 
-  it('a file: spec for another folder, a tarball, or a range does not stop the proof', () => {
-    for (const spec of ['file:tools/other', 'file:tools/t.tgz', 'file:../../..', '^1.0.0', 'git+https://example.com/t.git']) {
-      const r = build({ workspaces: ['packages/*', 'tools/*'], aDeps: { t: spec } });
-      // tools/t stays a member: only a spec that names its folder takes it out
-      expect(r.dropSafe('rb', '1.0.0'), spec).toBe(true);
+  // A further dependency `x` of member a, with a lockfile entry it is listed by:
+  // with a registry spec the workspace narrows as in the control; with any
+  // other spec, whatever it names, no root of the repository is proven.
+  const withX = (spec: string, entry: Record<string, unknown>, place: 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies' = 'dependencies') => {
+    const workspaces = ['packages/*', 'tools/*'];
+    const aBody = { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' }, [place]: { ...(place === 'dependencies' ? { ra: '^1.0.0' } : {}), x: spec } };
+    const files: Files = {
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces }),
+      'packages/a/package.json': pkg(aBody),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+    };
+    const lock = lockOf({
+      '': { name: 'root', version: '1.0.0', workspaces },
+      'node_modules/a': { resolved: 'packages/a', link: true },
+      'node_modules/t': { resolved: 'tools/t', link: true },
+      'node_modules/ra': { version: '1.2.0' },
+      'node_modules/rb': { version: '1.3.0' },
+      'node_modules/x': entry,
+      'packages/a': aBody,
+      'tools/t': { name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+    });
+    return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+  };
+
+  it.each([
+    ['a range', '^1.0.0', { version: '1.0.0' }],
+    ['an exact version', '1.0.0', { version: '1.0.0' }],
+    ['a dist-tag', 'latest', { version: '1.0.0' }],
+    ['an npm: alias of a range', 'npm:x-real@^1.0.0', { name: 'x-real', version: '1.0.0' }],
+    ['workspace:*', 'workspace:*', { version: '1.0.0' }],
+  ])('%s: the workspace still narrows', (_label, spec, entry) => {
+    const r = withX(spec, entry);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(true);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toContain('ra@1.2.0');
+    expect(versions(r)).toContain('rb@1.3.0');
+  });
+
+  it.each([
+    ['a file: spec naming another folder', 'file:tools/other', { version: '1.0.0', resolved: 'tools/other' }],
+    ['a file: tarball', 'file:x.tgz', { version: '1.0.0', resolved: 'file:x.tgz' }],
+    ['a link: spec', 'link:../../tools/x', { version: '1.0.0' }],
+    ['a bare path outside the repository', '../../..', { version: '1.0.0' }],
+    ['an absolute path', '/srv/x', { version: '1.0.0' }],
+    ['a home path', '~/x', { version: '1.0.0' }],
+    ['a Windows path', 'C:\\x', { version: '1.0.0' }],
+    ['a git URL', 'git+https://example.com/x.git', { version: '1.0.0', resolved: 'git+https://example.com/x.git#abc' }],
+    ['a hosted git shorthand', 'github:o/x', { version: '1.0.0' }],
+    ['a tarball URL', 'https://example.com/x-1.0.0.tgz', { version: '1.0.0' }],
+    ['a tarball name', '1.0.0-x.tgz', { version: '1.0.0-x.tgz' }],
+    ['a range only loose parsing reads, a folder for npm', '^1.0.0 || ./x', { version: '1.0.0' }],
+    ['an alias of a folder', 'npm:x-real@../x', { name: 'x-real', version: '1.0.0' }],
+    ['a workspace: spec of a path', 'workspace:../x', { version: '1.0.0' }],
+  ])('%s anywhere leaves every root unproven', (_label, spec, entry) => {
+    const r = withX(spec, entry);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.additions).toEqual([]);
+  });
+
+  it('in each dependency field of a member', () => {
+    for (const place of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const) {
+      expect(withX('^1.0.0', { version: '1.0.0' }, place).dropSafe('ra', '1.0.0'), `${place} control`).toBe(true);
+      const r = withX('github:o/x', { version: '1.0.0' }, place);
+      expect(r.dropSafe('ra', '1.0.0'), place).toBe(false);
+      expect(r.additions, place).toEqual([]);
     }
   });
 
-  it('a spec that cannot be placed anywhere in the repository leaves every root unproven', () => {
-    const r = build({ workspaces: ['packages/*', 'tools/*'], aDeps: { t: 'file:/srv/t' } });
-    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
-    expect(r.additions).toEqual([]);
+  it('in the overrides of the root or of a member (any depth)', () => {
+    const run = (rootOverrides?: unknown, memberOverrides?: unknown) => {
+      const workspaces = ['packages/*'];
+      const files: Files = {
+        'package.json': pkg({ name: 'root', version: '1.0.0', workspaces, dependencies: { ra: '^1.0.0' }, ...(rootOverrides ? { overrides: rootOverrides } : {}) }),
+        'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' }, ...(memberOverrides ? { overrides: memberOverrides } : {}) }),
+      };
+      const lock = lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces, dependencies: { ra: '^1.0.0' } },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/ra': { version: '1.2.0' },
+        'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+      });
+      return resolveNarrowNpm(inputs(files, { 'package-lock.json': lock }));
+    };
+    // a plain range override keeps the root narrow; overrides of any other
+    // kind make it unlocked (no drop), and with a spec other than a registry
+    // spec the root adds nothing either
+    expect(versions(run({ ra: '1.2.0' }))).toEqual(['ra@1.2.0']);
+    expect(run({ ra: '1.2.0' }).dropSafe('ra', '1.0.0')).toBe(true);
+    expect(versions(run({ ra: { '.': '1.2.0', x: 'latest' } }))).toEqual(['ra@1.2.0']);
+    expect(versions(run(undefined, { ra: '1.2.0' }))).toEqual(['ra@1.2.0']);
+    for (const overrides of [{ ra: 'file:../ra' }, { ra: { x: 'github:o/x' } }, { ra: ['tools/x'] }, { ra: '$ra' }]) {
+      expect(versions(run(overrides)), `root ${JSON.stringify(overrides)}`).toEqual([]);
+      expect(versions(run(undefined, overrides)), `member ${JSON.stringify(overrides)}`).toEqual([]);
+    }
+  });
+
+  it('in an entry of the root lockfile: the root entry, a member folder entry, a hoisted or a nested package', () => {
+    for (const entryKey of ['', 'packages/a', 'node_modules/ra', 'node_modules/ra/node_modules/y']) {
+      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+        const run = (spec: string) => {
+          const workspaces = ['packages/*'];
+          const files: Files = {
+            'package.json': pkg({ name: 'root', version: '1.0.0', workspaces }),
+            'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
+          };
+          const packages: Packages = {
+            '': { name: 'root', version: '1.0.0', workspaces },
+            'node_modules/a': { resolved: 'packages/a', link: true },
+            'node_modules/ra': { version: '1.2.0' },
+            'node_modules/ra/node_modules/y': { version: '1.0.0' },
+            'node_modules/z': { version: '1.0.0', resolved: 'git+https://example.com/z.git#abc' },
+            'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+          };
+          packages[entryKey] = { ...(packages[entryKey] as object), [field]: { z: spec } };
+          return resolveNarrowNpm(inputs(files, { 'package-lock.json': lockOf(packages) }));
+        };
+        expect(versions(run('^1.0.0')), `${entryKey} ${field} control`).toEqual(['ra@1.2.0']);
+        const r = run('git+https://example.com/z.git');
+        expect(versions(r), `${entryKey} ${field}`).toEqual([]);
+        expect(r.dropSafe('ra', '1.0.0'), `${entryKey} ${field}`).toBe(false);
+      }
+    }
   });
 
   it('a spec only the lockfile declares (the manifest was edited afterwards) counts too', () => {
@@ -1160,11 +1342,13 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
     expect(r.dropSafe('ra', '1.0.0')).toBe(false);
   });
 
-  it('a manifest outside the workspace root can name a folder of it', () => {
+  // mono/ holds the workspace; a standalone project beside it (in its own
+  // folder, with its own lockfile) declares the spec.
+  const besideStandalone = (otherSpec: string, otherLockExtra: Packages = {}) => {
     const files: Files = {
       'mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*'] }),
       'mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
-      'other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { a: 'file:../mono/packages/a' } }),
+      'other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { x: otherSpec } }),
     };
     const lock = lockOf({
       '': { name: 'root', version: '1.0.0', workspaces: ['packages/*'] },
@@ -1172,64 +1356,105 @@ describe('workspace: a file: dependency on a folder (npm installs it as a projec
       'node_modules/ra': { version: '1.2.0' },
       'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
     });
-    const otherLock = lockOf({ '': { name: 'other' }, 'node_modules/a': { resolved: '../mono/packages/a', link: true }, 'node_modules/ra': { version: '1.2.0' }, '../mono/packages/a': { name: 'a', version: '1.0.0' } });
-    const r = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': otherLock }));
-    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
-    // control: the same repository, the outside project naming another folder, proves the member
-    const elsewhere = 'file:../mono/packages/zzz';
-    files['other/package.json'] = pkg({ name: 'other', version: '1.0.0', dependencies: { a: elsewhere } });
-    const elsewhereLock = lockOf({ '': { name: 'other', version: '1.0.0', dependencies: { a: elsewhere } }, 'node_modules/a': { version: '1.0.0', resolved: '../mono/packages/zzz', link: true } });
-    const control = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': elsewhereLock }));
-    expect(control.dropSafe('ra', '1.0.0')).toBe(true);
+    const otherLock = lockOf({ '': { name: 'other', version: '1.0.0', dependencies: { x: otherSpec } }, 'node_modules/x': { version: '1.0.0' }, ...otherLockExtra });
+    return resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'other/package-lock.json': otherLock }));
+  };
+
+  it('a manifest outside the workspace root counts too, whatever folder it names', () => {
+    expect(besideStandalone('^1.0.0').dropSafe('ra', '1.0.0')).toBe(true); // control
+    for (const spec of ['file:../mono/packages/a', 'file:../mono/packages/zzz', 'file:tools/t', '../Mono/TOOLS/T', 'github:o/x']) {
+      const r = besideStandalone(spec);
+      expect(r.dropSafe('ra', '1.0.0'), spec).toBe(false);
+      expect(versions(r).filter((v) => v.startsWith('ra@')), spec).toEqual([]);
+    }
   });
 
-  it('the folder is compared from the workspace root, not from the repository root', () => {
-    // mono/ holds the workspace; a sibling manifest in abcd/ names `tools/t` from its own folder,
-    // which is abcd/tools/t, not mono/tools/t (abcd/ is as long as mono/, so a prefix cut by
-    // length alone would read it as tools/t)
-    const files: Files = {
-      'mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] }),
-      'mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
-      'mono/tools/t/package.json': pkg({ name: 't', version: '1.0.0' }),
-      'abcd/package.json': pkg({ name: 'abcd', version: '1.0.0', dependencies: { x: 'file:tools/t' } }),
-    };
-    const lock = lockOf({
-      '': { name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] },
-      'node_modules/a': { resolved: 'packages/a', link: true },
-      'node_modules/t': { resolved: 'tools/t', link: true },
-      'node_modules/ra': { version: '1.2.0' },
-      'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
-      'tools/t': { name: 't', version: '1.0.0' },
+  it("a standalone project's lockfile entries are not read: only the lockfiles of workspace roots are", () => {
+    // `x` 1.0.0 depends on a git package; the standalone project's lockfile
+    // records that, the workspace's root lockfile does not hold it
+    const r = besideStandalone('^1.0.0', {
+      'node_modules/x': { version: '1.0.0', dependencies: { g: 'github:o/g' } },
+      'node_modules/g': { version: '1.0.0', resolved: 'git+ssh://git@github.com/o/g.git#abc' },
     });
-    const otherLock = lockOf({ '': { name: 'abcd' }, 'node_modules/x': { version: '1.0.0' } });
-    const r = resolveNarrowNpm(inputs(files, { 'mono/package-lock.json': lock, 'abcd/package-lock.json': otherLock }));
     expect(r.dropSafe('ra', '1.0.0')).toBe(true);
+    expect(versions(r)).toContain('ra@1.2.0');
   });
-  it('a workspace root in a folder with capital letters: the comparison is case-insensitive on both sides', () => {
-    // The workspace in Mono/ is untouched; a standalone project beside it names
-    // Mono/tools/t, spelled with capitals, in a file: spec the root lockfile does not hold.
-    const run = (spec: string) => {
-      const files: Files = {
-        'Mono/package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] }),
-        'Mono/packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } }),
-        'Mono/tools/t/package.json': pkg({ name: 't', version: '1.0.0' }),
-        'Other/package.json': pkg({ name: 'other', version: '1.0.0', dependencies: { x: spec } }),
-      };
-      const lock = lockOf({
-        '': { name: 'root', version: '1.0.0', workspaces: ['packages/*', 'tools/*'] },
-        'node_modules/a': { resolved: 'packages/a', link: true },
-        'node_modules/t': { resolved: 'tools/t', link: true },
+
+  it('a spec other than a registry spec in a workspace root does not cost a standalone project its additions', () => {
+    const files: Files = {
+      'mono/package.json': pkg({ name: 'mono', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', x: 'file:/srv/x' } }),
+      'mono/package-lock.json': lockOf({
+        '': { name: 'mono', version: '1.0.0', workspaces: ['packages/*'], dependencies: { ra: '^1.0.0', x: 'file:/srv/x' } },
         'node_modules/ra': { version: '1.2.0' },
-        'packages/a': { name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0' } },
-        'tools/t': { name: 't', version: '1.0.0' },
-      });
-      const otherLock = lockOf({ '': { name: 'other', version: '1.0.0', dependencies: { x: spec } }, 'node_modules/x': { version: '1.0.0', resolved: spec, link: true } });
-      return resolveNarrowNpm(inputs(files, { 'Mono/package-lock.json': lock, 'Other/package-lock.json': otherLock }));
+      }),
+      'app/package.json': pkg({ name: 'app', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'app/package-lock.json': lockOf({ '': { name: 'app', version: '1.0.0', dependencies: { rb: '^1.0.0' } }, 'node_modules/rb': { version: '1.3.0' } }),
     };
-    expect(run('file:../Mono/tools/zzz').dropSafe('ra', '1.0.0')).toBe(true); // control: another folder
-    expect(run('file:../Mono/tools/t').dropSafe('ra', '1.0.0')).toBe(false);
-    expect(run('file:../mono/TOOLS/T').dropSafe('ra', '1.0.0')).toBe(false);
+    const manifestFiles = { 'app/package.json': files['app/package.json'], 'mono/package.json': files['mono/package.json'] };
+    const lockFiles = { 'app/package-lock.json': files['app/package-lock.json'], 'mono/package-lock.json': files['mono/package-lock.json'] };
+    const r = resolveNarrowNpm(inputs(manifestFiles, lockFiles));
+    expect(r.additions).toEqual([{ name: 'rb', version: '1.3.0' }]);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
   });
+
+  it('the entries of all root lockfiles share one budget (two roots, each below it alone)', () => {
+    // Each lockfile holds a little over half the budget: alone, each would be
+    // read; together they exceed it, so no root is proven and the workspaces
+    // add nothing.
+    const half = Math.floor(MAX_LOCK_INDEX_NODES / 2) + 1;
+    const rootLock = (dir: string, filler: number) => {
+      const packages: Packages = {
+        '': { name: dir, version: '1.0.0', workspaces: ['packages/*'] },
+        [`node_modules/${dir}-a`]: { resolved: 'packages/a', link: true },
+        'node_modules/ra': { version: '1.2.0' },
+        'packages/a': { name: `${dir}-a`, version: '1.0.0', dependencies: { ra: '^1.0.0' } },
+      };
+      for (let i = 0; i < filler; i++) packages[`node_modules/f${i}`] = { version: '1.0.0' };
+      return lockOf(packages);
+    };
+    const run = (filler: number) => {
+      const files: Files = {};
+      const lockFiles: Files = {};
+      for (const dir of ['one', 'two']) {
+        files[`${dir}/package.json`] = pkg({ name: dir, version: '1.0.0', workspaces: ['packages/*'] });
+        files[`${dir}/packages/a/package.json`] = pkg({ name: `${dir}-a`, version: '1.0.0', dependencies: { ra: '^1.0.0' } });
+        lockFiles[`${dir}/package-lock.json`] = rootLock(dir, filler);
+      }
+      return resolveNarrowNpm(inputs(files, lockFiles));
+    };
+    expect(versions(run(10))).toEqual(['ra@1.2.0']); // control
+    expect(versions(run(half))).toEqual([]);
+  }, 60_000);
+
+  it('one pass over all specs: 100 workspace roots with 45000 specs each stay within a time bound', () => {
+    // Before the spec pass was one pass, 100 roots of 45000 file: specs took
+    // about 12 seconds. Registry specs (read until the budget of specs runs
+    // out, which leaves every root unproven) and folder specs (the pass stops
+    // at the first) are both timed.
+    const run = (specOf: (root: number, i: number) => string) => {
+      const files: Files = {};
+      const lockFiles: Files = {};
+      for (let j = 0; j < 100; j++) {
+        const deps: Record<string, string> = {};
+        for (let i = 0; i < 45_000; i++) deps[`f${i}`] = specOf(j, i);
+        files[`r${j}/package.json`] = pkg({ name: `r${j}`, version: '1.0.0', workspaces: ['packages/*'], dependencies: deps });
+        lockFiles[`r${j}/package-lock.json`] = lockOf({ '': { name: `r${j}`, version: '1.0.0', workspaces: ['packages/*'] } });
+      }
+      const started = performance.now();
+      const r = resolveNarrowNpm(inputs(files, lockFiles));
+      const dropped = r.dropSafe('f1', '1.0.0');
+      return { elapsed: performance.now() - started, dropped, additions: r.additions.length };
+    };
+    const registry = run((j, i) => `^${j}.${i}.0`);
+    expect(registry.dropped).toBe(false); // nothing is locked
+    expect(registry.additions).toBe(0);
+    // measured locally at about 2 seconds, most of it JSON parsing; the bound
+    // only has to sit far below a cost that grows with roots x specs
+    expect(registry.elapsed).toBeLessThan(20_000);
+    const folders = run((j, i) => `file:t${i}`);
+    expect(folders.dropped).toBe(false);
+    expect(folders.elapsed).toBeLessThan(20_000);
+  }, 120_000);
 });
 
 describe('workspace: a member in a directory the scan does not read', () => {
