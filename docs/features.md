@@ -108,7 +108,7 @@ A complete list of what depsight does today, beyond the headline value props in 
     not close the case of a folder that is no member: a folder the root
     lockfile still links after it left the `workspaces` patterns, or after a
     `file:` spec became a registry range, counts as a member; `npm ci` at the
-    root installs it from the root lockfile, but `npm run` inside that folder
+    root installs it from the root lockfile, but `npm install` inside that folder
     installs it on its own without a lockfile), and a
     link that satisfies a declared range only where the member's package.json
     version (equal to its folder entry's) is in that range; in a workspace only
@@ -135,8 +135,7 @@ A complete list of what depsight does today, beyond the headline value props in 
     without updating the lockfile, the contents of a bundling optional package
     that the lockfile was written without unpacking (on another platform),
     command line flags, a user or global npmrc, the environment and the state
-    of the registry. Also outside it: a lockfile edited by hand so that its
-    member entries disagree with its own `workspaces` patterns. A workspace
+    of the registry. A workspace
     member in a vendored, build or fixture directory is not read, so the root
     lockfile's link to it is unproven and the whole workspace keeps every
     repository-wide entry. A workspace manifest the root lockfile does not

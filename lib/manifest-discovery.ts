@@ -1297,7 +1297,7 @@ export async function fetchNpmManifests(
 // folder the root lockfile still links after it left the `workspaces`
 // patterns, or after a `file:` spec became a registry range, counts as a
 // member. `npm ci` at the root installs it from the root lockfile, but
-// `npm run` inside that folder installs it on its own without a lockfile.
+// `npm install` inside that folder installs it on its own without a lockfile.
 // npm itself keeps such a link in a lockfile it rewrites.
 //
 // What a removal guarantees: no under-reporting for an install that honours the
@@ -1668,8 +1668,7 @@ export const MAX_LOCK_INDEX_NODES = 1_000_000;
 // up to about 0.5 microseconds per character on the slowest shapes measured
 // (long `||` chains), so the budget keeps the pass to about a second. A real
 // monorepo stays far below it: only its compound specs (`>=1 <3`,
-// `^16 || ^17`) go through `validRange`, tens of thousands of characters in
-// the largest root lockfiles looked at. Beyond the budget the pass fails
+// `^16 || ^17`) go through `validRange`. Beyond the budget the pass fails
 // closed: no workspace root is proven.
 export const MAX_SLOW_SPEC_CHARS = 2_000_000;
 
@@ -1948,7 +1947,7 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
  * does not make a proven folder a member: a folder the root lockfile still
  * links after it left the `workspaces` patterns, or after a `file:` spec became
  * a registry range, is proven all the same. `npm ci` at the root installs it
- * from the root lockfile, but `npm run` inside that folder installs it on its
+ * from the root lockfile, but `npm install` inside that folder installs it on its
  * own without a lockfile. The patterns are never evaluated and nothing is
  * built from them.
  */
