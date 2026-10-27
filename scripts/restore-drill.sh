@@ -93,7 +93,9 @@ echo "drill: backup.sh"
 PATH="$WORK/bin:$PATH" BACKUP_COMPOSE_FILE="$WORK/compose.yml" BACKUP_DIR="$WORK/backups" \
   PG_DB="$SRC_DB" "$REPO_ROOT/scripts/backup.sh"
 dump="$(find "$WORK/backups" -maxdepth 1 -name 'depsight-*.sql')"
-[ -n "$dump" ] && [ "$(wc -l <<< "$dump" | tr -d ' ')" = 1 ] || fail "expected exactly one dump in $WORK/backups"
+if [ -z "$dump" ] || [ "$(wc -l <<< "$dump" | tr -d ' ')" != 1 ]; then
+  fail "expected exactly one dump in $WORK/backups"
+fi
 
 echo "drill: restore.sh into a fresh database"
 sql postgres "DROP DATABASE IF EXISTS $DST_DB" > /dev/null
