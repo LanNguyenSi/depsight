@@ -71,6 +71,8 @@ make dev-ps        # List dev containers
 make dev-clean     # Stop the dev stack + delete its DB volumes (project depsight-dev only)
 make prod          # Production build + start (docker-compose.yml, project depsight), see Self-hosting below
 make prod-down     # Stop production containers
+make backup        # Dump the hosted Postgres into backups/, see Backup and restore
+make restore       # FILE=<dump.sql> CONFIRM=yes: replace the database with a dump (destructive)
 make test          # Run tests inside the dev container
 make lint          # Lint + type-check inside the dev container
 make format        # Prettier (write) inside the dev container
@@ -173,6 +175,44 @@ Postgres reads `POSTGRES_PASSWORD` only when it creates an empty data directory,
 The block is one `set -e` subshell rather than an `&&` chain: every step stays a plain line, the first command that fails ends the block, and `set -e`, the `umask` and `NEW` stay inside the subshell, so they cannot change your shell or close it on an error. A failed `ALTER` therefore stops the block before `.env` is touched: `ON_ERROR_STOP=1` makes psql exit non-zero, and psql is the last command of its pipeline, whose status `set -e` sees. Paste it into `bash` or `sh` (in zsh run `setopt interactive_comments` first, or zsh runs the comment lines as commands and the block stops at the first one, before the `ALTER`). Paste it as it is: `set -e` does not apply to a command on the left of `||` or `&&`, which is why the `grep` line ends in `|| [ $? -eq 1 ]` (a plain `|| true` would also hide a read error and then empty `.env`), and a `|| ...` after the closing parenthesis would switch it off for the whole block. If it stops in step 2, the database already has the new password while `.env` still holds the old one: run the `ALTER USER` again with the value from `.env` (and delete a leftover `.env.tmp`); if `.env` has lost its `POSTGRES_PASSWORD` line (a failure after the `cat` line, for example a full disk), write a new value into `.env` and run the `ALTER USER` with that value. If it stops in step 3, both hold the new password and step 3 can run again.
 
 Between steps 1 and 3 new connections from the old app container fail, so do it in a quiet moment. To go back, run the `ALTER USER` again with the old value and restore the `.env` line. There is no other place to edit: the app, the `db` service, the `migrate` service and the deploy hook all read `POSTGRES_PASSWORD`. The hosted database still has the original password `depsight` until someone rotates it this way.
+
+### Backup and restore
+
+The database in the volume `depsight_postgres_data` is the only state depsight keeps that cannot be rebuilt (repositories, scan history, tokens, policies, webhook secrets). A deploy never backs it up and nothing in the compose files does it for you: **scheduling `scripts/backup.sh` on the host is the operator's job**, and a lost volume without a dump is a lost instance. The commands below are for the hosted `docker-compose.traefik.yml`, run in the checkout.
+
+**Backup.** `scripts/backup.sh` (or `make backup`) runs `pg_dump --clean --if-exists` inside the `db` service through `docker compose exec -T`, so the host needs no Postgres client and the database stays on its private network. It writes plain SQL (readable, restorable with `psql` alone, validated on the host with `grep`), to a hidden temp file first, checks that the file is at least 1 KiB and carries pg_dump's "dump complete" marker, and only then renames it to `backups/depsight-<YYYYMMDD_HHMMSS>.sql` (directory mode 700, files 600). A failed run never leaves a truncated `.sql` behind. It refuses to start (exit 2) while the `db` service is not running in the compose file, so a cron job cannot report success for a stack that is down. Exit codes: 0 done, 1 dump failed or invalid, 2 refused (configuration, compose file, db not running), 3 dump kept but the off-host hook failed.
+
+```bash
+# crontab of the user that runs docker, daily at 03:17 (install it yourself; nothing does it for you)
+17 3 * * * cd /path/to/depsight && scripts/backup.sh >> /var/log/depsight-backup.log 2>&1
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BACKUP_COMPOSE_FILE` | `docker-compose.traefik.yml` in the checkout | Compose file of the stack to back up |
+| `BACKUP_DB_SERVICE` | `db` | Compose service that runs Postgres |
+| `BACKUP_DIR` | `backups/` in the checkout (git-ignored) | Where dumps go |
+| `PG_USER`, `PG_DB` | `depsight`, `depsight` | Database role and name |
+| `KEEP_FILES` | `14` | Keep at most this many dumps |
+| `KEEP_DAYS` | `14` | Delete dumps older than this many days |
+| `BACKUP_OFFHOST_HOOK` | (unset) | Executable that copies a finished dump off the host |
+
+**Retention.** After a successful run the script keeps the newest `KEEP_FILES` dumps and deletes any older than `KEEP_DAYS` days; the dump it just wrote is never aged out. A run that fails (including a failed off-host hook) rotates nothing, so a broken run never pushes the last good dump out. A dump is about the size of the data (about 30 KiB for the empty schema plus a handful of rows): plan `KEEP_FILES` x dump size of disk.
+
+**Off-host copy.** Dumps in `backups/` live on the same disk as the database, so a lost host loses the restore points too. Set `BACKUP_OFFHOST_HOOK` to the path of an executable; it is called once per successful dump with the dump path as its only argument, for example a script that runs `gpg --encrypt` and `rclone copy`. The dump holds every user's GitHub OAuth token in clear text and the sealed webhook secrets, so encrypt it in the hook before it leaves the host. A hook that is not an executable file stops the run before dumping (exit 2); a hook that fails makes the run exit 3 with the local dump kept. The dump does not contain `.env`: back that up separately (`NEXTAUTH_SECRET` and `WEBHOOK_SECRET_KEY` are the key material of the sealed webhook secrets, and a restore without them leaves those secrets unreadable).
+
+**Restore.** `scripts/restore.sh --yes <dump.sql>` (or `make restore FILE=<dump.sql> CONFIRM=yes`) replaces the content of the running database with the dump. It is destructive: every table the dump describes is dropped and recreated, and rows written after the dump are lost, so without `--yes` it only says so and exits 2, and without a file argument it never runs. There is no interactive prompt. In order it checks the file (size and completion marker), checks that `db` is running, **stops the `app` service** (its open connections would block the `DROP`s and it would write rows while the tables are replaced; `RESTORE_APP_SERVICE` names another service, an empty value leaves the app alone), feeds the dump to `psql -v ON_ERROR_STOP=1 --single-transaction` (any error rolls the whole restore back and the database keeps its old content), and starts the app again only after success. After a failed restore the app stays stopped on purpose and the message says how to start it. Exit codes: 0 restored, 1 invalid dump or psql failed, 2 refused.
+
+```bash
+ls -t backups/depsight-*.sql | head -3                      # pick a dump
+scripts/restore.sh --yes backups/depsight-20261027_031700.sql
+docker compose -f docker-compose.traefik.yml run --rm -T --build migrate   # only if the dump predates a schema change
+curl -fsS https://depsight.opentriologue.ai/api/health                     # the app answers again
+```
+
+The dump is the schema and the data of the moment it was taken. If the dump predates a schema change, run the `migrate` service after the restore, as above (it adds what is missing, as on every deploy). Restoring a dump taken from newer code than the deployed code is not supported and has not been tried.
+
+**Restore drill.** A backup that has never been restored is a hope. CI job `Restore drill (Postgres)` runs `scripts/restore-drill.sh` on every push and pull request: it applies the schema like the `migrate` service (the pre-push SQL, then `prisma db push`), seeds users and repositories, runs the real `scripts/backup.sh`, restores that dump with the real `scripts/restore.sh` into a freshly created second database, and asserts the row counts, the content of one row, a stored token and the Advisory unique index. The scripts see a `docker` shim that forwards their `docker compose exec -T db ...` calls to a scratch Postgres container, so every `pg_dump` and `psql` option the drill uses is the one in the scripts; if the options drift or the dump stops restoring, the job fails. Run it by hand against a scratch container (never production) with `DRILL_PG_CONTAINER=<container> DRILL_DATABASE_URL=postgresql://depsight:<password>@127.0.0.1:<port>/depsight scripts/restore-drill.sh`. The drill proves the scripts work; it does not prove that your cron job runs, that the off-host copy arrives, or that you hold the `.env` key material. Do a real restore into a spare stack now and then, and check the age of the newest dump in `backups/`.
 
 ### Network access
 

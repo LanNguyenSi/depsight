@@ -1,4 +1,4 @@
-.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down build test lint format ci clean help
+.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down backup restore build test lint format ci clean help
 
 .DEFAULT_GOAL := help
 
@@ -41,6 +41,14 @@ prod: ## Build and start production containers
 
 prod-down: ## Stop production containers
 	docker compose down
+
+# ── Backup and restore (hosted stack, docker-compose.traefik.yml) ───
+
+backup: ## Dump the hosted Postgres into backups/ (see docs/configuration.md, Backup and restore)
+	scripts/backup.sh
+
+restore: ## Restore a dump: make restore FILE=backups/depsight-<ts>.sql CONFIRM=yes (destructive)
+	scripts/restore.sh $(if $(filter yes,$(CONFIRM)),--yes) $(FILE)
 
 # ── Run commands inside dev container ───────────────────────────────
 
