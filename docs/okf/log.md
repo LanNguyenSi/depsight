@@ -2,6 +2,8 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-28T06:54:15Z: `docs/configuration.md` Restore paragraph and exit-code list (a signal before the confirmed load exits 1 with a hint to check the database). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
+- 2026-10-28T06:52:57Z: `docs/configuration.md` Restore paragraph (signal after COMMIT exits 4, private copy in `BACKUP_DIR`). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, which is unchanged; re-stamped.
 - 2026-10-28T05:25:17Z, `rescan-and-staleness.md` re-verified after `docs/configuration.md` gained a link to the new `docs/rollback.md`: the one claim that cites the file (`SCAN_INTERVAL_MINUTES` is documented there) is unchanged. Re-stamped.
 - 2026-10-27T20:25:31Z, `cve-channel-merge-and-scores.md`: the residual sentence names `npm install` inside the folder (it said `npm run`), one wording for the residual in the doc, `lib/cve/osv.ts` and `docs/features.md`; the budget comment in `lib/manifest-discovery.ts` no longer cites lockfile sizes. Seven citations into the two files re-pointed one line up to the same code after the shorter comments. Re-stamped.
 - 2026-10-27T20:25:31Z, `rescan-and-staleness.md`: seven citations into `lib/cve/osv.ts` and `lib/manifest-discovery.ts` re-pointed one line up to the same code after the shorter comments; the cited code is unchanged. Re-stamped.

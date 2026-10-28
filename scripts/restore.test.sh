@@ -2,6 +2,10 @@
 # Test driver for scripts/restore.sh with a fake `docker` on PATH.
 #   bash scripts/restore.test.sh
 set -euo pipefail
+# Job control: the driver runs restore.sh as a background job (to know its PID), and
+# without -m an async job ignores SIGINT, so the INT trap of restore.sh could not be
+# tested.
+set -m
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESTORE_SCRIPT="$SCRIPT_DIR/restore.sh"
@@ -15,7 +19,9 @@ mkdir -p "$HOME"
 
 export FAKE_DOCKER_LOG="$WORKDIR/docker.log"
 export FAKE_PSQL_STDIN="$WORKDIR/psql_stdin"
-# restore.sh keeps its private copy of the dump here; the tests check it is gone afterwards
+export FAKE_SCRIPT_PID="$WORKDIR/script.pid"
+# restore.sh keeps its private copy of the dump in BACKUP_DIR; TMPDIR is exported so
+# that a copy landing there instead is visible to the tests (no_tmp_left, case (v))
 TMPD="$WORKDIR/tmp"
 mkdir -p "$TMPD"
 COMPOSE_FILE="$WORKDIR/compose.yml"
@@ -37,6 +43,12 @@ DUMP="$WORKDIR/good.sql"
 cat > "$FAKE_BIN/docker" <<EOF2
 #!/usr/bin/env bash
 echo "\$*" >> "\$FAKE_DOCKER_LOG"
+# FAKE_KILL_ON: signal restore.sh during one kind of call, to exercise its traps
+# ("exec psql" runs before the COMMIT is known, "run" and "start" after it). The
+# driver writes restore.sh's PID to \$FAKE_SCRIPT_PID before it can call docker.
+if [ -n "\${FAKE_KILL_ON:-}" ] && case "\$*" in *" \${FAKE_KILL_ON} "*) true ;; *) false ;; esac; then
+  if [ -s "\$FAKE_SCRIPT_PID" ]; then kill -s "\${FAKE_KILL_SIGNAL:-TERM}" "\$(cat "\$FAKE_SCRIPT_PID")" 2> /dev/null; fi
+fi
 case "\$*" in
   *" ps "*) [ "\${FAKE_PS_FAIL:-0}" = 1 ] && exit 1; printf '%s\n' \${FAKE_RUNNING:-app db}; exit 0 ;;
   *" exec "*pg_dump*)
@@ -58,14 +70,30 @@ esac
 EOF2
 chmod +x "$FAKE_BIN/docker"
 
-# run_restore [VAR=value ...] -- args...; sets rc, out_text
+# FAKE_CP_FAIL=1 makes the copy of the dump into BACKUP_DIR fail without touching the
+# source file (a copy target that cannot be written), whatever user the tests run as.
+cat > "$FAKE_BIN/cp" <<'EOF3'
+#!/usr/bin/env bash
+[ "${FAKE_CP_FAIL:-0}" = 1 ] && exit 1
+exec /bin/cp "$@"
+EOF3
+chmod +x "$FAKE_BIN/cp"
+
+# run_restore [VAR=value ...] -- args...; sets rc, out_text. restore.sh runs as a
+# background job so its PID is known to the fake docker (FAKE_SCRIPT_PID) before it
+# can make a killable call; the wait maps it back to rc.
 run_restore() {
   local envs=()
   while [ "$#" -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
-  : > "$FAKE_DOCKER_LOG"; rm -f "$FAKE_PSQL_STDIN"; rm -rf "$BACKUPS"
+  : > "$FAKE_DOCKER_LOG"; rm -f "$FAKE_PSQL_STDIN" "$FAKE_SCRIPT_PID"; rm -rf "$BACKUPS"
   rc=0
-  out_text="$(env PATH="$FAKE_BIN:$PATH" BACKUP_COMPOSE_FILE="$COMPOSE_FILE" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" ${envs[@]+"${envs[@]}"} "$RESTORE_SCRIPT" "$@" 2>&1)" || rc=$?
+  env PATH="$FAKE_BIN:$PATH" BACKUP_COMPOSE_FILE="$COMPOSE_FILE" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" ${envs[@]+"${envs[@]}"} "$RESTORE_SCRIPT" "$@" \
+    > "$WORKDIR/out" 2>&1 &
+  pid="$!"
+  printf '%s' "$pid" > "$FAKE_SCRIPT_PID"
+  wait "$pid" || rc=$?
+  out_text="$(cat "$WORKDIR/out")"
 }
 no_db_calls() { ! grep -q -E ' (exec|stop|start|run) ' "$FAKE_DOCKER_LOG"; }
 line_of() { grep -n -- "$1" "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true; }
@@ -81,7 +109,10 @@ stdin_is_reset_plus_dump() {
     && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] \
     && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = "$((7 + n))" ]
 }
-no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
+no_tmp_left() {
+  [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ] \
+    && [ -z "$(find "$BACKUPS" -maxdepth 1 -name 'restore-dump.*' 2>/dev/null)" ]
+}
 
 # (a) success: stop app, pre-restore dump, schema reset + dump in one transaction, migrate, start app
 {
@@ -99,13 +130,15 @@ no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
   fi
 }
 
-# (a2) --no-pre-backup: no pg_dump call, no backup directory
+# (a2) --no-pre-backup: no pg_dump call, no dump in BACKUP_DIR (the directory itself
+# exists: the private copy of the dump lives there and is removed on exit)
 {
   run_restore -- --yes --no-pre-backup "$DUMP"
-  if [ "$rc" -eq 0 ] && ! grep -q pg_dump "$FAKE_DOCKER_LOG" && [ ! -e "$BACKUPS" ] && stdin_is_reset_plus_dump; then
+  if [ "$rc" -eq 0 ] && ! grep -q pg_dump "$FAKE_DOCKER_LOG" && [ "$(count_dumps)" = 0 ] && no_tmp_left \
+    && stdin_is_reset_plus_dump; then
     pass "(a2) --no-pre-backup skips the pre-restore dump"
   else
-    fail "(a2) no pre-backup: rc=$rc"
+    fail "(a2) no pre-backup: rc=$rc dumps=$(count_dumps)"
   fi
 }
 
@@ -296,9 +329,11 @@ no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
 }
 
 # (u) the private copy itself becomes unreadable after validation: psql gets BEGIN and the
-# reset but no COMMIT, the script exits 1 and says nothing was committed
+# reset but no COMMIT, the script exits 1 and says nothing was committed. The glob is
+# under BACKUP_DIR because that is where the copy lives; it only removes something if
+# restore.sh really put the copy there (proven again by case (v2)).
 {
-  run_restore FAKE_STOP_RM="$TMPD/restore-dump.*" -- --yes "$DUMP"
+  run_restore FAKE_STOP_RM="$BACKUPS/restore-dump.*" -- --yes "$DUMP"
   if [ "$rc" -eq 1 ] && [ -e "$FAKE_PSQL_STDIN" ] && ! grep -q 'COMMIT' "$FAKE_PSQL_STDIN" \
     && [ "$(sed -n 1p "$FAKE_PSQL_STDIN")" = "BEGIN;" ] \
     && grep -q "nothing was committed" <<< "$out_text" && ! grep -q "rolled back" <<< "$out_text" \
@@ -322,6 +357,31 @@ no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
   if [ "$bad" = 0 ]; then pass "(v) no temporary copy is left behind on any exit path"; else fail "(v) leftover temporary copy"; fi
 }
 
+# (v2) the temporary copy lives under BACKUP_DIR, not TMPDIR, and backup.sh's rotation
+# never matches it. Killing a "$TMPD/restore-dump.*" glob while the app stops does not
+# touch the restore (the copy is not there), a file of that name under TMPDIR survives
+# untouched, and a restore-dump.* file sitting in BACKUP_DIR is not rotated away while
+# an old depsight-*.sql is.
+{
+  bad=0
+  run_restore FAKE_STOP_RM="$TMPD/restore-dump.*" -- --yes "$DUMP"; r1=$rc
+  [ "$r1" = 0 ] || bad=1
+  touch "$TMPD/restore-dump.keep"
+  run_restore -- --yes "$DUMP"
+  { [ "$rc" = 0 ] && [ -e "$TMPD/restore-dump.keep" ]; } || bad=1
+  rm -f "$TMPD/restore-dump.keep"
+  mkdir -p "$BACKUPS"; touch "$BACKUPS/restore-dump.manually"
+  cp "$DUMP" "$BACKUPS/depsight-20200101_000000.sql"; touch -t 202001010000 "$BACKUPS/depsight-20200101_000000.sql"
+  env PATH="$FAKE_BIN:$PATH" BACKUP_COMPOSE_FILE="$COMPOSE_FILE" BACKUP_DIR="$BACKUPS" KEEP_FILES=1 \
+    "$SCRIPT_DIR/backup.sh" > /dev/null 2>&1 || bad=1
+  [ -e "$BACKUPS/restore-dump.manually" ] || bad=1
+  [ -e "$BACKUPS/depsight-20200101_000000.sql" ] && bad=1 # KEEP_FILES=1 must have rotated it
+  rm -f "$BACKUPS"/depsight-*.sql "$BACKUPS/restore-dump.manually"
+  run_restore -- --yes "$DUMP"; no_tmp_left || bad=1
+  if [ "$bad" = 0 ]; then pass "(v2) temporary copy is in BACKUP_DIR, not TMPDIR, no rotation name, gone after the run"
+  else fail "(v2) copy location: r1=$r1 bad=$bad"; fi
+}
+
 # (w) a dump with transaction control statements is refused before anything is touched
 {
   for stmt in 'COMMIT;' 'begin;' 'END;'; do
@@ -339,6 +399,72 @@ no_tmp_left() { [ -z "$(find "$TMPD" -mindepth 1 2>/dev/null)" ]; }
     pass "(x) migrate failure message names the step and points at the output"
   else
     fail "(x) migrate message: rc=$rc"
+  fi
+}
+
+# (y) the copy of the dump into BACKUP_DIR fails (target not writable): exit 1, the
+# message names both ends of the copy, nothing was touched
+{
+  run_restore FAKE_CP_FAIL=1 -- --yes "$DUMP"
+  if [ "$rc" -eq 1 ] && no_db_calls && grep -q "could not copy $DUMP to $BACKUPS/restore-dump." <<< "$out_text"; then
+    pass "(y) failed copy -> exit 1, 'could not copy <file> to <path>'"
+  else
+    fail "(y) failed copy: rc=$rc out=$out_text"
+  fi
+}
+
+# (z) a TERM signal while the psql exec call runs (the COMMIT is not known yet): exit 1,
+# no claim that anything was committed, no migrate or start call, no leftover copy
+{
+  run_restore FAKE_KILL_ON=psql -- --yes "$DUMP"
+  if [ "$rc" -eq 1 ] && ! grep -q "committed" <<< "$out_text" && grep -q "check it before assuming it is unchanged" <<< "$out_text" \
+    && ! grep -q ' run ' "$FAKE_DOCKER_LOG" \
+    && ! grep -q ' start app' "$FAKE_DOCKER_LOG" && no_tmp_left; then
+    pass "(z) signal before the COMMIT -> exit 1, nothing reported as committed"
+  else
+    fail "(z) signal before COMMIT: rc=$rc out=$out_text"
+  fi
+}
+
+# (z4) an existing BACKUP_DIR keeps its mode (only a directory the script creates is
+# made 700), and the restore still succeeds with the copy taken there
+{
+  existing="$WORKDIR/existing-backups"; rm -rf "$existing"; mkdir -p "$existing"; chmod 755 "$existing"
+  run_restore BACKUP_DIR="$existing" -- --yes --no-pre-backup "$DUMP"
+  mode="$(stat -c '%a' "$existing" 2>/dev/null || stat -f '%Lp' "$existing")"
+  if [ "$rc" -eq 0 ] && [ "$mode" = 755 ] && [ -z "$(find "$existing" -maxdepth 1 -name 'restore-dump.*')" ]; then
+    pass "(z4) existing BACKUP_DIR keeps mode 755, copy removed"
+  else
+    fail "(z4) existing BACKUP_DIR: rc=$rc mode=$mode out=$out_text"
+  fi
+}
+
+# (z2) a TERM signal during the migrate run call and (z3) during the app start call:
+# the restore is committed (psql returned), so exit 4 with a message saying so and
+# naming the commands that are left
+{
+  run_restore FAKE_KILL_ON=run -- --yes "$DUMP"; r1=$rc
+  k1=0; grep -q "committed" <<< "$out_text" && k1=1
+  run_restore FAKE_KILL_ON=start -- --yes "$DUMP"; r2=$rc
+  k2=0; grep -q "committed" <<< "$out_text"; k2=$?
+  if [ "$r1" = 4 ] && [ "$k1" = 1 ] && [ "$r2" = 4 ] && [ "$k2" = 0 ] && grep -q "start app" <<< "$out_text" && no_tmp_left; then
+    pass "(z2) signal after the COMMIT -> exit 4 saying the restore is committed (migrate and start)"
+  else
+    fail "(z2) signal after COMMIT: r1=$r1 k1=$k1 r2=$r2 out=$out_text"
+  fi
+}
+
+# (z3) HUP and INT are handled like TERM, before and after the COMMIT
+{
+  run_restore FAKE_KILL_ON=psql FAKE_KILL_SIGNAL=HUP -- --yes "$DUMP"; r1=$rc
+  run_restore FAKE_KILL_ON=psql FAKE_KILL_SIGNAL=INT -- --yes "$DUMP"; r2=$rc
+  run_restore FAKE_KILL_ON=run FAKE_KILL_SIGNAL=HUP -- --yes "$DUMP"; r3=$rc
+  k3=0; grep -q "committed" <<< "$out_text" && k3=1
+  run_restore FAKE_KILL_ON=run FAKE_KILL_SIGNAL=INT -- --yes "$DUMP"; r4=$rc
+  if [ "$r1" = 1 ] && [ "$r2" = 1 ] && [ "$r3" = 4 ] && [ "$k3" = 1 ] && [ "$r4" = 4 ]; then
+    pass "(z3) HUP and INT exit 1 before the COMMIT and 4 with the committed message after it"
+  else
+    fail "(z3) HUP/INT: r1=$r1 r2=$r2 r3=$r3 k3=$k3 r4=$r4"
   fi
 }
 
