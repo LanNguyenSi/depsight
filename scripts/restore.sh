@@ -12,10 +12,10 @@
 # pasted command cannot restore by accident.
 #
 # What it does, in order:
-#   1. checks the file argument, copies the dump into a private temporary file and
-#      checks THAT copy (size, "dump complete" marker, no transaction control
-#      statements); everything below uses the copy, so a file that is rotated away,
-#      truncated or replaced meanwhile cannot change what is loaded,
+#   1. checks the file argument, copies the dump into a private temporary file inside
+#      BACKUP_DIR and checks THAT copy (size, "dump complete" marker, no transaction
+#      control statements); everything below uses the copy, so a file that is rotated
+#      away, truncated or replaced meanwhile cannot change what is loaded,
 #   2. checks that the db service is running,
 #   3. stops the app service when it is running (the app holds connections that
 #      would block the DROPs and write rows while the schema is replaced),
@@ -40,7 +40,8 @@
 # Environment (all optional; the compose, db and dump variables are the ones of backup.sh):
 #   BACKUP_COMPOSE_FILE      compose file of the stack (default: <repo>/docker-compose.traefik.yml)
 #   BACKUP_DB_SERVICE        Postgres service (default: db)
-#   BACKUP_DIR               where the pre-restore dump goes (default: <repo>/backups)
+#   BACKUP_DIR               where the pre-restore dump and the private copy of the
+#                            dump go (default: <repo>/backups)
 #   RESTORE_APP_SERVICE      service stopped during the restore (default: app; empty = leave alone)
 #   RESTORE_MIGRATE_SERVICE  one-shot schema service run after the restore (default: migrate;
 #                            empty = skip, then run the schema step yourself before the app starts)
@@ -48,12 +49,14 @@
 #
 # Exit codes:
 #   0  restored (migrated, app started)
-#   1  dump invalid, the app could not be stopped (nothing changed), or psql failed or
-#      the dump could not be read (not committed, database unchanged, app left stopped)
+#   1  dump invalid, the app could not be stopped (nothing changed), psql failed or
+#      the dump could not be read (nothing committed, database unchanged, app left
+#      stopped), or interrupted before the restore committed (nothing committed)
 #   2  refused: no file, file missing, no --yes, compose file missing, db not running
 #   3  the pre-restore dump failed; nothing was changed (use --no-pre-backup to go on)
-#   4  the dump is restored, but the migrate step or the app start failed; the app is
-#      stopped or not healthy: run the printed command(s) by hand
+#   4  the dump is restored, but the migrate step or the app start failed, or the
+#      script was interrupted after the restore committed; the app is stopped or not
+#      healthy: run the printed command(s) by hand
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +67,7 @@ APP_SERVICE="${RESTORE_APP_SERVICE-app}"
 MIGRATE_SERVICE="${RESTORE_MIGRATE_SERVICE-migrate}"
 PG_USER="${PG_USER:-depsight}"
 PG_DB="${PG_DB:-depsight}"
+BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
 
 # The public schema as a fresh PostgreSQL 16 database has it (owner, comment, USAGE
 # for everyone), so a restored database matches one created by initdb. The SET keeps
@@ -74,11 +78,31 @@ CREATE SCHEMA public AUTHORIZATION pg_database_owner;
 COMMENT ON SCHEMA public IS '"'"'standard public schema'"'"';
 GRANT USAGE ON SCHEMA public TO PUBLIC;'
 
-# Private copy of the dump, removed on every exit path.
+# Private copy of the dump (created in BACKUP_DIR), removed on every exit path.
 tmp=""
 cleanup() { [ -z "$tmp" ] || rm -f "$tmp"; }
 trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
+
+start_hint="docker compose -f $COMPOSE_FILE start $APP_SERVICE"
+migrate_hint="docker compose -f $COMPOSE_FILE run --rm -T --build $MIGRATE_SERVICE"
+stopped_app=0
+
+# Phase marker, set once the psql pipeline has returned zero, i.e. COMMIT is done.
+# A HUP, INT or TERM signal after that exits 4 and says the restore is committed;
+# before it the session ends in a rollback, so the exit stays 1 (a signal between
+# psql's COMMIT and this assignment being reported as not committed is a window
+# shell cannot close).
+committed=0
+on_signal() {
+  if [ "$committed" -eq 1 ]; then
+    echo "restore: interrupted after the restore committed; the database has the content of the dump" >&2
+    [ -z "$MIGRATE_SERVICE" ] || echo "restore: the $MIGRATE_SERVICE step did not run; apply the schema with: $migrate_hint" >&2
+    [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; start it with: $start_hint" >&2
+    exit 4
+  fi
+  exit 1
+}
+trap on_signal HUP INT TERM
 
 usage="usage: restore.sh --yes [--no-pre-backup] <dump.sql>"
 refuse() { echo "restore: $*" >&2; exit 2; }
@@ -108,11 +132,17 @@ if [ "$confirmed" -ne 1 ]; then
 fi
 
 # Work on a private snapshot: the later steps (stopping the app, the pre-restore dump)
-# take time, and the file may be rotated away or truncated in between.
-tmp="$(umask 077 && mktemp "${TMPDIR:-/tmp}/restore-dump.XXXXXX")" \
-  || { echo "restore: could not create a temporary file" >&2; exit 1; }
+# take time, and the file may be rotated away or truncated in between. The copy lives
+# in BACKUP_DIR, the one directory whose free space backup.sh already depends on, and
+# is named so that backup.sh's rotation (depsight-*.sql) never matches it.
+if ! { mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"; }; then
+  echo "restore: could not prepare $BACKUP_DIR for the private copy of the dump" >&2
+  exit 1
+fi
+tmp="$(umask 077 && mktemp "$BACKUP_DIR/restore-dump.XXXXXX")" \
+  || { echo "restore: could not create a temporary file in $BACKUP_DIR" >&2; exit 1; }
 if ! cp -- "$file" "$tmp"; then
-  echo "restore: could not read $file; nothing was changed" >&2
+  echo "restore: could not copy $file to $tmp; nothing was changed" >&2
   exit 1
 fi
 
@@ -141,7 +171,6 @@ grep -qx "$DB_SERVICE" <<< "$running" \
 
 echo "restore: compose file $COMPOSE_FILE, database '$PG_DB', dump $file"
 
-stopped_app=0
 if [ -n "$APP_SERVICE" ] && grep -qx "$APP_SERVICE" <<< "$running"; then
   echo "restore: stopping $APP_SERVICE"
   if ! "${DC[@]}" stop "$APP_SERVICE"; then
@@ -150,7 +179,6 @@ if [ -n "$APP_SERVICE" ] && grep -qx "$APP_SERVICE" <<< "$running"; then
   fi
   stopped_app=1
 fi
-start_hint="docker compose -f $COMPOSE_FILE start $APP_SERVICE"
 
 if [ "$pre_backup" -eq 1 ]; then
   echo "restore: backing up the current state first (scripts/backup.sh)"
@@ -176,6 +204,9 @@ if ! { printf 'BEGIN;\n%s\n' "$RESET_SQL"; cat "$tmp" && printf 'COMMIT;\n'; } \
   [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; start it with: $start_hint" >&2
   exit 1
 fi
+# The pipeline returned zero: COMMIT is done and the restore is committed. A signal
+# from here on exits 4 and says so.
+committed=1
 
 if [ -n "$MIGRATE_SERVICE" ]; then
   echo "restore: applying the current schema ($MIGRATE_SERVICE)"
