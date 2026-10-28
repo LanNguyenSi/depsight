@@ -88,10 +88,12 @@ migrate_hint="docker compose -f $COMPOSE_FILE run --rm -T --build $MIGRATE_SERVI
 stopped_app=0
 
 # Phase marker, set once the psql pipeline has returned zero, i.e. COMMIT is done.
-# A HUP, INT or TERM signal after that exits 4 and says the restore is committed;
-# before it the session ends in a rollback, so the exit stays 1 (a signal between
-# psql's COMMIT and this assignment being reported as not committed is a window
-# shell cannot close).
+# A HUP, INT or TERM signal after that exits 4 and says the restore is committed.
+# Before it the exit stays 1, but bash runs this trap only after the foreground
+# psql pipeline returns: a signal sent to this script alone while psql is loading
+# lets psql finish and possibly commit, and is still reported here as a stop
+# before the commit was confirmed. Stopping the whole process group (Ctrl-C in the
+# terminal) stops psql too, which then rolls back.
 committed=0
 on_signal() {
   if [ "$committed" -eq 1 ]; then
@@ -100,6 +102,7 @@ on_signal() {
     [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; start it with: $start_hint" >&2
     exit 4
   fi
+  echo "restore: interrupted before psql confirmed the load; if only this script was stopped, psql may have finished and the database may already hold the dump: check it before assuming it is unchanged" >&2
   exit 1
 }
 trap on_signal HUP INT TERM
@@ -135,7 +138,7 @@ fi
 # take time, and the file may be rotated away or truncated in between. The copy lives
 # in BACKUP_DIR, the one directory whose free space backup.sh already depends on, and
 # is named so that backup.sh's rotation (depsight-*.sql) never matches it.
-if ! { mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"; }; then
+if [ ! -d "$BACKUP_DIR" ] && ! { mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"; }; then
   echo "restore: could not prepare $BACKUP_DIR for the private copy of the dump" >&2
   exit 1
 fi

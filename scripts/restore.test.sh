@@ -417,11 +417,25 @@ no_tmp_left() {
 # no claim that anything was committed, no migrate or start call, no leftover copy
 {
   run_restore FAKE_KILL_ON=psql -- --yes "$DUMP"
-  if [ "$rc" -eq 1 ] && ! grep -q "committed" <<< "$out_text" && ! grep -q ' run ' "$FAKE_DOCKER_LOG" \
+  if [ "$rc" -eq 1 ] && ! grep -q "committed" <<< "$out_text" && grep -q "check it before assuming it is unchanged" <<< "$out_text" \
+    && ! grep -q ' run ' "$FAKE_DOCKER_LOG" \
     && ! grep -q ' start app' "$FAKE_DOCKER_LOG" && no_tmp_left; then
     pass "(z) signal before the COMMIT -> exit 1, nothing reported as committed"
   else
     fail "(z) signal before COMMIT: rc=$rc out=$out_text"
+  fi
+}
+
+# (z4) an existing BACKUP_DIR keeps its mode (only a directory the script creates is
+# made 700), and the restore still succeeds with the copy taken there
+{
+  existing="$WORKDIR/existing-backups"; rm -rf "$existing"; mkdir -p "$existing"; chmod 755 "$existing"
+  run_restore BACKUP_DIR="$existing" -- --yes --no-pre-backup "$DUMP"
+  mode="$(stat -c '%a' "$existing" 2>/dev/null || stat -f '%Lp' "$existing")"
+  if [ "$rc" -eq 0 ] && [ "$mode" = 755 ] && [ -z "$(find "$existing" -maxdepth 1 -name 'restore-dump.*')" ]; then
+    pass "(z4) existing BACKUP_DIR keeps mode 755, copy removed"
+  else
+    fail "(z4) existing BACKUP_DIR: rc=$rc mode=$mode out=$out_text"
   fi
 }
 
