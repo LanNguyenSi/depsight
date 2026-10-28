@@ -31,7 +31,7 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
 
    CI also runs a Postgres-backed test that is skipped locally unless `DEPSIGHT_TEST_DATABASE_URL` is set, see [tests/README.md](tests/README.md).
 
-4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it).
+4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it). A rollback never reverts the schema, so keep the change additive or split it over two releases, see [docs/rollback.md](docs/rollback.md).
 5. Open the PR with a clear summary, motivation, and test plan.
 
 ## Dev Setup

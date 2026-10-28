@@ -288,7 +288,9 @@ relay rolls back after `post_update`, so the SQL has already committed).
 Releases before the key do not collapse repeated Dependabot alerts, so their CVE
 scans of repositories with repeated alerts fail with `P2002` until the next
 forward deploy. For an intentional downgrade, run
-`DROP INDEX "Advisory_scanId_ghsaId_packageName_key";` first.
+`DROP INDEX "Advisory_scanId_ghsaId_packageName_key";` first. The general rule
+(a rollback never reverts the schema), which schema changes survive one and a
+recovery runbook are in [Rollback and the database schema](rollback.md).
 
 ## CI Health (GitHub Actions sync)
 
