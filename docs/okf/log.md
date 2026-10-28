@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-28T05:25:17Z, `rescan-and-staleness.md` re-verified after `docs/configuration.md` gained a link to the new `docs/rollback.md`: the one claim that cites the file (`SCAN_INTERVAL_MINUTES` is documented there) is unchanged. Re-stamped.
 - 2026-10-27T20:25:31Z, `cve-channel-merge-and-scores.md`: the residual sentence names `npm install` inside the folder (it said `npm run`), one wording for the residual in the doc, `lib/cve/osv.ts` and `docs/features.md`; the budget comment in `lib/manifest-discovery.ts` no longer cites lockfile sizes. Seven citations into the two files re-pointed one line up to the same code after the shorter comments. Re-stamped.
 - 2026-10-27T20:25:31Z, `rescan-and-staleness.md`: seven citations into `lib/cve/osv.ts` and `lib/manifest-discovery.ts` re-pointed one line up to the same code after the shorter comments; the cited code is unchanged. Re-stamped.
 - 2026-10-27T20:25:31Z, `dependency-age-scanning.md`, `mcp-vs-web-api.md` and `policy-rule-evaluation.md` re-verified after comment and `docs/features.md` wording changes: their claims and citations are unaffected. Re-stamped.

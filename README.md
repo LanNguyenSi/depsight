@@ -55,6 +55,7 @@ Create an API token on the Settings page (or via `POST /api/tokens` from a signe
 | Doc | Description |
 |---|---|
 | [docs/configuration.md](docs/configuration.md) | Env vars, Make targets, GitHub OAuth, self-hosting, database backup and restore, how CI Health syncs GitHub Actions data |
+| [docs/rollback.md](docs/rollback.md) | What a relay rollback does not undo (the database schema), safe schema changes, recovery runbook |
 | [docs/api.md](docs/api.md) | REST API reference |
 | [docs/architecture.md](docs/architecture.md) | Architecture: Next.js App Router, Prisma, project layout |
 | [docs/features.md](docs/features.md) | Full feature list and known limitations |
