@@ -51,7 +51,8 @@
 #   0  restored (migrated, app started)
 #   1  dump invalid, the app could not be stopped (nothing changed), psql failed or
 #      the dump could not be read (nothing committed, database unchanged, app left
-#      stopped), or interrupted before the restore committed (nothing committed)
+#      stopped), or interrupted before psql confirmed the load (check the database:
+#      if only this script was stopped, psql may have committed)
 #   2  refused: no file, file missing, no --yes, compose file missing, db not running
 #   3  the pre-restore dump failed; nothing was changed (use --no-pre-backup to go on)
 #   4  the dump is restored, but the migrate step or the app start failed, or the
