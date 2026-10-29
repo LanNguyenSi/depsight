@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-29T12:37:47Z: `docs/configuration.md` guard paragraph (a null `DATABASE_URL` counts as unset). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
 - 2026-10-28T06:54:15Z: `docs/configuration.md` Restore paragraph and exit-code list (a signal before the confirmed load exits 1 with a hint to check the database). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
 - 2026-10-28T06:52:57Z: `docs/configuration.md` Restore paragraph (signal after COMMIT exits 4, private copy in `BACKUP_DIR`). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, which is unchanged; re-stamped.
 - 2026-10-28T05:25:17Z, `rescan-and-staleness.md` re-verified after `docs/configuration.md` gained a link to the new `docs/rollback.md`: the one claim that cites the file (`SCAN_INTERVAL_MINUTES` is documented there) is unchanged. Re-stamped.
