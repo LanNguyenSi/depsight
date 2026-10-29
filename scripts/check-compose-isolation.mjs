@@ -79,6 +79,14 @@ function resolveCompose(file, password = SENTINEL) {
   }
 }
 
+// The resolved DATABASE_URL of a service, or undefined when it sets none. A list-form
+// pass-through (`- DATABASE_URL` with the shell variable unset) resolves to null, which
+// sets no value: it counts as "sets no DATABASE_URL" and has no password to check.
+const databaseUrl = (service) => {
+  const value = service.environment?.DATABASE_URL;
+  return typeof value === 'string' ? value : undefined;
+};
+
 const networkNames = (cfg, service) =>
   Object.keys(service.networks ?? { default: null }).map((key) => cfg.networks?.[key]?.name ?? key);
 
@@ -229,7 +237,7 @@ function checkProd(file) {
   // it the app takes one from .env (env_file), which the password check below never sees.
   for (const name of file === HOSTED_FILE ? ['app', 'migrate'] : ['app']) {
     if (!cfg.services[name]) fail(file, `needs a ${name} service`);
-    else if (cfg.services[name].environment?.DATABASE_URL === undefined) {
+    else if (databaseUrl(cfg.services[name]) === undefined) {
       fail(file, `${name} sets no DATABASE_URL`);
     }
   }
@@ -241,7 +249,7 @@ function checkProd(file) {
     fail(file, 'db POSTGRES_PASSWORD does not come from ${POSTGRES_PASSWORD}');
   }
   for (const [name, service] of Object.entries(cfg.services)) {
-    const url = service.environment?.DATABASE_URL;
+    const url = databaseUrl(service);
     if (url !== undefined && !url.includes(`:${SENTINEL}@`)) {
       fail(file, `${name} DATABASE_URL does not come from \${POSTGRES_PASSWORD}`);
     }
@@ -258,7 +266,7 @@ for (const unset of [null, '']) {
     fail(HOSTED_FILE, `db password with POSTGRES_PASSWORD ${label} is not "${LIVE_PASSWORD}"`);
   }
   for (const [name, service] of Object.entries(cfg.services ?? {})) {
-    const url = service.environment?.DATABASE_URL;
+    const url = databaseUrl(service);
     if (url !== undefined && !url.includes(`:${LIVE_PASSWORD}@`)) {
       fail(
         HOSTED_FILE,
