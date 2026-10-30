@@ -28,10 +28,11 @@ const eslintConfig = defineConfig([
     // behaviour-neutral: client components that fetch their data on mount
     // (the loaders are also re-run from click handlers, so they cannot move
     // into a server component or a render-phase read) and DashboardClient,
-    // whose effect re-syncs server-provided `repos` into locally and
-    // optimistically edited state when the props change after a refresh.
-    // Only this one rule, only these files; every other react-hooks rule
-    // stays on for them.
+    // whose effects re-sync server-provided `repos` into locally and
+    // optimistically edited state when the props change after a refresh and
+    // return the repository list to page 1 when search or sort change.
+    // Only this one rule, only these files, and as a warning so new sites in
+    // these files stay visible; every other react-hooks rule stays on.
     files: [
       "app/dashboard/DashboardClient.tsx",
       "app/settings/SettingsClient.tsx",
@@ -39,7 +40,7 @@ const eslintConfig = defineConfig([
       "components/settings/PrWebhookSecrets.tsx",
     ],
     rules: {
-      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/set-state-in-effect": "warn",
     },
   },
   {
