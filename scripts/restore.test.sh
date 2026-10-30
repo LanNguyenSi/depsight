@@ -672,10 +672,27 @@ guard_accepted "(w6.12) a keyword-looking word after a carriage return that is n
 # refuses the dump instead of passing it; the same dump passes with the stub idle
 grep_stub_dir="$(mktemp -d "$WORKDIR/grepstub.XXXXXX")" || { echo "FAIL: could not create the grep stub directory"; exit 1; }
 real_grep="$(command -v grep)"
+# GREP_STUB_FAIL_MATCH: exit 2 when the arguments contain this text.
+# GREP_STUB_BINARY=1: behave like a grep that takes a file with a 0xff byte for binary when it
+# was not given -a (it answers "Binary file <f> matches" instead of the matching line).
 cat > "$grep_stub_dir/grep" <<EOF4
 #!/usr/bin/env bash
 if [ -n "\${GREP_STUB_FAIL_MATCH:-}" ]; then
   case "\$*" in *"\$GREP_STUB_FAIL_MATCH"*) exit 2 ;; esac
+fi
+if [ -n "\${GREP_STUB_BINARY:-}" ]; then
+  case " \$* " in
+    *" -a "*) ;;
+    *)
+      for last; do :; done
+      if [ -f "\$last" ] && LC_ALL=C "$real_grep" -a -q \$'\\377' "\$last"; then
+        st=0
+        "$real_grep" -a "\$@" > /dev/null || st=\$?
+        [ "\$st" -ne 0 ] || echo "Binary file \$last matches"
+        exit "\$st"
+      fi
+      ;;
+  esac
 fi
 exec "$real_grep" "\$@"
 EOF4
@@ -697,10 +714,25 @@ grep_stub_case() {
   fi
 }
 grep_stub_case "(w7.1) the transaction control grep failing (exit 2) refuses the dump" 'SELECT 1;' '-i -E' refused "transaction control"
-grep_stub_case "(w7.2) the backslash command grep failing (exit 2) refuses the dump" 'SELECT 1;' '-a -n -E' refused "backslash command"
-grep_stub_case "(w7.3) the backslash filter grep failing (exit 2) refuses a dump that has a \\restrict line" '\restrict Ab1Cd2Ef3' '-a -v -E' refused "backslash command"
-grep_stub_case "(w7.4) the filter grep is not run without a backslash line, so its failure does not matter (control)" 'SELECT 1;' '-a -v -E' accepted ""
+grep_stub_case "(w7.2) the backslash command grep failing (exit 2) refuses the dump" 'SELECT 1;' '-n -E' refused "backslash command"
+grep_stub_case "(w7.3) the backslash filter grep failing (exit 2) refuses a dump that has a \\restrict line" '\restrict Ab1Cd2Ef3' '-v -E' refused "backslash command"
+grep_stub_case "(w7.4) the filter grep is not run without a backslash line, so its failure does not matter (control)" 'SELECT 1;' '-v -E' accepted ""
 grep_stub_case "(w7.5) the stub with no failure configured lets the dump through (control)" '\restrict Ab1Cd2Ef3' '' accepted ""
+
+# a grep that takes a file with a high byte for binary unless given -a still yields the line
+# number: the checks pass -a
+grep_binary_case() {
+  guard_dump "$WORKDIR/guard.sql" "$2"
+  run_restore PATH="$grep_stub_dir:$FAKE_BIN:$PATH" GREP_STUB_BINARY=1 -- --yes "$WORKDIR/guard.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && no_tmp_left \
+    && grep -q -F -- "$3" <<< "$out_text" && grep -q -F -- "first at line 52," <<< "$out_text"; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+grep_binary_case "(w7.6) a COMMIT; line in a file with a high byte still names its line (grep given -a)" $'COMMIT;\xff' "$TX"
+grep_binary_case "(w7.7) a backslash line in a file with a high byte still names its line (grep given -a)" $'\\q \xff' "$BS"
 
 # (w8) a NUL byte anywhere refuses the dump before anything else is looked at, and the
 # message names the line (counted in line feeds)
