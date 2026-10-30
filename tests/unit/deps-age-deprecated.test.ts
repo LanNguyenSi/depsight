@@ -168,4 +168,8 @@ describe('classifyStatus: a strip whose first token is a full version compares b
       expect(classifyStatus(installed, latest, false)).toBe(want);
     });
   }
+
+  it('a prerelease first token before `||` with no spaces is split at the bar: OUTDATED', () => {
+    expect(classifyStatus('1.2.3-beta.1||2', '1.2.3', false)).toBe('OUTDATED');
+  });
 });
