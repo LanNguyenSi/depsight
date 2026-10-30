@@ -561,6 +561,7 @@ describe('the folders a root lockfile key claims', () => {
     expect(claimed('/')).toEqual([]);
     // the character bound counts from the first non-slash character
     const exact = 'a'.repeat(MAX_MEMBER_FOLDER_CHARS);
+    expect(claimed(`/${exact}`)).toEqual([exact]);
     expect(claimed(`/${exact}/b`)).toEqual([exact]);
     expect(claimed(`/${exact}b/c`)).toEqual([]);
   });
