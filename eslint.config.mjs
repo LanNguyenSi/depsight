@@ -1,16 +1,48 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
+import { defineConfig } from "eslint/config";
+import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
+import nextTypescript from "eslint-config-next/typescript";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
-
-const eslintConfig = [
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+const eslintConfig = defineConfig([
+  ...nextCoreWebVitals,
+  ...nextTypescript,
+  {
+    // eslint-config-next 16 lowers these two typescript-eslint rules from
+    // error (eslint-config-next 15) to warn. Keep the stricter base severity
+    // and the same options so a violation still fails the lint run.
+    rules: {
+      "@typescript-eslint/no-unused-vars": "error",
+      "@typescript-eslint/no-unused-expressions": [
+        "error",
+        {
+          allowShortCircuit: false,
+          allowTaggedTemplates: false,
+          allowTernary: false,
+        },
+      ],
+    },
+  },
+  {
+    // eslint-plugin-react-hooks 7 (React Compiler rule) flags effects that
+    // call a setter, directly or through a loader function. In these files
+    // that is the intended pattern, kept as is so the change stays
+    // behaviour-neutral: client components that fetch their data on mount
+    // (the loaders are also re-run from click handlers, so they cannot move
+    // into a server component or a render-phase read) and DashboardClient,
+    // whose effects re-sync server-provided `repos` into locally and
+    // optimistically edited state when the props change after a refresh and
+    // return the repository list to page 1 when search or sort change.
+    // Only this one rule, only these files, and as a warning so new sites in
+    // these files stay visible; every other react-hooks rule stays on.
+    files: [
+      "app/dashboard/DashboardClient.tsx",
+      "app/settings/SettingsClient.tsx",
+      "components/dashboard/CIHealthTab.tsx",
+      "components/settings/PrWebhookSecrets.tsx",
+    ],
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+    },
+  },
   {
     ignores: [
       ".next/**",
@@ -27,6 +59,6 @@ const eslintConfig = [
       "next-env.d.ts",
     ],
   },
-];
+]);
 
 export default eslintConfig;
