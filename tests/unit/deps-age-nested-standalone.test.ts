@@ -32,7 +32,13 @@ vi.mock('@/lib/github', async () => (await import('./helpers/npm-repo-fixture'))
 
 import { collectNpmReportVersions } from '@/lib/cve/osv';
 import { createGitHubClient } from '@/lib/github';
-import { resolveNarrowNpm, type NarrowNpmInputs } from '@/lib/manifest-discovery';
+import {
+  addClaimedFolders,
+  MAX_MEMBER_FOLDER_CHARS,
+  MAX_MEMBER_FOLDER_SEGMENTS,
+  resolveNarrowNpm,
+  type NarrowNpmInputs,
+} from '@/lib/manifest-discovery';
 import { installed, knows, NOW, report, type Registry } from './helpers/dep-age-report';
 import { loadRepo, pkg, type Scenario } from './helpers/npm-repo-fixture';
 
@@ -521,5 +527,105 @@ describe('the CVE channel of collectNpmReportVersions is unchanged', () => {
     expect(strict.map((row) => [row.name, row.raisedTo])).toEqual(
       expect.arrayContaining([['react', null], ['typescript', null], ['@types/node', null], ['hono', null]]),
     );
+  });
+});
+
+// ---- the report reading stays off the CVE path, and its cost is bounded ----------------------
+
+const claimed = (key: string) => {
+  const out = new Set<string>();
+  addClaimedFolders(key, out);
+  return [...out];
+};
+
+describe('the folders a root lockfile key claims', () => {
+  it('every prefix up to the first node_modules segment, lower-cased', () => {
+    expect(claimed('MCP/Tools/node_modules/hono')).toEqual(['mcp', 'mcp/tools']);
+    expect(claimed('backend')).toEqual(['backend']);
+    expect(claimed('node_modules/hono')).toEqual([]);
+    expect(claimed('NODE_MODULES/hono')).toEqual([]);
+  });
+
+  it('stops at an empty, dot or dot-dot segment: no longer prefix is a member folder', () => {
+    expect(claimed('a//b')).toEqual(['a']);
+    expect(claimed('a/./b')).toEqual(['a']);
+    expect(claimed('../shared')).toEqual([]);
+  });
+
+  it('a key of 100000 segments claims at most MAX_MEMBER_FOLDER_SEGMENTS short folders', () => {
+    const out = claimed(Array.from({ length: 100_000 }, () => 'ab').join('/'));
+    expect(out).toHaveLength(MAX_MEMBER_FOLDER_SEGMENTS);
+    expect(Math.max(...out.map((f) => f.length))).toBeLessThanOrEqual(MAX_MEMBER_FOLDER_CHARS);
+  });
+
+  it('the character bound: a folder of exactly MAX_MEMBER_FOLDER_CHARS is claimed, a longer first segment is not', () => {
+    const exact = 'a'.repeat(MAX_MEMBER_FOLDER_CHARS);
+    expect(claimed(exact)).toEqual([exact]);
+    expect(claimed(`${exact}/b`)).toEqual([exact]);
+    expect(claimed(`${exact}b/c`)).toEqual([]);
+    expect(claimed(`${exact}b`)).toEqual([]);
+  });
+
+  it('a long key claims the same short folders as its shortened form', () => {
+    const tail = Array.from({ length: 5000 }, () => 'x').join('/');
+    expect(claimed(`mcp/${tail}`).slice(0, 3)).toEqual(['mcp', 'mcp/x', 'mcp/x/x']);
+  });
+});
+
+describe('a root lockfile with one very long key next to a nested standalone project', () => {
+  const longKey = Array.from({ length: 100_000 }, () => 'ab').join('/');
+
+  it('the rule is unchanged: the nested project is read, within a time budget', async () => {
+    const s = deployPanel({ rootLockExtra: { [longKey]: {} } });
+    const started = Date.now();
+    const r = gate(s);
+    const raised = r.dropSafeForReport('react', '19.0.0');
+    const elapsed = Date.now() - started;
+    expect(raised).toBe(true);
+    expect(r.additionsForReport).toContainEqual({ name: 'hono', version: '4.13.13' });
+    expect(elapsed).toBeLessThan(5000);
+    expect(await rows(s)).toEqual(RAISED);
+  });
+
+  it('a long key below the nested folder still claims the folder', async () => {
+    const s = deployPanel({ rootLockExtra: { [`mcp/${longKey}`]: {} } });
+    expect(await rows(s)).toEqual(FLOORS);
+  });
+});
+
+describe('the report list is computed for the report only', () => {
+  it('without a strictly unknown manifest it is the CVE list itself', () => {
+    const s = deployPanel({ workspaces: MEMBER_PATTERNS });
+    s.files['package-lock.json'] = memberRootLock();
+    const r = gate(s);
+    expect(r.additionsForReport).toBe(r.additions);
+  });
+
+  it('with one it is a list of its own, computed once', () => {
+    const r = gate(deployPanel());
+    expect(r.additionsForReport).not.toBe(r.additions);
+    expect(r.additionsForReport).toBe(r.additionsForReport);
+  });
+
+  it('it is a getter: reading `additions` and the strict gate never builds it', () => {
+    const r = gate(deployPanel());
+    expect(typeof Object.getOwnPropertyDescriptor(r, 'additionsForReport')?.get).toBe('function');
+    expect(r.dropSafe('react', '19.0.0')).toBe(false);
+    expect(r.additions).toHaveLength(3);
+  });
+
+  it('a standalone repository without any workspaces key: the same list', () => {
+    const s: Scenario = {
+      files: {
+        'package.json': pkg({ name: 'p', devDependencies: { typescript: '^5.6.3' } }),
+        'package-lock.json': JSON.stringify({
+          lockfileVersion: 3,
+          packages: { '': { name: 'p', devDependencies: { typescript: '^5.6.3' } }, 'node_modules/typescript': { version: '5.9.3' } },
+        }),
+      },
+    };
+    const r = gate(s);
+    expect(r.additionsForReport).toBe(r.additions);
+    expect(r.additions).toEqual([{ name: 'typescript', version: '5.9.3' }]);
   });
 });
