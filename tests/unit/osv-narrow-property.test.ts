@@ -1025,6 +1025,7 @@ describe('dependency-age report row properties (seeded, generated repositories)'
       let raised = 0;
       let keptRow = 0;
       let forced = 0;
+      let uncheckedOverrideSole = 0;
       const soleBlocker = Object.fromEntries(ROW_BLINDERS.map((b) => [b, 0])) as Record<RowBlinder, number>;
       const failures: string[] = [];
 
@@ -1078,13 +1079,20 @@ describe('dependency-age report row properties (seeded, generated repositories)'
 
         // Each dimension alone can be what keeps the base row.
         if (head === base && !raiseOracle(model, base)) {
-          for (const b of ROW_BLINDERS) if (raisableBlinded(model, b, base)) soleBlocker[b]++;
+          for (const b of ROW_BLINDERS) {
+            if (!raisableBlinded(model, b, base)) continue;
+            soleBlocker[b]++;
+            // The blinded row oracle reads `overrides` as the report does: a case with an
+            // override of a kind the scan cannot check still counts as raisable.
+            if (model.manifests.some((m) => m.overrides !== undefined && m.overrides.kind !== 'string')) uncheckedOverrideSole++;
+          }
         }
       }
 
       expect(raised, 'raised rows').toBeGreaterThan(300);
       expect(keptRow, 'kept rows').toBeGreaterThan(1000);
       expect(forced, 'cases with a forcing dimension').toBeGreaterThan(1000);
+      expect(uncheckedOverrideSole, 'sole-blocker cases beside an unchecked override').toBeGreaterThan(20);
       for (const b of ROW_BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
       expect(failures.slice(0, 3).join('\n\n')).toBe('');
       expect(failures).toEqual([]);
