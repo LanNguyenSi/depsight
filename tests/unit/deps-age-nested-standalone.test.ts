@@ -30,17 +30,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/github', async () => (await import('./helpers/npm-repo-fixture')).githubMockModule());
 
-import { collectNpmReportVersions } from '@/lib/cve/osv';
+import { collectNpmReportVersions, fetchOsvAdvisories } from '@/lib/cve/osv';
 import { createGitHubClient } from '@/lib/github';
 import {
   addClaimedFolders,
   MAX_MEMBER_FOLDER_CHARS,
   MAX_MEMBER_FOLDER_SEGMENTS,
+  narrowReportCounters,
+  resetNarrowReportCounters,
   resolveNarrowNpm,
   type NarrowNpmInputs,
 } from '@/lib/manifest-discovery';
 import { installed, knows, NOW, report, type Registry } from './helpers/dep-age-report';
-import { loadRepo, pkg, type Scenario } from './helpers/npm-repo-fixture';
+import { loadRepo, pkg, runScan, type Scenario } from './helpers/npm-repo-fixture';
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -312,6 +314,11 @@ describe('a nested folder the report cannot read as standalone keeps every floor
     expect(await rows(s)).toEqual(FLOORS);
   });
 
+  it('the root lockfile names the folder with a leading slash', async () => {
+    const s = deployPanel({ rootLockExtra: { '/mcp/node_modules/hono': { version: '4.13.13' } } });
+    expect(await rows(s)).toEqual(FLOORS);
+  });
+
   it('the root lockfile has an entry for the folder spelled in another case', async () => {
     const s = deployPanel({ rootLockExtra: { 'MCP/node_modules/hono': { version: '4.13.13' } } });
     expect(await rows(s)).toEqual(FLOORS);
@@ -546,6 +553,18 @@ describe('the folders a root lockfile key claims', () => {
     expect(claimed('NODE_MODULES/hono')).toEqual([]);
   });
 
+  it('leading slashes are skipped: the folder is claimed as without them', () => {
+    expect(claimed('/mcp/node_modules/x')).toEqual(['mcp']);
+    expect(claimed('//Mcp/tools')).toEqual(['mcp', 'mcp/tools']);
+    expect(claimed(`${'/'.repeat(5000)}mcp`)).toEqual(['mcp']);
+    expect(claimed('////')).toEqual([]);
+    expect(claimed('/')).toEqual([]);
+    // the character bound counts from the first non-slash character
+    const exact = 'a'.repeat(MAX_MEMBER_FOLDER_CHARS);
+    expect(claimed(`/${exact}/b`)).toEqual([exact]);
+    expect(claimed(`/${exact}b/c`)).toEqual([]);
+  });
+
   it('stops at an empty, dot or dot-dot segment: no longer prefix is a member folder', () => {
     expect(claimed('a//b')).toEqual(['a']);
     expect(claimed('a/./b')).toEqual(['a']);
@@ -607,13 +626,6 @@ describe('the report list is computed for the report only', () => {
     expect(r.additionsForReport).toBe(r.additionsForReport);
   });
 
-  it('it is a getter: reading `additions` and the strict gate never builds it', () => {
-    const r = gate(deployPanel());
-    expect(typeof Object.getOwnPropertyDescriptor(r, 'additionsForReport')?.get).toBe('function');
-    expect(r.dropSafe('react', '19.0.0')).toBe(false);
-    expect(r.additions).toHaveLength(3);
-  });
-
   it('a standalone repository without any workspaces key: the same list', () => {
     const s: Scenario = {
       files: {
@@ -627,5 +639,67 @@ describe('the report list is computed for the report only', () => {
     const r = gate(s);
     expect(r.additionsForReport).toBe(r.additions);
     expect(r.additions).toEqual([{ name: 'typescript', version: '5.9.3' }]);
+  });
+});
+
+describe('the CVE path does no report work (counters)', () => {
+  beforeEach(() => resetNarrowReportCounters());
+  afterEach(() => resetNarrowReportCounters());
+  const idle = () => expect({ ...narrowReportCounters }).toEqual({ listBuilds: 0, claimWalks: 0 });
+  const FACTS = { foreignLockfilePaths: [], npmrcPaths: [], packageManagerConfigPaths: [], manifestsCapped: false } as never;
+
+  it('the strict reading of a repository with a strictly unknown manifest: additions and dropSafe', () => {
+    const r = gate(deployPanel());
+    expect(r.additions).toHaveLength(3);
+    expect(r.dropSafe('react', '19.0.0')).toBe(false);
+    idle();
+  });
+
+  it('collectNpmReportVersions without the report option', async () => {
+    loadRepo(deployPanel());
+    const paths = ['package.json', 'backend/package.json', 'frontend/package.json', 'mcp/package.json'];
+    await collectNpmReportVersions(
+      createGitHubClient('t'),
+      'o',
+      'r',
+      paths,
+      { npm: ['package-lock.json', 'mcp/package-lock.json'], yarn: [] },
+      FACTS,
+    );
+    idle();
+  });
+
+  it('the whole CVE scan (fetchOsvAdvisories) on the deploy-panel shape', async () => {
+    const { queries } = await runScan(fetchOsvAdvisories, deployPanel());
+    expect(queries.length).toBeGreaterThan(0);
+    idle();
+  });
+
+  it('the first read of the report list builds it once and walks the claims once', () => {
+    const r = gate(deployPanel());
+    idle();
+    expect(r.additionsForReport.length).toBeGreaterThan(r.additions.length);
+    expect(r.additionsForReport).toBe(r.additionsForReport);
+    expect({ ...narrowReportCounters }).toEqual({ listBuilds: 1, claimWalks: 1 });
+  });
+
+  it('the report gate walks the claims without building the list', () => {
+    const r = gate(deployPanel());
+    expect(r.dropSafeForReport('react', '19.0.0')).toBe(true);
+    expect({ ...narrowReportCounters }).toEqual({ listBuilds: 0, claimWalks: 1 });
+  });
+
+  it('the dependency-age report builds the list once', async () => {
+    expect(await rows(deployPanel())).toEqual(RAISED);
+    expect(narrowReportCounters.listBuilds).toBe(1);
+  });
+
+  it('without a strictly unknown manifest the list is built (an alias) but no claim is walked', () => {
+    const s = deployPanel({ workspaces: MEMBER_PATTERNS });
+    s.files['package-lock.json'] = memberRootLock();
+    const r = gate(s);
+    expect(r.additionsForReport).toBe(r.additions);
+    expect(r.dropSafeForReport('react', '19.0.0')).toBe(true);
+    expect({ ...narrowReportCounters }).toEqual({ listBuilds: 1, claimWalks: 0 });
   });
 });

@@ -1784,21 +1784,41 @@ function isMemberFolder(folder: string): boolean {
 }
 
 /**
+ * Test seam: how often the age report's reading did work. `listBuilds` counts
+ * the builds of a resolution's `additionsForReport`, `claimWalks` the walks over
+ * a root lockfile's keys (`claimedFoldersOf`). Both stay 0 for everything the CVE
+ * scan does. Tests reset them with `resetNarrowReportCounters`; nothing in the
+ * product reads them.
+ */
+export const narrowReportCounters = { listBuilds: 0, claimWalks: 0 };
+export function resetNarrowReportCounters(): void {
+  narrowReportCounters.listBuilds = 0;
+  narrowReportCounters.claimWalks = 0;
+}
+
+/**
  * Pure: add to `into` every folder a lockfile `packages` key names, as far as a
  * member folder can be: each `/`-prefix of the key, lower-cased (a
  * case-insensitive file system maps two spellings to one folder), up to its
- * first `node_modules` segment, an empty, `.` or `..` segment, or the bounds of
- * `isMemberFolder` (`MAX_MEMBER_FOLDER_SEGMENTS` segments,
+ * first `node_modules` segment, an empty (after the first), `.` or `..` segment,
+ * or the bounds of `isMemberFolder` (`MAX_MEMBER_FOLDER_SEGMENTS` segments,
  * `MAX_MEMBER_FOLDER_CHARS` characters). A longer prefix could never equal a
  * folder that passes `isMemberFolder`, so stopping there loses nothing, and the
  * work per key is bounded by those constants instead of the key's length (a key
  * of 100000 segments adds at most `MAX_MEMBER_FOLDER_SEGMENTS` short strings).
+ * Leading `/` characters are skipped, so `/mcp/node_modules/x` claims `mcp`
+ * like `mcp/node_modules/x` does (conservative: npm reads such a location as an
+ * absolute path outside the repository, but a lockfile that names the folder
+ * that way still says something about it).
  */
 export function addClaimedFolders(key: string, into: Set<string>): void {
-  const head = key.slice(0, MAX_MEMBER_FOLDER_CHARS + 1).toLowerCase();
+  let start = 0;
+  while (start < key.length && key.charCodeAt(start) === 47) start++;
+  const rest = start === 0 ? key : key.slice(start);
+  const head = rest.slice(0, MAX_MEMBER_FOLDER_CHARS + 1).toLowerCase();
   const segments = head.split('/');
   // Past the cut the last piece may be a part of a segment, not a whole one.
-  if (key.length > MAX_MEMBER_FOLDER_CHARS) segments.pop();
+  if (rest.length > MAX_MEMBER_FOLDER_CHARS) segments.pop();
   let prefix = '';
   for (let i = 0; i < segments.length && i < MAX_MEMBER_FOLDER_SEGMENTS; i++) {
     const segment = segments[i];
@@ -2407,6 +2427,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   const claimedFoldersOf = (root: NarrowManifest, lock: NarrowLockfile): Set<string> => {
     const cached = claimedByRoot.get(root.path);
     if (cached) return cached;
+    narrowReportCounters.claimWalks++;
     const claimed = new Set<string>();
     for (const key of Object.keys(lock.packages)) addClaimedFolders(key, claimed);
     claimedByRoot.set(root.path, claimed);
@@ -2624,6 +2645,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   let additionsForReport: Array<{ name: string; version: string }> | undefined;
   const reportAdditions = (): Array<{ name: string; version: string }> => {
     if (additionsForReport === undefined) {
+      narrowReportCounters.listBuilds++;
       additionsForReport = manifests.some((m) => governanceOf(m).kind === 'unknown') ? additionsFor(true) : additions;
     }
     return additionsForReport;
