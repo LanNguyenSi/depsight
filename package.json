@@ -30,7 +30,6 @@
     "spdx-satisfies": "^6.0.0"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4.1.0",
     "@types/bcrypt": "^5.0.2",
     "@types/node": "^20",
@@ -38,8 +37,8 @@
     "@types/react-dom": "^19",
     "@types/semver": "^7.7.1",
     "@vitest/coverage-v8": "^4.1.2",
-    "eslint": "^9",
-    "eslint-config-next": "15.2.4",
+    "eslint": "^10.14.0",
+    "eslint-config-next": "^16.4.3",
     "postcss": "^8.5.23",
     "prisma": "^6.2.0",
     "tailwindcss": "^4.1.0",

@@ -244,10 +244,6 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   }, [initialRepoId, initialRepos]);
 
   useEffect(() => {
-    setRepoPage(1);
-  }, [search, sortBy]);
-
-  useEffect(() => {
     selectedRepoIdRef.current = selectedRepoId;
   }, [selectedRepoId]);
 
@@ -856,7 +852,10 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setRepoPage(1);
+            }}
             placeholder={t['dashboard.search']}
             className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 transition-colors mb-2"
           />
@@ -870,7 +869,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             ] as const).map(([key, label]) => (
               <button
                 key={key}
-                onClick={() => setSortBy(key)}
+                onClick={() => {
+                  if (key !== sortBy) {
+                    setSortBy(key);
+                    setRepoPage(1);
+                  }
+                }}
                 className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
                   sortBy === key
                     ? 'bg-gray-800 text-gray-300'
