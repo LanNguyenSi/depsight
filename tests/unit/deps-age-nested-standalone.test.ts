@@ -261,6 +261,35 @@ describe('a nested folder the report cannot read as standalone keeps every floor
     expect(await rows(s)).toEqual(FLOORS);
   });
 
+  it('a root lockfile that records other workspaces: a name only the nested project declares keeps the floor', async () => {
+    // no member folder blocks here, so the unproven membership alone decides
+    const lock = (workspaces: string[]) =>
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          '': { name: 'deploy-panel', version: '1.0.0', workspaces, devDependencies: { typescript: '^5.6.3' } },
+          'node_modules/typescript': { version: '5.9.3' },
+        },
+      });
+    const s: Scenario = {
+      files: {
+        'package.json': pkg({ name: 'deploy-panel', version: '1.0.0', workspaces: WORKSPACES, devDependencies: { typescript: '^5.6.3' } }),
+        'package-lock.json': lock(['other/*']),
+        'mcp/package.json': pkg({ name: 'mcp', version: '1.0.0', dependencies: MCP_DEPS }),
+        'mcp/package-lock.json': mcpLock(),
+      },
+    };
+    expect((await rows(s)).hono).toBe('4.13.7');
+    // the same repository with the lockfile recording the patterns: the nested project is read
+    s.files['package-lock.json'] = lock(WORKSPACES);
+    expect((await rows(s)).hono).toBe('4.13.13');
+  });
+
+  it('a folder whose own spelling has capitals, against a root lockfile entry below it in lower case', async () => {
+    const s = deployPanel({ folder: 'Tools', rootLockExtra: { 'tools/node_modules/hono': { version: '4.13.13' } } });
+    expect(await rows(s)).toEqual(FLOORS);
+  });
+
   it('a root lockfile of version 1', async () => {
     const s = deployPanel();
     s.files['package-lock.json'] = JSON.stringify({ lockfileVersion: 1, dependencies: { react: { version: '19.2.6' } } });
@@ -297,6 +326,8 @@ describe('a nested folder the report cannot read as standalone keeps every floor
   it('two workspaces roots above the folder', async () => {
     const s = deployPanel({ folder: 'mcp/app' });
     s.files['mcp/package.json'] = pkg({ name: 'mcp-root', version: '1.0.0', workspaces: ['app'] });
+    // the inner root is locked itself (no declarations), so only the second workspaces key keeps the floors
+    s.files['mcp/package-lock.json'] = JSON.stringify({ lockfileVersion: 3, packages: { '': { name: 'mcp-root', workspaces: ['app'] } } });
     expect(await rows(s)).toEqual(FLOORS);
   });
 
