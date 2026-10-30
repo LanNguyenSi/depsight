@@ -736,7 +736,8 @@ function raisedNpmVersion(
     : narrow.dropSafe(name, proofFloor);
   if (!proven) return null;
   let lowest: string | null = null;
-  for (const addition of narrow.additions) {
+  // The age report's additions also hold the versions of nested standalone manifests.
+  for (const addition of options?.overridesDoNotBlock ? narrow.additionsForReport : narrow.additions) {
     if (addition.name !== name) continue;
     if (lowest === null || semver.lt(addition.version, lowest)) lowest = addition.version;
   }

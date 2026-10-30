@@ -1437,6 +1437,15 @@ export interface NarrowNpmInputs {
 export interface NarrowNpmResolution {
   /** Every narrow-resolved (name, version), deduped by (name, version). */
   additions: Array<{ name: string; version: string }>;
+  /**
+   * The dependency-age report's variant of `additions`: the same list, plus the
+   * versions of manifests the report reads as "nested standalone" (see
+   * `reportGovernanceOf`). Only the age row reads it; the CVE scan uses
+   * `additions`, which it leaves unchanged. A getter: computed on the first
+   * read, so a scan that never asks (the CVE scan) never pays for it, and the
+   * very same array as `additions` when no manifest is strictly unknown.
+   */
+  additionsForReport: Array<{ name: string; version: string }>;
   /** `narrowDropSafe`: may the baseline entry (name, baseVersion) be removed? */
   dropSafe: (name: string, baseVersion: string) => boolean;
   /**
@@ -1449,6 +1458,7 @@ export interface NarrowNpmResolution {
 
 const NO_NARROW_RESOLUTION: NarrowNpmResolution = {
   additions: [],
+  additionsForReport: [],
   dropSafe: () => false,
   dropSafeForReport: () => false,
 };
@@ -1771,6 +1781,51 @@ function isMemberFolder(folder: string): boolean {
     segments.length <= MAX_MEMBER_FOLDER_SEGMENTS &&
     segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..' && segment.toLowerCase() !== 'node_modules')
   );
+}
+
+/**
+ * Test seam: how often the age report's reading did work. `listBuilds` counts
+ * the builds of a resolution's `additionsForReport`, `claimWalks` the walks over
+ * a root lockfile's keys (`claimedFoldersOf`). Both stay 0 for everything the CVE
+ * scan does. Tests reset them with `resetNarrowReportCounters`; nothing in the
+ * product reads them.
+ */
+export const narrowReportCounters = { listBuilds: 0, claimWalks: 0 };
+export function resetNarrowReportCounters(): void {
+  narrowReportCounters.listBuilds = 0;
+  narrowReportCounters.claimWalks = 0;
+}
+
+/**
+ * Pure: add to `into` every folder a lockfile `packages` key names, as far as a
+ * member folder can be: each `/`-prefix of the key, lower-cased (a
+ * case-insensitive file system maps two spellings to one folder), up to its
+ * first `node_modules` segment, an empty (after the first), `.` or `..` segment,
+ * or the bounds of `isMemberFolder` (`MAX_MEMBER_FOLDER_SEGMENTS` segments,
+ * `MAX_MEMBER_FOLDER_CHARS` characters). A longer prefix could never equal a
+ * folder that passes `isMemberFolder`, so stopping there loses nothing, and the
+ * work per key is bounded by those constants instead of the key's length (a key
+ * of 100000 segments adds at most `MAX_MEMBER_FOLDER_SEGMENTS` short strings).
+ * Leading `/` characters are skipped, so `/mcp/node_modules/x` claims `mcp`
+ * like `mcp/node_modules/x` does (conservative: npm reads such a location as an
+ * absolute path outside the repository, but a lockfile that names the folder
+ * that way still says something about it).
+ */
+export function addClaimedFolders(key: string, into: Set<string>): void {
+  let start = 0;
+  while (start < key.length && key.charCodeAt(start) === 47) start++;
+  const rest = start === 0 ? key : key.slice(start);
+  const head = rest.slice(0, MAX_MEMBER_FOLDER_CHARS + 1).toLowerCase();
+  const segments = head.split('/');
+  // Past the cut the last piece may be a part of a segment, not a whole one.
+  if (rest.length > MAX_MEMBER_FOLDER_CHARS) segments.pop();
+  let prefix = '';
+  for (let i = 0; i < segments.length && i < MAX_MEMBER_FOLDER_SEGMENTS; i++) {
+    const segment = segments[i];
+    if (segment === '' || segment === '.' || segment === '..' || segment === 'node_modules') break;
+    prefix = i === 0 ? segment : `${prefix}/${segment}`;
+    into.add(prefix);
+  }
 }
 
 // ---- dependency specs: registry specs only ----------------------------------
@@ -2362,6 +2417,68 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     return governance;
   };
 
+  // The folders of a workspace root's lockfile that some entry key names
+  // (`addClaimedFolders`, bounded per key). A folder in this set is one the
+  // root's lockfile knows something about: a member, an install below it. (A
+  // link entry resolves to a proven member, which has an entry key of its own:
+  // `provenMembersOf` is null for any other link.) Built once per root, only
+  // when a nested standalone candidate asks.
+  const claimedByRoot = new Map<string, Set<string>>();
+  const claimedFoldersOf = (root: NarrowManifest, lock: NarrowLockfile): Set<string> => {
+    const cached = claimedByRoot.get(root.path);
+    if (cached) return cached;
+    narrowReportCounters.claimWalks++;
+    const claimed = new Set<string>();
+    for (const key of Object.keys(lock.packages)) addClaimedFolders(key, claimed);
+    claimedByRoot.set(root.path, claimed);
+    return claimed;
+  };
+
+  // The age report's reading of a manifest that `governanceOf` leaves unknown
+  // although it is below exactly one `workspaces` root: a nested standalone
+  // project. It counts as standalone, installed by its own lockfile, when the
+  // root's lockfile proves membership at all (`provenMembersOf`: a lockfile of
+  // version 2 or 3 that records the root's `workspaces` value, every link
+  // resolving to a proven member, registry specs only) and says nothing about
+  // the manifest's folder (no entry for it or below it, no link to it; the
+  // folder is not a member), and the manifest has an own lockfile that was read
+  // and parsed. The workspace patterns are never evaluated. `npm ci` installs
+  // such a folder from its own lockfile only when the patterns do not match it
+  // (measured with npm 10.9.2 and 11.21.1: root `npm ci` leaves it alone,
+  // `npm ci` inside it installs its own lockfile); when the patterns do match
+  // it while the root's lockfile lacks it, `npm ci` refuses at the root and
+  // inside the folder ("Missing: <name> from lock file", exit 1) and installs
+  // nothing, so a row from its own lockfile is never above what is installed.
+  // Anything else stays unknown. The strict reading (`governanceOf`) is not
+  // touched.
+  const reportGovernanceByPath = new Map<string, Governance>();
+  const reportGovernanceOf = (m: NarrowManifest): Governance => {
+    const strict = governanceOf(m);
+    if (strict.kind !== 'unknown') return strict;
+    const cached = reportGovernanceByPath.get(m.path);
+    if (cached) return cached;
+    let governance: Governance = UNKNOWN;
+    const roots = workspaceRootsAt(m.dir);
+    if (roots !== null && roots.length === 1 && roots[0] !== m) {
+      const root = roots[0];
+      const members = provenMembersOf(root);
+      const folder = folderBelow(root.dir, m.dir);
+      const rootLock = lockByPath.get(ownLockfilePath(root.dir));
+      const ownLock = lockByPath.get(ownLockfilePath(m.dir));
+      if (
+        members !== null &&
+        rootLock &&
+        ownLock &&
+        isMemberFolder(folder) &&
+        !claimedFoldersOf(root, rootLock).has(folder.toLowerCase())
+      ) {
+        governance = { kind: 'standalone' };
+      }
+    }
+    reportGovernanceByPath.set(m.path, governance);
+    return governance;
+  };
+
   // The lockfile that installs M: its own, or its workspace root's.
   const governingLock = (m: NarrowManifest, g: Governance): NarrowLockfile | null => {
     if (g.kind === 'unknown') return null;
@@ -2420,7 +2537,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // so the lockfile's version is not what the project installs then).
   // The CVE scan keeps the strict reading (`forReport` false).
   const manifestLocked = (m: NarrowManifest, forReport: boolean): boolean => {
-    const g = governanceOf(m);
+    const g = forReport ? reportGovernanceOf(m) : governanceOf(m);
     const lock = governingLock(m, g);
     if (!lock) return false;
     if (g.kind === 'member') {
@@ -2473,8 +2590,8 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // the root's lockfile proves the membership, and a member resolves the name
   // from the root's top-level entry (a copy under its own folder, or a folder
   // between, keeps the floor).
-  const narrowVersion = (m: NarrowManifest, decl: NarrowDeclaration): string | null => {
-    const g = governanceOf(m);
+  const narrowVersion = (m: NarrowManifest, decl: NarrowDeclaration, forReport = false): string | null => {
+    const g = forReport ? reportGovernanceOf(m) : governanceOf(m);
     if (decl.aliasForm) return null; // the lockfile key is the local alias, not the name
     const topKey = `${NODE_MODULES}${decl.key}`;
     if (g.kind !== 'standalone') {
@@ -2492,32 +2609,54 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     return satisfiesLikeNpm(version, range) ? version : null;
   };
 
-  const additions: Array<{ name: string; version: string }> = [];
-  const seenAddition = new Set<string>();
+  // The versions the narrow resolution adds as `forReport` reads how each
+  // manifest is installed (`reportGovernanceOf` for the age report, `governanceOf`
+  // for the CVE scan), in manifest order, deduped by (name, version).
+  const additionsFor = (forReport: boolean): Array<{ name: string; version: string }> => {
+    const out: Array<{ name: string; version: string }> = [];
+    const seen = new Set<string>();
+    for (const manifest of manifests) {
+      for (const decl of manifest.declarations) {
+        if (!noForeignLockfiles) continue;
+        if (!decl.addable) continue;
+        if (decl.realName !== decl.key || localNames.has(decl.key)) continue;
+        const version = narrowVersion(manifest, decl, forReport);
+        if (version === null) continue;
+        const id = `${decl.key}\u0000${version}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push({ name: decl.key, version });
+      }
+    }
+    return out;
+  };
   const declarers = new Map<string, Array<{ manifest: NarrowManifest; decl: NarrowDeclaration }>>();
   for (const manifest of manifests) {
     for (const decl of manifest.declarations) {
       const list = declarers.get(decl.realName) ?? [];
       list.push({ manifest, decl });
       declarers.set(decl.realName, list);
-      if (!noForeignLockfiles) continue;
-      if (!decl.addable) continue;
-      if (decl.realName !== decl.key || localNames.has(decl.key)) continue;
-      const version = narrowVersion(manifest, decl);
-      if (version === null) continue;
-      const id = `${decl.key}\u0000${version}`;
-      if (seenAddition.has(id)) continue;
-      seenAddition.add(id);
-      additions.push({ name: decl.key, version });
     }
   }
+  const additions = additionsFor(false);
+  // The age report's list, computed on the first read (the CVE scan never reads
+  // it). It differs from `additions` only through a manifest the strict reading
+  // leaves unknown; without one it is `additions` itself.
+  let additionsForReport: Array<{ name: string; version: string }> | undefined;
+  const reportAdditions = (): Array<{ name: string; version: string }> => {
+    if (additionsForReport === undefined) {
+      narrowReportCounters.listBuilds++;
+      additionsForReport = manifests.some((m) => governanceOf(m).kind === 'unknown') ? additionsFor(true) : additions;
+    }
+    return additionsForReport;
+  };
 
   // Every manifest declaring the name (in any dependency field) is narrow for it.
-  const declarersAllNarrow = (name: string): boolean => {
+  const declarersAllNarrow = (name: string, forReport: boolean): boolean => {
     if (localNames.has(name)) return false;
     const list = declarers.get(name) ?? [];
     if (list.length === 0) return false; // nothing declares it: nothing to prove narrow
-    return list.every(({ manifest, decl }) => narrowVersion(manifest, decl) !== null);
+    return list.every(({ manifest, decl }) => narrowVersion(manifest, decl, forReport) !== null);
   };
 
   // What the fetched lockfiles install, indexed once (lazily, on the first
@@ -2539,7 +2678,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
         noForeignLockfiles &&
         noInstallPolicyFiles &&
         everyManifestLocked(forReport) &&
-        declarersAllNarrow(name) &&
+        declarersAllNarrow(name, forReport) &&
         baseVersionInstalledNowhere(name, baseVersion)
       );
     } catch {
@@ -2547,7 +2686,14 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     }
   };
 
-  return { additions, dropSafe: makeDropSafe(false), dropSafeForReport: makeDropSafe(true) };
+  return {
+    additions,
+    get additionsForReport() {
+      return reportAdditions();
+    },
+    dropSafe: makeDropSafe(false),
+    dropSafeForReport: makeDropSafe(true),
+  };
 }
 
 async function resolveDefaultBranch(

@@ -588,18 +588,36 @@ const declaredOutside = (model: Model) =>
 const memberLockedForRow = (model: Model, f: Facts, i: number): boolean =>
   memberLocked({ ...model, members: model.members.map((m) => ({ ...m, overrides: false })) }, f, i);
 
-// `dropOracle` with the row's reading of member `overrides`.
+// `dropOracle` with the row's reading of member `overrides` and of the folder
+// below a member that the root lockfile does not know (`nonMember`: a project of
+// its own with a lockfile of its own, which no pattern of the model matches).
+// The row reads that folder as a nested standalone project, installed by its own
+// lockfile, when the root lockfile proves membership at all, else it is unknown
+// as for the drop rule. Its vite entry (7.3.7, in range of its `^7.0.0`) is a
+// narrow declaration, so it blocks nothing; and since the root declares vite in
+// every model, `rootNarrow` below already needs the membership proof, which is
+// the only condition left for the folder. (`npm ci` installs such a folder from
+// its own lockfile, or refuses when a pattern matches it while the root lockfile
+// lacks it: nothing is then installed.)
 function dropOracleForRow(model: Model, version: string): boolean {
   if (model.truncated || model.foreign || model.npmrc) return false;
   if (model.lock === 'v1' || model.lock === 'malformed' || model.lock === 'error') return false;
   const f = facts(model);
   if (!rootLocked(model, f)) return false;
   if (!model.members.every((_, i) => memberLockedForRow(model, f, i))) return false;
-  if (model.nonMember) return false;
   if (model.app && !appNarrow(model)) return false;
   if (!rootNarrow(model, f)) return false;
   if (!model.members.every((m, i) => !declaresVite(m) || memberNarrow(model, f, i))) return false;
   return !installedVite(model).has(version);
+}
+
+// `oracleAdditions` plus the nested standalone folder's version, which only the
+// row reads (the row's drop rule, which gates the raise, holds only with the membership proof).
+function oracleAdditionsForRow(model: Model): Set<string> {
+  const out = oracleAdditions(model);
+  if (model.truncated || model.foreign) return out;
+  if (model.nonMember) out.add('7.3.7');
+  return out;
 }
 
 function oracleRow(model: Model): string | null {
@@ -607,7 +625,7 @@ function oracleRow(model: Model): string | null {
   if (spec === null) return null;
   const floor = stripSpec(spec);
   if (declaredOutside(model) || !dropOracleForRow(model, floor)) return floor;
-  const adds = [...oracleAdditions(model)].sort(semver.compare);
+  const adds = [...oracleAdditionsForRow(model)].sort(semver.compare);
   if (adds.length === 0 || semver.lt(adds[0], floor)) return floor;
   return adds[0];
 }
@@ -634,6 +652,7 @@ describe('narrow override in workspaces: the dependency-age row (seeded, generat
       const rand = mulberry32(SEED);
       let raised = 0;
       let compared = 0;
+      let nestedRaised = 0;
       const failures: string[] = [];
       for (let i = 0; i < CASES; i++) {
         const model = generate(rand);
@@ -650,13 +669,17 @@ describe('narrow override in workspaces: the dependency-age row (seeded, generat
         const comparable = semver.valid(base) !== null && semver.valid(head) !== null;
         if (comparable ? semver.lt(head, base) : head !== base) fail(`W6 row ${head} is below the base row ${base}`);
         if (head !== want) fail(`W6 row ${head} != oracle row ${want}`);
-        if (head !== base) raised++;
+        if (head !== base) {
+          raised++;
+          if (model.nonMember) nestedRaised++;
+        }
       }
-      if (process.env.WS_PROP_DEBUG) console.log(JSON.stringify({ raised, compared }));
+      if (process.env.WS_PROP_DEBUG) console.log(JSON.stringify({ raised, compared, nestedRaised }));
       expect(failures.slice(0, 3).join('\n\n')).toBe('');
       expect(failures).toEqual([]);
       expect(compared).toBeGreaterThan(CASES / 2);
       expect(raised, 'raised rows').toBeGreaterThan(200);
+      expect(nestedRaised, 'raised rows beside a nested standalone folder').toBeGreaterThan(20);
     } finally {
       warn.mockRestore();
       vi.unstubAllGlobals();
