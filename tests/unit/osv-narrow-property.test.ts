@@ -932,9 +932,55 @@ function forcesBaseRow(model: Model): boolean {
   );
 }
 
+// The row's reading of `overrides` (the report's proof, not the drop rule's):
+// only a plain string override can be checked against the lockfile, so only it
+// can make a manifest not locked; an override of any other kind (`$` reference,
+// nested object, number, key with a version selector) never does, because
+// `npm ci` refuses a lockfile that does not reflect it.
+function overridesViolatedForRow(m: ModelManifest): boolean {
+  if (!m.overrides || m.overrides.kind !== 'string') return false;
+  return overridesViolated(m);
+}
+
+function manifestLockedForRow(m: ModelManifest): boolean {
+  if (!KNOWN_SHAPES.includes(m.lock)) return false;
+  if (plainRange(m.spec) && !inRange(m.lockVersion, m.spec)) return false;
+  if (m.ms && LOCKED_FIELDS.includes(m.ms.field) && !m.ms.peerOptional && m.ms.state !== 'listed') return false;
+  if (overridesViolatedForRow(m)) return false;
+  return true;
+}
+
+// `dropOracle` with the row's reading of `overrides`; every other condition is the same.
+function dropOracleForRow(model: Model, baseVersion: string): boolean {
+  if (model.truncated || model.capped || model.foreign.length > 0) return false;
+  if (model.npmrc.some((p) => !excludedDir(p))) return false;
+  if (model.pmConfig.some((p) => !excludedDir(p))) return false;
+  if (model.manifests.some((m) => m.packageManager || m.devEngines) || model.extra?.packageManager) return false;
+  if (model.root === 'error' || model.root === 'unparsable') return false;
+  if (!rootManifestInLayout(model) && model.root !== 'none') return false;
+  if (!model.manifests.every(manifestLockedForRow)) return false;
+  if (model.extra && !extraLocked(model.extra)) return false;
+  const index = installIndex(model);
+  if (index === null || index.unknownVite) return false;
+  if (!model.manifests.every((m) => narrowInModel(model, m))) return false;
+  if (model.extra && !extraNarrowInModel(model, model.extra)) return false;
+  return !index.versions.has(baseVersion);
+}
+
+// `droppableBlinded` for the row's drop rule.
+function droppableBlindedForRow(model: Model, what: Blinder, version: string): boolean {
+  if (what !== 'prerelease') return dropOracleForRow(blind(model, what), version);
+  ORACLE_INCLUDE_PRERELEASE = true;
+  try {
+    return dropOracleForRow(model, version);
+  } finally {
+    ORACLE_INCLUDE_PRERELEASE = false;
+  }
+}
+
 // May the row rise above `floor`: no declarer outside `dependencies` and
 // `devDependencies`, and the oracle proves every declarer.
-const raiseOracle = (model: Model, floor: string) => !extraDeclares(model) && dropOracle(model, floor);
+const raiseOracle = (model: Model, floor: string) => !extraDeclares(model) && dropOracleForRow(model, floor);
 
 function oracleReportRow(model: Model, baseRow: string): string {
   const spec = lowestPlainSpec(model);
@@ -952,8 +998,8 @@ function oracleReportRow(model: Model, baseRow: string): string {
 type RowBlinder = Blinder | 'extraDeclarer';
 const ROW_BLINDERS: RowBlinder[] = [...BLINDERS, 'extraDeclarer'];
 function raisableBlinded(model: Model, what: RowBlinder, floor: string): boolean {
-  if (what === 'extraDeclarer') return extraDeclares(model) && dropOracle(model, floor);
-  return !extraDeclares(model) && droppableBlinded(model, what, floor);
+  if (what === 'extraDeclarer') return extraDeclares(model) && dropOracleForRow(model, floor);
+  return !extraDeclares(model) && droppableBlindedForRow(model, what, floor);
 }
 
 describe('dependency-age report row properties (seeded, generated repositories)', () => {
@@ -1015,7 +1061,7 @@ describe('dependency-age report row properties (seeded, generated repositories)'
         if (head !== base) {
           raised++;
           if (extraDeclares(model)) fail(`R2 row raised to ${head} beside a ${model.extra!.field} declarer`);
-          if (!dropOracle(model, base)) fail(`R2 row raised to ${head} but the oracle does not prove every declarer`);
+          if (!dropOracleForRow(model, base)) fail(`R2 row raised to ${head} but the oracle does not prove every declarer`);
           const own = model.manifests.map((m) => m.lockVersion).sort(semver.compare)[0];
           if (head !== own) fail(`R2 row ${head} is not the lowest own-lockfile version ${own}`);
         } else keptRow++;

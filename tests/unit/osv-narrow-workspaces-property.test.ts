@@ -582,11 +582,31 @@ const declaredOutside = (model: Model) =>
   model.rootField === 'peerDependencies' ||
   model.members.some((m) => m.field === 'optionalDependencies' || m.field === 'peerDependencies' || m.field === 'bundleDependencies');
 
+// The row's reading of a member's `overrides`: npm applies the workspace root's
+// only, so a member's `overrides` never make it not locked (the drop rule's
+// `memberLocked` says the opposite). Nothing else about the member changes.
+const memberLockedForRow = (model: Model, f: Facts, i: number): boolean =>
+  memberLocked({ ...model, members: model.members.map((m) => ({ ...m, overrides: false })) }, f, i);
+
+// `dropOracle` with the row's reading of member `overrides`.
+function dropOracleForRow(model: Model, version: string): boolean {
+  if (model.truncated || model.foreign || model.npmrc) return false;
+  if (model.lock === 'v1' || model.lock === 'malformed' || model.lock === 'error') return false;
+  const f = facts(model);
+  if (!rootLocked(model, f)) return false;
+  if (!model.members.every((_, i) => memberLockedForRow(model, f, i))) return false;
+  if (model.nonMember) return false;
+  if (model.app && !appNarrow(model)) return false;
+  if (!rootNarrow(model, f)) return false;
+  if (!model.members.every((m, i) => !declaresVite(m) || memberNarrow(model, f, i))) return false;
+  return !installedVite(model).has(version);
+}
+
 function oracleRow(model: Model): string | null {
   const spec = lowestPlainSpec(model);
   if (spec === null) return null;
   const floor = stripSpec(spec);
-  if (declaredOutside(model) || !dropOracle(model, floor)) return floor;
+  if (declaredOutside(model) || !dropOracleForRow(model, floor)) return floor;
   const adds = [...oracleAdditions(model)].sort(semver.compare);
   if (adds.length === 0 || semver.lt(adds[0], floor)) return floor;
   return adds[0];
