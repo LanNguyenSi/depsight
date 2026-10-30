@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-30T16:12:55Z: `scripts/restore.sh` runs the transaction control check on the raw copy too; `docs/configuration.md` line-check paragraph gains one sentence. `rescan-and-staleness.md`: its only claim about `docs/configuration.md` (where `SCAN_INTERVAL_MINUTES` is documented) still holds; re-read, unchanged. Re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-10-30T16:02:56Z: restore line-check fix round (`scripts/restore.sh`: CR counts as a line break, `*/` anchor, grep errors refuse, NUL bytes refused; `docs/configuration.md` line-check paragraph rewritten). `rescan-and-staleness.md`: its only claim about `docs/configuration.md` (where `SCAN_INTERVAL_MINUTES` is documented) still holds; re-read, unchanged. Re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-10-30T15:27:30Z: `scripts/restore.sh` line check widened (transaction-control forms, backslash lines, COMMIT kept on its own line); `docs/configuration.md` gains the restore line-check paragraph. `rescan-and-staleness.md`: its only claim about `docs/configuration.md` (where `SCAN_INTERVAL_MINUTES` is documented) still holds; re-read, unchanged. Re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-10-29T12:37:47Z: `docs/configuration.md` guard paragraph (a null `DATABASE_URL` counts as unset). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
