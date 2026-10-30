@@ -16,9 +16,11 @@
  * refuses it nothing is installed from it. Measured with bounded runs against
  * the live registry (npm 10.9.2 and 11.21.1): in a standalone project a stale
  * plain or nested override makes `npm ci` exit 1 ("Invalid: lock file's ms@2.1.2
- * does not satisfy ms@2.1.3"); in a workspace a stale root override (plain or
- * nested) is not enforced against the lockfile and `npm ci` installs the
- * lockfile's ms 2.1.2; a member's `overrides` are ignored. An `npm install`
+ * does not satisfy ms@2.1.3"); in a workspace a stale root override of a
+ * TRANSITIVE dependency is not enforced against the lockfile and `npm ci`
+ * installs the lockfile's ms 2.1.2, while a root override of a workspace
+ * member's DIRECT dependency is accepted by 10.9.2 but refused by 11.21.1
+ * (`npm ci` exit 1); a member's own `overrides` are ignored by both. An `npm install`
  * would re-resolve to a stale plain override, hence the floor for that case.
  *
  * End to end through `analyzeDepAge` (GitHub client and registry `fetch`

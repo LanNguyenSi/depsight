@@ -48,9 +48,8 @@ export interface DepAgeScanResult {
 
 interface NpmPackageData {
   version?: string;
-  versions?: Record<string, unknown>;
+  versions?: Record<string, { deprecated?: string }>;
   time?: Record<string, string>;
-  deprecated?: string;
   'dist-tags'?: {
     latest?: string;
   };
@@ -90,11 +89,27 @@ const PARTIAL_VERSION = /^\d+(\.(\d+|x|X|\*)){0,2}(?=\s|\||$)/;
 
 // A version string as a SemVer: a full version as it is (a prerelease keeps its
 // tag, so 7.3.5-beta.2 sorts below 7.3.5), else the first x.y.z of a partial
-// numeric strip (`8` gives 8.0.0, `7.3.5 <8` gives 7.3.5), else null: a string
-// that is no version has no status.
+// numeric strip (`8` gives 8.0.0, `7.3.5 <8` gives 7.3.5), else the first token
+// when that alone is a full version, which covers a prerelease floor strip
+// (`1.0.0-beta.1 <2` gives 1.0.0-beta.1), else null: a string that is no
+// version has no status.
 function toSemver(v: string): semver.SemVer | null {
   const text = v.trim();
-  return semver.parse(text) ?? (PARTIAL_VERSION.test(text) ? semver.coerce(text) : null);
+  const full = semver.parse(text);
+  if (full) return full;
+  if (PARTIAL_VERSION.test(text)) return semver.coerce(text);
+  const firstToken = text.split(/[\s|]+/)[0];
+  return firstToken ? semver.parse(firstToken) : null;
+}
+
+// The npm registry marks a package version deprecated with a message at
+// `versions["<version>"].deprecated` (there is no top-level `deprecated` on a
+// packument). Deprecated means: a non-empty string there for the row's exact
+// version. An empty message, a missing key, or a row version that is not a key
+// of `versions` is not deprecated.
+function isDeprecatedVersion(data: NpmPackageData, version: string): boolean {
+  const message = data.versions?.[version]?.deprecated;
+  return typeof message === 'string' && message.length > 0;
 }
 
 export function classifyStatus(
@@ -184,12 +199,12 @@ export async function analyzeDepAge(
 
           const data = await resp.json() as NpmPackageData;
           const latestVersion = pickLatestVersion(data);
-          const isDeprecated = Boolean(data.deprecated);
 
           // Get publish date for the installed version: the version the
           // lockfiles prove when the row is raised, else the manifest floor
           // (leading range operator stripped).
           const cleanInstalled = reportedVersion(versionSpec, reportVersions.get(name));
+          const isDeprecated = isDeprecatedVersion(data, cleanInstalled);
           const installedPublishedAt = data.time?.[cleanInstalled]
             ? new Date(data.time[cleanInstalled])
             : null;

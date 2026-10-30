@@ -2408,8 +2408,11 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // (npm applies the workspace root's only), and a root or standalone manifest's
   // `overrides` of any shape are accepted. The row is the top-level lockfile
   // entry of a declared dependency: when `npm ci` accepts the lockfile it
-  // installs exactly those entries (npm 10 and 11 do not enforce a workspace
-  // root's `overrides` against the lockfile, and ignore a member's), and when
+  // installs exactly those entries (measured with npm 10.9.2 and 11.21.1: a
+  // workspace root's `overrides` of transitive dependencies are not enforced
+  // against the lockfile (npm ci exits 0 and installs it); a root override of a
+  // member's DIRECT dependency is accepted by 10.9.2 but refused by 11.21.1
+  // (npm ci exits 1); a member's own `overrides` are ignored by both), and when
   // it refuses the lockfile nothing is installed from it, so the row is never
   // above what `npm ci` installs. What the scan can still see stays checked, as
   // a conservative choice: a plain string override that the lockfile does not
