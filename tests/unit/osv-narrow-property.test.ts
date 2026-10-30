@@ -932,9 +932,56 @@ function forcesBaseRow(model: Model): boolean {
   );
 }
 
+// The row's reading of `overrides` (the report's proof, not the drop rule's):
+// only a plain string override can be checked against the lockfile, so only it
+// can make a manifest not locked; an override of any other kind (`$` reference,
+// nested object, number, key with a version selector) never does: the scan
+// cannot evaluate it, and the row is only the lockfile's top-level entry, which
+// is never above what `npm ci` installs.
+function overridesViolatedForRow(m: ModelManifest): boolean {
+  if (!m.overrides || m.overrides.kind !== 'string') return false;
+  return overridesViolated(m);
+}
+
+function manifestLockedForRow(m: ModelManifest): boolean {
+  if (!KNOWN_SHAPES.includes(m.lock)) return false;
+  if (plainRange(m.spec) && !inRange(m.lockVersion, m.spec)) return false;
+  if (m.ms && LOCKED_FIELDS.includes(m.ms.field) && !m.ms.peerOptional && m.ms.state !== 'listed') return false;
+  if (overridesViolatedForRow(m)) return false;
+  return true;
+}
+
+// `dropOracle` with the row's reading of `overrides`; every other condition is the same.
+function dropOracleForRow(model: Model, baseVersion: string): boolean {
+  if (model.truncated || model.capped || model.foreign.length > 0) return false;
+  if (model.npmrc.some((p) => !excludedDir(p))) return false;
+  if (model.pmConfig.some((p) => !excludedDir(p))) return false;
+  if (model.manifests.some((m) => m.packageManager || m.devEngines) || model.extra?.packageManager) return false;
+  if (model.root === 'error' || model.root === 'unparsable') return false;
+  if (!rootManifestInLayout(model) && model.root !== 'none') return false;
+  if (!model.manifests.every(manifestLockedForRow)) return false;
+  if (model.extra && !extraLocked(model.extra)) return false;
+  const index = installIndex(model);
+  if (index === null || index.unknownVite) return false;
+  if (!model.manifests.every((m) => narrowInModel(model, m))) return false;
+  if (model.extra && !extraNarrowInModel(model, model.extra)) return false;
+  return !index.versions.has(baseVersion);
+}
+
+// `droppableBlinded` for the row's drop rule.
+function droppableBlindedForRow(model: Model, what: Blinder, version: string): boolean {
+  if (what !== 'prerelease') return dropOracleForRow(blind(model, what), version);
+  ORACLE_INCLUDE_PRERELEASE = true;
+  try {
+    return dropOracleForRow(model, version);
+  } finally {
+    ORACLE_INCLUDE_PRERELEASE = false;
+  }
+}
+
 // May the row rise above `floor`: no declarer outside `dependencies` and
 // `devDependencies`, and the oracle proves every declarer.
-const raiseOracle = (model: Model, floor: string) => !extraDeclares(model) && dropOracle(model, floor);
+const raiseOracle = (model: Model, floor: string) => !extraDeclares(model) && dropOracleForRow(model, floor);
 
 function oracleReportRow(model: Model, baseRow: string): string {
   const spec = lowestPlainSpec(model);
@@ -952,8 +999,8 @@ function oracleReportRow(model: Model, baseRow: string): string {
 type RowBlinder = Blinder | 'extraDeclarer';
 const ROW_BLINDERS: RowBlinder[] = [...BLINDERS, 'extraDeclarer'];
 function raisableBlinded(model: Model, what: RowBlinder, floor: string): boolean {
-  if (what === 'extraDeclarer') return extraDeclares(model) && dropOracle(model, floor);
-  return !extraDeclares(model) && droppableBlinded(model, what, floor);
+  if (what === 'extraDeclarer') return extraDeclares(model) && dropOracleForRow(model, floor);
+  return !extraDeclares(model) && droppableBlindedForRow(model, what, floor);
 }
 
 describe('dependency-age report row properties (seeded, generated repositories)', () => {
@@ -979,6 +1026,7 @@ describe('dependency-age report row properties (seeded, generated repositories)'
       let raised = 0;
       let keptRow = 0;
       let forced = 0;
+      let uncheckedOverrideSole = 0;
       const soleBlocker = Object.fromEntries(ROW_BLINDERS.map((b) => [b, 0])) as Record<RowBlinder, number>;
       const failures: string[] = [];
 
@@ -1015,7 +1063,7 @@ describe('dependency-age report row properties (seeded, generated repositories)'
         if (head !== base) {
           raised++;
           if (extraDeclares(model)) fail(`R2 row raised to ${head} beside a ${model.extra!.field} declarer`);
-          if (!dropOracle(model, base)) fail(`R2 row raised to ${head} but the oracle does not prove every declarer`);
+          if (!dropOracleForRow(model, base)) fail(`R2 row raised to ${head} but the oracle does not prove every declarer`);
           const own = model.manifests.map((m) => m.lockVersion).sort(semver.compare)[0];
           if (head !== own) fail(`R2 row ${head} is not the lowest own-lockfile version ${own}`);
         } else keptRow++;
@@ -1032,13 +1080,20 @@ describe('dependency-age report row properties (seeded, generated repositories)'
 
         // Each dimension alone can be what keeps the base row.
         if (head === base && !raiseOracle(model, base)) {
-          for (const b of ROW_BLINDERS) if (raisableBlinded(model, b, base)) soleBlocker[b]++;
+          for (const b of ROW_BLINDERS) {
+            if (!raisableBlinded(model, b, base)) continue;
+            soleBlocker[b]++;
+            // The blinded row oracle reads `overrides` as the report does: a case with an
+            // override of a kind the scan cannot check still counts as raisable.
+            if (model.manifests.some((m) => m.overrides !== undefined && m.overrides.kind !== 'string')) uncheckedOverrideSole++;
+          }
         }
       }
 
       expect(raised, 'raised rows').toBeGreaterThan(300);
       expect(keptRow, 'kept rows').toBeGreaterThan(1000);
       expect(forced, 'cases with a forcing dimension').toBeGreaterThan(1000);
+      expect(uncheckedOverrideSole, 'sole-blocker cases beside an unchecked override').toBeGreaterThan(20);
       for (const b of ROW_BLINDERS) expect(soleBlocker[b], `dimension ${b} is never the sole blocker`).toBeGreaterThan(20);
       expect(failures.slice(0, 3).join('\n\n')).toBe('');
       expect(failures).toEqual([]);

@@ -626,6 +626,16 @@ export interface NpmReportVersion {
   raisedTo: string | null;
 }
 
+/** How `collectNpmReportVersions` reads the narrow proof. */
+export interface NpmReportOptions {
+  /**
+   * Use the age report's reading of the proof (`dropSafeForReport`), for which a
+   * manifest's `overrides` do not count as not locked, instead of the CVE scan's
+   * (`dropSafe`), which they block. Unset: the CVE scan's reading.
+   */
+  overridesDoNotBlock?: boolean;
+}
+
 /**
  * Per npm package name the dependency-age report would list (one row per name,
  * as `unionNpmDeps` dedupes), the row it shows: today's floor strip, raised to
@@ -634,7 +644,10 @@ export interface NpmReportVersion {
  * `devDependencies` and that scan's proof holds for the name's manifest floor
  * (`narrow.dropSafe`: every manifest declaring the name is individually proven
  * by the lockfile that installs it, its own or for a workspace member the
- * root's, and no lockfile installs the floor). In every other case
+ * root's, and no lockfile installs the floor). With
+ * `options.overridesDoNotBlock` the report asks `narrow.dropSafeForReport`
+ * instead, the same proof except that `overrides` do not block it (a plain
+ * string override that the lockfile does not honour still does). In every other case
  * (a declaration outside those two fields, no proof, no addition, a floor that
  * is not a usable version, a lowest addition below the floor) `raisedTo` is
  * null and the row stays the floor strip, so the row is never lower than the
@@ -658,6 +671,7 @@ export async function collectNpmReportVersions(
   observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
   observedTreeFacts?: ObservedTreeFacts | null,
   prefetched?: PrefetchedNpmManifests,
+  options?: NpmReportOptions,
 ): Promise<NpmReportVersion[]> {
   const { manifests, narrow } = await collectNpmEntries(
     octokit,
@@ -671,7 +685,7 @@ export async function collectNpmReportVersions(
   return unionNpmDeps(manifests).map(({ name, versionSpec }) => ({
     name,
     strip: versionSpec.replace(/^[^0-9]*/, ''),
-    raisedTo: raisedNpmVersion(name, versionSpec, narrow, manifests),
+    raisedTo: raisedNpmVersion(name, versionSpec, narrow, manifests, options),
   }));
 }
 
@@ -710,11 +724,17 @@ function raisedNpmVersion(
   versionSpec: string,
   narrow: NarrowNpmResolution,
   manifests: ParsedNpmManifest[],
+  options?: NpmReportOptions,
 ): string | null {
   const proofFloor = manifestFloor(versionSpec);
   if (proofFloor === null) return null;
   if (declaredOutsideDeps(manifests, name)) return null;
-  if (!narrow.dropSafe(name, proofFloor)) return null;
+  // Default: the CVE scan's proof (`dropSafe`), which `overrides` block. The
+  // age report asks for its own reading (`dropSafeForReport`), which they do not.
+  const proven = options?.overridesDoNotBlock
+    ? narrow.dropSafeForReport(name, proofFloor)
+    : narrow.dropSafe(name, proofFloor);
+  if (!proven) return null;
   let lowest: string | null = null;
   for (const addition of narrow.additions) {
     if (addition.name !== name) continue;
