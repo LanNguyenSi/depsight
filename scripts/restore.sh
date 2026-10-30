@@ -13,8 +13,8 @@
 #
 # What it does, in order:
 #   1. checks the file argument, copies the dump into a private temporary file inside
-#      BACKUP_DIR and checks THAT copy (size, "dump complete" marker, no transaction
-#      control statements); everything below uses the copy, so a file that is rotated
+#      BACKUP_DIR and checks THAT copy (size, "dump complete" marker, and a line check that
+#      refuses transaction control and psql meta-command lines, see below); everything below uses the copy, so a file that is rotated
 #      away, truncated or replaced meanwhile cannot change what is loaded,
 #   2. checks that the db service is running,
 #   3. stops the app service when it is running (the app holds connections that
@@ -160,10 +160,50 @@ if ! grep -qx -- '-- PostgreSQL database dump complete' "$tmp"; then
   exit 1
 fi
 # The restore runs inside the transaction opened here; a COMMIT or similar line in the
-# dump would end it early and make the later error handling a lie. Plain pg_dump output
-# has none at the start of a line.
-if grep -q -i -E '^(BEGIN|START TRANSACTION|COMMIT|END|ROLLBACK|ABORT)[[:space:]]*;' "$tmp"; then
-  echo "restore: $file contains transaction control statements; refusing to load it" >&2
+# dump would end it early and make the later error handling a lie, and a psql
+# meta-command (\connect, \q) would leave or cut the session. This is a line check
+# (grep), not a SQL parser: it refuses what it recognises and fails closed on text it
+# cannot tell from a statement (a string, a comment or COPY data that has the same shape
+# is refused too). Plain pg_dump output has no such line, with one known exception: the
+# END; that closes a plpgsql function body is refused (END IF; and END LOOP; are not).
+# Refused (case-insensitive), at the start of a line after optional white space or right
+# after a ';' on the same line:
+#   - BEGIN, START TRANSACTION, COMMIT, END, ROLLBACK, ABORT, each followed by zero or
+#     more of the words WORK, TRANSACTION, AND, NO, CHAIN, ISOLATION, LEVEL,
+#     SERIALIZABLE, REPEATABLE, READ, COMMITTED, UNCOMMITTED, WRITE, ONLY, NOT,
+#     DEFERRABLE and then a ';'. A bare BEGIN line is not refused (every plpgsql body has
+#     one), SAVEPOINT and RELEASE are not either;
+#   - START TRANSACTION, COMMIT, ROLLBACK, ABORT (not BEGIN, not END) with those words and
+#     the end of the line, a "--" comment, or nothing else, because the ';' may be on the
+#     next line;
+#   - COMMIT PREPARED, ROLLBACK PREPARED, PREPARE TRANSACTION, whatever follows.
+# Not covered: a statement split over lines other than as above, a keyword behind a block
+# comment, a psql meta-command that does not start the line.
+tx_words='(WORK|TRANSACTION|AND|NO|CHAIN|ISOLATION|LEVEL|SERIALIZABLE|REPEATABLE|READ|COMMITTED|UNCOMMITTED|WRITE|ONLY|NOT|DEFERRABLE)'
+tx_opt="([[:space:],]+${tx_words})*"
+tx_re='(^|;)[[:space:]]*('
+tx_re+="(BEGIN|START[[:space:]]+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)${tx_opt}[[:space:]]*;"
+tx_re+='|(COMMIT|ROLLBACK)[[:space:]]+PREPARED|PREPARE[[:space:]]+TRANSACTION'
+tx_re+="|(START[[:space:]]+TRANSACTION|COMMIT|ROLLBACK|ABORT)${tx_opt}[[:space:]]*(--.*)?\$"
+tx_re+=')'
+# -a: a NUL byte or invalid UTF-8 must not turn the output into "Binary file matches".
+tx_hit="$(LC_ALL=C grep -a -n -m 1 -i -E -- "$tx_re" "$tmp" || true)"
+if [ -n "$tx_hit" ]; then
+  echo "restore: $file contains transaction control statements (first at line ${tx_hit%%:*}); refusing to load it" >&2
+  exit 1
+fi
+# A line that starts with a backslash (after optional white space) is a psql
+# meta-command (\c, \connect, \q, \i, \!, \gexec, \set ...) unless it is one of the
+# lines of a plain pg_dump file: \restrict <key> and \unrestrict <key> (pg_dump 16.10+,
+# the whole line at column 0), and the COPY data forms \. (end of data, the whole line)
+# and \N (a row that starts with a NULL) at column 0. Everything else is refused, an
+# indented one too, and so is a COPY row whose first value starts with a backslash (an
+# escaped one, \\, included: psql reads a second backslash on the line as a command).
+meta_ok='^[0-9]+:(\\(un)?restrict [A-Za-z0-9]+|\\\.|\\N.*)$'
+meta_hit="$({ LC_ALL=C grep -a -n -E -- '^[[:space:]]*[\]' "$tmp" || true; } \
+  | { LC_ALL=C grep -a -v -E -- "$meta_ok" || true; } | head -n 1 || true)"
+if [ -n "$meta_hit" ]; then
+  echo "restore: $file contains a psql backslash command (first at line ${meta_hit%%:*}); refusing to load it" >&2
   exit 1
 fi
 
@@ -198,10 +238,16 @@ if [ "$pre_backup" -eq 1 ]; then
 fi
 
 echo "restore: restoring $file into database '$PG_DB'"
+# The appended COMMIT must start a line: a dump whose last byte is not a newline could end
+# in a "--" comment (or a \unrestrict line), which would swallow the COMMIT, and psql would
+# end the session without a commit: a rollback that reports success. A dump that ends in
+# a newline gets nothing added.
+commit_prefix=""
+[ -z "$(tail -c 1 "$tmp")" ] || commit_prefix=$'\n'
 # COMMIT is sent only when the whole copy was read: if cat fails, psql sees end of
 # input inside the open transaction and rolls it back (pipefail turns the failure of
 # the left side into the failure of the pipeline).
-if ! { printf 'BEGIN;\n%s\n' "$RESET_SQL"; cat "$tmp" && printf 'COMMIT;\n'; } \
+if ! { printf 'BEGIN;\n%s\n' "$RESET_SQL"; cat "$tmp" && printf '%sCOMMIT;\n' "$commit_prefix"; } \
   | "${DC[@]}" exec -T "$DB_SERVICE" psql -v ON_ERROR_STOP=1 -q \
     -U "$PG_USER" -d "$PG_DB" > /dev/null; then
   echo "restore: psql failed or the dump could not be read; nothing was committed, the database is unchanged" >&2

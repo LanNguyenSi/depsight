@@ -392,6 +392,257 @@ no_tmp_left() {
   if [ -z "${bad_w:-}" ]; then pass "(w) transaction control statement in the dump -> exit 1 before touching anything"; else fail "(w) txn statement not refused: $bad_w"; fi
 }
 
+# Guard cases. guard_dump puts the lines of $2 before the completion marker of the good
+# dump; guard_refused / guard_accepted run restore.sh on it. A refusal is exit 1 with the
+# given message part, no docker call at all (database and app untouched) and no leftover
+# copy; an accepted dump reaches psql with its first guard line intact and ends in COMMIT.
+guard_dump() {
+  { sed '/^-- PostgreSQL database dump complete/,$d' "$DUMP"; printf '%s\n' "$2"; printf -- '-- PostgreSQL database dump complete\n'; } > "$1"
+}
+guard_refused() {
+  guard_dump "$WORKDIR/guard.sql" "$2"
+  run_restore -- --yes "$WORKDIR/guard.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && grep -q -F -- "$3" <<< "$out_text" && no_tmp_left; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+guard_accepted() {
+  guard_dump "$WORKDIR/guard.sql" "$2"
+  run_restore -- --yes --no-pre-backup "$WORKDIR/guard.sql"
+  if [ "$rc" -eq 0 ] && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] \
+    && sed -n '7,$p' "$FAKE_PSQL_STDIN" | sed '$d' | cmp -s - "$WORKDIR/guard.sql" && no_tmp_left; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+TX="transaction control statements"
+BS="psql backslash command"
+NL=$'\n'
+TAB=$'\t'
+
+# (w2) one case per refused transaction form: each keyword, with and without its optional words
+guard_refused "(w2.1) BEGIN; is refused" 'BEGIN;' "$TX"
+guard_refused "(w2.2) BEGIN WORK; is refused" 'begin work;' "$TX"
+guard_refused "(w2.3) BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE; is refused" 'BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;' "$TX"
+guard_refused "(w2.4) START TRANSACTION READ ONLY; is refused" 'START TRANSACTION READ ONLY;' "$TX"
+guard_refused "(w2.5) START TRANSACTION with several modes, extra white space, is refused" 'start   transaction isolation level repeatable read, read write, not deferrable;' "$TX"
+guard_refused "(w2.5b) BEGIN ISOLATION LEVEL READ COMMITTED; is refused" 'BEGIN ISOLATION LEVEL READ COMMITTED;' "$TX"
+guard_refused "(w2.5c) BEGIN ISOLATION LEVEL READ UNCOMMITTED; is refused" 'BEGIN ISOLATION LEVEL READ UNCOMMITTED;' "$TX"
+guard_refused "(w2.6) COMMIT WORK; is refused" 'COMMIT WORK;' "$TX"
+guard_refused "(w2.7) COMMIT AND NO CHAIN; is refused" 'COMMIT AND NO CHAIN;' "$TX"
+guard_refused "(w2.8) COMMIT TRANSACTION; is refused" 'commit transaction;' "$TX"
+guard_refused "(w2.9) END TRANSACTION; is refused" 'END TRANSACTION;' "$TX"
+guard_refused "(w2.10) END WORK AND CHAIN; is refused" 'END WORK AND CHAIN;' "$TX"
+guard_refused "(w2.11) ROLLBACK; is refused" 'ROLLBACK;' "$TX"
+guard_refused "(w2.12) ROLLBACK AND CHAIN; is refused" 'ROLLBACK AND CHAIN;' "$TX"
+guard_refused "(w2.13) ABORT; is refused" 'abort;' "$TX"
+guard_refused "(w2.14) ABORT WORK; is refused" 'ABORT WORK;' "$TX"
+guard_refused "(w2.15) white space before the ';' is refused" "COMMIT${TAB} ;" "$TX"
+guard_refused "(w2.16) an indented COMMIT; is refused" "    COMMIT;" "$TX"
+guard_refused "(w2.17) a tab-indented COMMIT; is refused" "${TAB}${TAB}COMMIT;" "$TX"
+guard_refused "(w2.18) COMMIT PREPARED is refused" "COMMIT PREPARED 'x';" "$TX"
+guard_refused "(w2.19) ROLLBACK PREPARED is refused" "rollback prepared 'x';" "$TX"
+guard_refused "(w2.20) PREPARE TRANSACTION is refused" "PREPARE TRANSACTION 'x';" "$TX"
+guard_refused "(w2.21) PREPARE TRANSACTION without a ';' on the line is refused" "PREPARE TRANSACTION 'x'" "$TX"
+guard_refused "(w2.22) COMMIT PREPARED without a ';' on the line is refused" "COMMIT PREPARED 'x'" "$TX"
+# after a ';' on the same line
+guard_refused "(w2.23) SELECT 1; COMMIT; is refused" 'SELECT 1; COMMIT;' "$TX"
+guard_refused "(w2.24) SELECT 1;COMMIT; (no space) is refused" 'SELECT 1;COMMIT;' "$TX"
+guard_refused "(w2.25) SELECT 1; END; is refused" 'SELECT 1; END;' "$TX"
+guard_refused "(w2.26) SELECT 1; BEGIN; is refused" 'SELECT 1; BEGIN;' "$TX"
+guard_refused "(w2.27) SELECT 1; ROLLBACK; is refused" 'SELECT 1; rollback;' "$TX"
+guard_refused "(w2.28) SELECT 1; ABORT; is refused" 'SELECT 1; ABORT;' "$TX"
+guard_refused "(w2.29) SELECT 1; START TRANSACTION; is refused" 'SELECT 1; START TRANSACTION;' "$TX"
+guard_refused "(w2.30) SELECT 1; COMMIT PREPARED is refused" "SELECT 1; COMMIT PREPARED 'x'" "$TX"
+guard_refused "(w2.31) SELECT 1; PREPARE TRANSACTION is refused" "SELECT 1; PREPARE TRANSACTION 'x'" "$TX"
+# the ';' on a later line
+guard_refused "(w2.32) COMMIT alone on a line is refused" "COMMIT${NL};" "$TX"
+guard_refused "(w2.33) ROLLBACK followed by a comment is refused" "ROLLBACK -- note${NL};" "$TX"
+guard_refused "(w2.34) START TRANSACTION alone on a line is refused" "START TRANSACTION${NL};" "$TX"
+guard_refused "(w2.35) ABORT alone on a line is refused" "ABORT${NL};" "$TX"
+guard_refused "(w2.36) COMMIT AND CHAIN alone on a line is refused" "SELECT 1; COMMIT AND CHAIN${NL};" "$TX"
+guard_refused "(w2.37) the refusal names the line" "SELECT 1;${NL}COMMIT;" "first at line "
+
+# (w3) psql meta-commands at the start of a line
+guard_refused "(w3.1) \\c is refused" '\c other' "$BS"
+guard_refused "(w3.2) \\connect is refused" '\connect other' "$BS"
+guard_refused "(w3.3) \\q is refused" '\q' "$BS"
+guard_refused "(w3.4) \\quit is refused" '\quit' "$BS"
+guard_refused "(w3.5) \\i is refused" '\i /etc/passwd' "$BS"
+guard_refused "(w3.6) \\ir is refused" '\ir other.sql' "$BS"
+guard_refused "(w3.7) \\include is refused" '\include other.sql' "$BS"
+guard_refused "(w3.8) \\! is refused" '\! id' "$BS"
+guard_refused "(w3.9) \\gexec is refused" '\gexec' "$BS"
+guard_refused "(w3.10) \\set is refused" '\set ON_ERROR_STOP 0' "$BS"
+guard_refused "(w3.11) an indented \\c is refused" '   \c other' "$BS"
+guard_refused "(w3.12) a tab-indented \\q is refused" "${TAB}\\q" "$BS"
+guard_refused "(w3.13) text after a \\restrict key is refused" '\restrict Ab1Cd2Ef3 extra' "$BS"
+guard_refused "(w3.14) an indented \\restrict line is refused" ' \restrict Ab1Cd2Ef3' "$BS"
+guard_refused "(w3.15) a \\restrict line without a key is refused" '\restrict' "$BS"
+guard_refused "(w3.16) a command chained onto an \\unrestrict key is refused" '\unrestrict Ab1Cd2Ef3\q' "$BS"
+guard_refused "(w3.17) a line that starts with two backslashes is refused" '\\\c other' "$BS"
+guard_refused "(w3.18) \\. followed by text is refused" '\.\q' "$BS"
+guard_refused "(w3.19) a \\C-like uppercase command is refused" '\C title' "$BS"
+guard_refused "(w3.20) the refusal names the line" "SELECT 1;${NL}\\q" "first at line "
+
+# positive controls: what a plain dump holds still passes
+guard_accepted "(w4.1) a bare BEGIN line (a plpgsql body) is accepted" "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$\$${NL}BEGIN${NL}  IF true THEN${NL}    RETURN 1;${NL}  END IF;${NL}  FOR i IN 1..2 LOOP${NL}    NULL;${NL}  END LOOP;${NL}  RETURN 0;${NL}END${NL}\$\$;"
+guard_accepted "(w4.2) SAVEPOINT, RELEASE and ROLLBACK TO are accepted" "SAVEPOINT a;${NL}RELEASE a;${NL}ROLLBACK TO a;${NL}RELEASE SAVEPOINT a;"
+guard_accepted "(w4.3) the \\restrict and \\unrestrict lines of pg_dump 16.10+ are accepted" "\\restrict Ab1Cd2Ef3${NL}SELECT 1;${NL}\\unrestrict Ab1Cd2Ef3"
+guard_accepted "(w4.4) COPY data with \\N, \\. and a keyword inside a value is accepted" "COPY t (a, b) FROM stdin;${NL}\\N${TAB}x${NL}\\N${TAB}\\N${NL}k${TAB}commit${NL}\\."
+guard_accepted "(w4.5) a column or word that merely starts with a keyword is accepted" "CREATE TABLE u (${NL}    commit text,${NL}    \"end\" text,${NL}    abort boolean NOT NULL,${NL}    rollback_at timestamp,${NL}    beginning text${NL});"
+guard_accepted "(w4.6) CASE ... END AS and ENDPOINT are accepted" "CREATE VIEW v AS SELECT CASE WHEN a THEN 1 ELSE 2${NL}END AS x, 1 AS endpoint FROM t;"
+guard_accepted "(w4.7) a statement that only mentions the words is accepted" "COMMENT ON TABLE t IS 'we commit and end the work here';"
+guard_accepted "(w4.8) a comment line that mentions the words is accepted" "-- the commit and end of begin: abort, rollback"
+# known false refusals (fail closed): the shape inside a comment or a string is refused too
+guard_refused "(w4.8b) a comment with '; COMMIT;' in it is refused (known limitation)" "-- note: SELECT 1; COMMIT; here" "$TX"
+guard_refused "(w4.8c) a string with a line that starts with END; is refused (known limitation)" "INSERT INTO t VALUES ('a${NL}END;${NL}b');" "$TX"
+guard_refused "(w4.8d) a string with a line that starts with \\q is refused (known limitation)" "INSERT INTO t VALUES ('a${NL}\\q${NL}b');" "$BS"
+# the documented limitation: the END; that closes a plpgsql body is a refusal
+guard_refused "(w4.9) a plpgsql body that ends with END; is refused (known limitation)" "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$\$${NL}BEGIN${NL}  RETURN 0;${NL}END;${NL}\$\$;" "$TX"
+
+# (w4.10) a pg_dump 16 file without a plpgsql END; line passes whole: the \restrict pair, SET
+# lines, a LANGUAGE sql function, a table, COPY data with \N and \. and a primary key
+cat > "$WORKDIR/pgdump.sql" <<'PGDUMP'
+--
+-- PostgreSQL database dump
+--
+
+\restrict RlBbBBmfdggGtkd0kKVvk0lxqSc5xqjnNpaoAkxhQgG07o8lxgOylqL0IMXCRbR
+
+-- Dumped from database version 16.15
+-- Dumped by pg_dump version 16.15
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+ALTER TABLE IF EXISTS ONLY public.notes DROP CONSTRAINT IF EXISTS notes_pkey;
+DROP TABLE IF EXISTS public.notes;
+DROP FUNCTION IF EXISTS public.f();
+--
+-- Name: f(); Type: FUNCTION; Schema: public; Owner: depsight
+--
+
+CREATE FUNCTION public.f() RETURNS integer
+    LANGUAGE sql
+    AS $$ SELECT 1 $$;
+
+
+ALTER FUNCTION public.f() OWNER TO depsight;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: notes; Type: TABLE; Schema: public; Owner: depsight
+--
+
+CREATE TABLE public.notes (
+    id text NOT NULL,
+    body text
+);
+
+
+ALTER TABLE public.notes OWNER TO depsight;
+
+--
+-- Data for Name: notes; Type: TABLE DATA; Schema: public; Owner: depsight
+--
+
+COPY public.notes (id, body) FROM stdin;
+a	hello
+\N	nothing
+c	tab\tx
+d	it's -- not a comment
+\.
+
+
+--
+-- Name: notes notes_pkey; Type: CONSTRAINT; Schema: public; Owner: depsight
+--
+
+ALTER TABLE ONLY public.notes
+    ADD CONSTRAINT notes_pkey PRIMARY KEY (id);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict RlBbBBmfdggGtkd0kKVvk0lxqSc5xqjnNpaoAkxhQgG07o8lxgOylqL0IMXCRbR
+
+PGDUMP
+{
+  run_restore -- --yes --no-pre-backup "$WORKDIR/pgdump.sql"
+  n="$(wc -l < "$WORKDIR/pgdump.sql" | tr -d ' ')"
+  if [ "$rc" -eq 0 ] && sed -n "7,$((6 + n))p" "$FAKE_PSQL_STDIN" | cmp -s - "$WORKDIR/pgdump.sql" \
+    && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] && no_tmp_left; then
+    pass "(w4.10) a pg_dump 16.15 file without a plpgsql END; line (\\restrict pair, COPY with \\N) is accepted"
+  else
+    fail "(w4.10) pg_dump sample: rc=$rc out=$out_text"
+  fi
+  # the same file with a COMMIT; or a \q line added is refused
+  { sed '/^\\unrestrict/d' "$WORKDIR/pgdump.sql"; printf 'COMMIT;\n'; } > "$WORKDIR/pgdump-commit.sql"
+  run_restore -- --yes "$WORKDIR/pgdump-commit.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && grep -q -F -- "$TX" <<< "$out_text"; then
+    pass "(w4.11) the pg_dump file with a COMMIT; added is refused"
+  else
+    fail "(w4.11) pg_dump file plus COMMIT: rc=$rc out=$out_text"
+  fi
+  { sed '/^\\unrestrict/d' "$WORKDIR/pgdump.sql"; printf '\\q\n'; } > "$WORKDIR/pgdump-q.sql"
+  run_restore -- --yes "$WORKDIR/pgdump-q.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && grep -q -F -- "$BS" <<< "$out_text"; then
+    pass "(w4.12) the pg_dump file with a \\q line added is refused"
+  else
+    fail "(w4.12) pg_dump file plus \\q: rc=$rc out=$out_text"
+  fi
+}
+
+# (w5) a dump whose last byte is not a newline: the appended COMMIT starts its own line,
+# so a final -- comment cannot swallow it (psql would roll back and the restore would
+# report success); a dump that ends in a newline gets no extra line (case (a))
+{
+  { cat "$DUMP"; printf -- '-- trailing note, no newline'; } > "$WORKDIR/nonl.sql"
+  run_restore -- --yes --no-pre-backup "$WORKDIR/nonl.sql"
+  n="$(wc -l < "$DUMP" | tr -d ' ')"
+  if [ "$rc" -eq 0 ] && sed -n "7,$((6 + n))p" "$FAKE_PSQL_STDIN" | cmp -s - "$DUMP" \
+    && [ "$(sed -n "$((7 + n))p" "$FAKE_PSQL_STDIN")" = "-- trailing note, no newline" ] \
+    && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = "$((8 + n))" ]; then
+    pass "(w5.1) a dump that ends in a comment without a newline still gets its COMMIT on its own line"
+  else
+    fail "(w5.1) no trailing newline: rc=$rc out=$out_text"
+  fi
+  # the same with a \unrestrict line as the last line
+  { cat "$DUMP"; printf '\\unrestrict Ab1Cd2Ef3'; } > "$WORKDIR/nonl2.sql"
+  run_restore -- --yes --no-pre-backup "$WORKDIR/nonl2.sql"
+  if [ "$rc" -eq 0 ] && [ "$(sed -n "$((7 + n))p" "$FAKE_PSQL_STDIN")" = '\unrestrict Ab1Cd2Ef3' ] && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ]; then
+    pass "(w5.2) a dump that ends in a \\unrestrict line without a newline still gets its COMMIT on its own line"
+  else
+    fail "(w5.2) no trailing newline after \\unrestrict: rc=$rc out=$out_text"
+  fi
+  # a dump that ends in a newline gets no empty line before the COMMIT
+  { cat "$DUMP"; printf -- '-- trailing note\n'; } > "$WORKDIR/nl.sql"
+  run_restore -- --yes --no-pre-backup "$WORKDIR/nl.sql"
+  if [ "$rc" -eq 0 ] && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = "$((8 + n))" ] \
+    && [ "$(sed -n "$((7 + n))p" "$FAKE_PSQL_STDIN")" = "-- trailing note" ] && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ]; then
+    pass "(w5.3) a dump that ends in a newline gets no extra line before the COMMIT"
+  else
+    fail "(w5.3) trailing newline: rc=$rc"
+  fi
+}
+
 # (x) the migrate failure message names the step, not only newer code
 {
   run_restore FAKE_MIGRATE_FAIL=1 -- --yes "$DUMP"
