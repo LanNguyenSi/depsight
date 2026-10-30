@@ -22,6 +22,9 @@ export interface Packument {
   time?: Record<string, string>;
   /** the `versions` keys; omitted: the packument has no `versions` map. */
   versions?: string[];
+  /** `versions[<v>].deprecated` messages for the listed versions (needs `versions`). */
+  deprecatedVersions?: Record<string, string>;
+  /** the top-level `deprecated` field (full packuments have none). */
   deprecated?: string;
 }
 export type Registry = Record<string, Packument | 'down'>;
@@ -43,7 +46,18 @@ export async function report(scenario: Scenario, registry: Registry) {
         json: async () => ({
           ...(entry.latest !== undefined ? { 'dist-tags': { latest: entry.latest } } : {}),
           ...(entry.time ? { time: entry.time } : {}),
-          ...(entry.versions ? { versions: Object.fromEntries(entry.versions.map((v) => [v, {}])) } : {}),
+          ...(entry.versions
+            ? {
+                versions: Object.fromEntries(
+                  entry.versions.map((v) => [
+                    v,
+                    entry.deprecatedVersions?.[v] !== undefined
+                      ? { deprecated: entry.deprecatedVersions[v] }
+                      : {},
+                  ]),
+                ),
+              }
+            : {}),
           ...(entry.deprecated ? { deprecated: entry.deprecated } : {}),
         }),
       };
@@ -53,7 +67,7 @@ export async function report(scenario: Scenario, registry: Registry) {
   try {
     const { value: result, degraded } = await trackDegraded(() => analyzeDepAge('t', 'o', 'r', 'main'));
     const rows = [...result.dependencies].sort((a, b) => a.name.localeCompare(b.name));
-    return { rows, degraded };
+    return { rows, summary: result.summary, degraded };
   } finally {
     warn.mockRestore();
     vi.unstubAllGlobals();

@@ -50,7 +50,7 @@ import { SCENARIOS } from './helpers/npm-scenarios';
 
 const NOW = new Date('2026-10-26T00:00:00Z');
 
-type Registry = Record<string, { latest: string; time: Record<string, string>; deprecated?: string } | 'down' | 'throw'>;
+type Registry = Record<string, { latest: string; time: Record<string, string>; versions?: Record<string, { deprecated?: string }> } | 'down' | 'throw'>;
 
 const VITE: Registry[string] = {
   latest: '8.4.0',
@@ -81,7 +81,7 @@ async function report(scenario: Scenario, reg: Registry = registry) {
         json: async () => ({
           'dist-tags': { latest: entry.latest },
           time: entry.time,
-          ...(entry.deprecated ? { deprecated: entry.deprecated } : {}),
+          ...(entry.versions ? { versions: entry.versions } : {}),
         }),
       };
     }),
@@ -635,7 +635,7 @@ describe('deps report: precedence of lockfile version, spec floor and registry',
   });
 
   it('a deprecated package keeps DEPRECATED, with the raised version', async () => {
-    const reg: Registry = { vite: { ...(VITE as object), deprecated: 'use something else' } as Registry[string] };
+    const reg: Registry = { vite: { ...VITE, versions: { '7.3.7': { deprecated: 'use something else' } } } };
     const { rows } = await report(single('^7.3.5', v3({ 'node_modules/vite': '7.3.7' })), reg);
     expect(rows.map((r) => [r.installedVersion, r.status])).toEqual([['7.3.7', 'DEPRECATED']]);
   });
