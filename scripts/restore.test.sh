@@ -664,6 +664,12 @@ guard_refused "(w6.7) a carriage return before a \\gexec line is refused" "SELEC
 guard_refused "(w6.8) a carriage return before \\q is refused" "-- c${CR}\\q" "$BS" 53
 guard_refused "(w6.9) a block comment then BEGIN; is refused" '/* x */ BEGIN;' "$TX" 52
 guard_refused "(w6.10) a block comment closed on the line of an END; is refused" "/* a${NL}b */ END;" "$TX" 53
+# a carriage return is white space for psql inside a statement: END<CR>; is one statement,
+# refused by the raw-copy pass (the earlier single-pass check refused these forms too)
+guard_refused "(w6.13) END, carriage return, ; is refused" "END${CR};" "$TX"
+guard_refused "(w6.14) BEGIN, carriage return, ; is refused" "BEGIN${CR};" "$TX"
+guard_refused "(w6.15) end, space, carriage return, ; is refused" "end ${CR};" "$TX"
+guard_refused "(w6.16) END, tab, carriage return, ; is refused" "END${TAB}${CR};" "$TX"
 # a carriage return alone does not refuse a dump
 guard_accepted "(w6.11) a lone carriage return between plain statements is accepted" "SELECT 1;${CR}SELECT 2;"
 guard_accepted "(w6.12) a keyword-looking word after a carriage return that is not a statement is accepted" "-- the end${CR}-- of the commit and begin"

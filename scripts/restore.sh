@@ -245,18 +245,25 @@ if ! { LC_ALL=C tr -d '\000' < "$tmp" > "$norm" && cmp -s "$tmp" "$norm"; }; the
   exit 1
 fi
 LC_ALL=C tr '\r' '\n' < "$tmp" > "$norm" || could_not_check "carriage return conversion failed"
-tx_rc=0
-cgrep -n -m 1 -i -E -- "$tx_re" "$norm" > "$hits" || tx_rc=$?
-case "$tx_rc" in
-  0)
-    # read, not cut: the matching line may hold bytes that are invalid in the caller's locale
-    IFS= read -r first_hit < "$hits" || true
-    echo "restore: $file contains transaction control statements (first at line ${first_hit%%:*}, a carriage return counts as a line break); refusing to load it" >&2
-    exit 1
-    ;;
-  1) ;;
-  *) could_not_check "the transaction control check failed" ;;
-esac
+# The check runs twice: on the copy with carriage returns as line breaks (psql ends a "--"
+# comment at a CR) and on the raw copy, where a CR is white space ("END<CR>;" is one
+# statement for psql). A match in either refuses, so the raw-copy check keeps every form the
+# earlier single-pass check refused.
+for tx_src in "$norm" "$tmp"; do
+  tx_rc=0
+  cgrep -n -m 1 -i -E -- "$tx_re" "$tx_src" > "$hits" || tx_rc=$?
+  case "$tx_rc" in
+    0)
+      # read, not cut: the matching line may hold bytes that are invalid in the caller's locale
+      IFS= read -r first_hit < "$hits" || true
+      if [ "$tx_src" = "$norm" ]; then tx_note=", a carriage return counts as a line break"; else tx_note=""; fi
+      echo "restore: $file contains transaction control statements (first at line ${first_hit%%:*}${tx_note}); refusing to load it" >&2
+      exit 1
+      ;;
+    1) ;;
+    *) could_not_check "the transaction control check failed" ;;
+  esac
+done
 bs_rc=0
 cgrep -n -E -- '^[[:space:]]*[\]' "$norm" > "$hits" || bs_rc=$?
 case "$bs_rc" in
