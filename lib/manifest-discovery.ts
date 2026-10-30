@@ -1439,9 +1439,19 @@ export interface NarrowNpmResolution {
   additions: Array<{ name: string; version: string }>;
   /** `narrowDropSafe`: may the baseline entry (name, baseVersion) be removed? */
   dropSafe: (name: string, baseVersion: string) => boolean;
+  /**
+   * The dependency-age report's variant of `dropSafe`: the same proof, except
+   * that `overrides` do not make a manifest count as not locked (see
+   * `manifestLocked`). Only the age row reads it; the CVE scan uses `dropSafe`.
+   */
+  dropSafeForReport: (name: string, baseVersion: string) => boolean;
 }
 
-const NO_NARROW_RESOLUTION: NarrowNpmResolution = { additions: [], dropSafe: () => false };
+const NO_NARROW_RESOLUTION: NarrowNpmResolution = {
+  additions: [],
+  dropSafe: () => false,
+  dropSafeForReport: () => false,
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -1623,6 +1633,21 @@ function readOverrides(raw: unknown): { overrides: Map<string, string>; plain: b
     overrides.set(key, value);
   }
   return { overrides, plain: true };
+}
+
+// Every top-level `overrides` entry that is a package name with a plain string
+// spec (a semver range), by name; entries of any other shape (a nested object, a
+// `$` reference, a key with a version selector, an alias or URL) are skipped.
+// Unlike `readOverrides` this does not stop at the first entry of another shape.
+function plainOverrideEntries(raw: unknown): Map<string, string> {
+  const entries = new Map<string, string>();
+  if (!isPlainObject(raw)) return entries;
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === '.' || key.indexOf('@', 1) !== -1) continue;
+    if (typeof value !== 'string' || value.trim() === '' || !isPlainSemverRange(value)) continue;
+    entries.set(key, value);
+  }
+  return entries;
 }
 
 // Does the manifest pin a package manager? `packageManager` (corepack) and
@@ -2377,12 +2402,22 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // are not gated by this: they never remove anything. The known-shape
   // requirement is enforced for every fetched lockfile, this one included, by
   // `buildInstalledIndex`.) Computed on first use.
-  const manifestLocked = (m: NarrowManifest): boolean => {
+  //
+  // `forReport` is the dependency-age report's reading, for which `overrides`
+  // no longer make a manifest not locked: a member's `overrides` are ignored
+  // (npm applies the workspace root's only), and a root or standalone manifest's
+  // `overrides` of any shape are accepted, because `npm ci` refuses a lockfile
+  // that does not reflect them, so the installed tree is the lockfile's. What it
+  // can still see stays checked: a plain string override that the lockfile does
+  // not honour keeps the floor (an `npm install` would re-resolve to the
+  // override, so the lockfile's version is not what the project installs then).
+  // The CVE scan keeps the strict reading (`forReport` false).
+  const manifestLocked = (m: NarrowManifest, forReport: boolean): boolean => {
     const g = governanceOf(m);
     const lock = governingLock(m, g);
     if (!lock) return false;
     if (g.kind === 'member') {
-      if (hasOwn(m.data, 'overrides')) return false;
+      if (!forReport && hasOwn(m.data, 'overrides')) return false;
       const linkSatisfies = linkToMemberSatisfies(lock, g.members);
       return m.declarations.every((d) => {
         if (!d.lockRequired) return true;
@@ -2391,21 +2426,24 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
       });
     }
     const linkSatisfies = linkToMemberSatisfies(lock, g.kind === 'root' ? g.members : null);
+    const overridesOk = forReport
+      ? lockfileHonoursOverrides(lock, plainOverrideEntries(m.data.overrides))
+      : m.overridesPlain && lockfileHonoursOverrides(lock, m.overrides);
     return (
-      m.overridesPlain &&
-      lockfileHonoursOverrides(lock, m.overrides) &&
+      overridesOk &&
       m.declarations.every((d) => !d.lockRequired || lockfileListsDeclaration(lock, d, `${NODE_MODULES}${d.key}`, linkSatisfies))
     );
   };
-  let everyManifestLockedMemo: boolean | undefined;
-  const everyManifestLocked = (): boolean => {
-    if (everyManifestLockedMemo === undefined) {
-      everyManifestLockedMemo = manifestPaths.every((path) => {
+  const everyManifestLockedMemo: { strict?: boolean; report?: boolean } = {};
+  const everyManifestLocked = (forReport: boolean): boolean => {
+    const slot = forReport ? 'report' : 'strict';
+    if (everyManifestLockedMemo[slot] === undefined) {
+      everyManifestLockedMemo[slot] = manifestPaths.every((path) => {
         const m = manifestByPath.get(path);
-        return m != null && manifestLocked(m);
+        return m != null && manifestLocked(m, forReport);
       });
     }
-    return everyManifestLockedMemo;
+    return everyManifestLockedMemo[slot] as boolean;
   };
 
   // The version `lock` installs for `name` at `entryKey`, or null.
@@ -2485,14 +2523,15 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     return !indexHas(installedIndex, name, baseVersion);
   };
 
-  // narrowDropSafe
-  const dropSafe = (name: string, baseVersion: string): boolean => {
+  // narrowDropSafe; `forReport` selects the age report's reading of `overrides`
+  // (see `manifestLocked`). Every other condition is the same for both.
+  const makeDropSafe = (forReport: boolean) => (name: string, baseVersion: string): boolean => {
     try {
       // The tree walk was complete here: without it computeNarrowNpm returned before building this.
       return (
         noForeignLockfiles &&
         noInstallPolicyFiles &&
-        everyManifestLocked() &&
+        everyManifestLocked(forReport) &&
         declarersAllNarrow(name) &&
         baseVersionInstalledNowhere(name, baseVersion)
       );
@@ -2501,7 +2540,7 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
     }
   };
 
-  return { additions, dropSafe };
+  return { additions, dropSafe: makeDropSafe(false), dropSafeForReport: makeDropSafe(true) };
 }
 
 async function resolveDefaultBranch(

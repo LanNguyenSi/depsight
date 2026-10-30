@@ -1,3 +1,4 @@
+import semver from 'semver';
 import { createGitHubClient } from '@/lib/github';
 import { collectNpmReportVersions, type NpmReportVersion } from '@/lib/cve/osv';
 import { noteDegraded } from '@/lib/scan/degraded';
@@ -47,6 +48,7 @@ export interface DepAgeScanResult {
 
 interface NpmPackageData {
   version?: string;
+  versions?: Record<string, unknown>;
   time?: Record<string, string>;
   deprecated?: string;
   'dist-tags'?: {
@@ -54,12 +56,35 @@ interface NpmPackageData {
   };
 }
 
-function parseVersion(v: string): [number, number, number] {
-  const cleaned = v.replace(/^[^0-9]*/, '').split('.').map(Number);
-  return [cleaned[0] ?? 0, cleaned[1] ?? 0, cleaned[2] ?? 0];
+/**
+ * The version the report compares against. Normally `dist-tags.latest`. When
+ * that tag points at a prerelease (a package can publish its next major as an
+ * `rc` under `latest`), the newest stable release in the packument is used
+ * instead: the highest non-prerelease version among the `versions` keys and
+ * the `time` keys (`created` and `modified` are not versions). When the
+ * packument holds no stable version, or the tag is not a semver version at
+ * all, the tag stays.
+ */
+export function pickLatestVersion(data: NpmPackageData): string {
+  const tagged = data['dist-tags']?.latest ?? '';
+  if (!tagged || semver.valid(tagged) === null || semver.prerelease(tagged) === null) return tagged;
+  const candidates = new Set([...Object.keys(data.versions ?? {}), ...Object.keys(data.time ?? {})]);
+  let best: string | null = null;
+  for (const candidate of candidates) {
+    if (semver.valid(candidate) === null || semver.prerelease(candidate) !== null) continue;
+    if (best === null || semver.gt(candidate, best)) best = candidate;
+  }
+  return best ?? tagged;
 }
 
-function classifyStatus(
+// A version string as a SemVer: a full version as it is (a prerelease keeps its
+// tag, so 7.3.5-beta.2 sorts below 7.3.5), else the first x.y.z found in it
+// (`8` gives 8.0.0, `7.3.5 <8` gives 7.3.5), else null.
+function toSemver(v: string): semver.SemVer | null {
+  return semver.parse(v.trim()) ?? semver.coerce(v);
+}
+
+export function classifyStatus(
   installed: string,
   latest: string,
   isDeprecated: boolean,
@@ -67,18 +92,12 @@ function classifyStatus(
   if (isDeprecated) return 'DEPRECATED';
   if (!installed || installed === 'unknown' || !latest) return 'UNKNOWN';
 
-  try {
-    const [iMajor, iMinor, iPatch] = parseVersion(installed);
-    const [lMajor, lMinor, lPatch] = parseVersion(latest);
-
-    if (iMajor < lMajor) return 'MAJOR_BEHIND';
-    if (iMajor === lMajor && (iMinor < lMinor || (iMinor === lMinor && iPatch < lPatch))) {
-      return 'OUTDATED';
-    }
-    return 'UP_TO_DATE';
-  } catch {
-    return 'UNKNOWN';
-  }
+  const i = toSemver(installed);
+  const l = toSemver(latest);
+  if (i === null || l === null) return 'UNKNOWN';
+  if (i.major < l.major) return 'MAJOR_BEHIND';
+  if (semver.lt(i, l)) return 'OUTDATED';
+  return 'UP_TO_DATE';
 }
 
 export async function analyzeDepAge(
@@ -151,7 +170,7 @@ export async function analyzeDepAge(
           }
 
           const data = await resp.json() as NpmPackageData;
-          const latestVersion = data['dist-tags']?.latest ?? '';
+          const latestVersion = pickLatestVersion(data);
           const isDeprecated = Boolean(data.deprecated);
 
           // Get publish date for the installed version: the version the
@@ -242,6 +261,8 @@ async function resolveNpmReportVersions(
       fetched.observedLockfilePaths,
       fetched.observedTreeFacts,
       { manifests: fetched.manifests, manifestFiles: fetched.manifestFiles },
+      // The report reads the proof without the CVE scan's `overrides` block.
+      { overridesDoNotBlock: true },
     );
     return new Map(rows.map((row) => [row.name, row]));
   } catch (err) {
