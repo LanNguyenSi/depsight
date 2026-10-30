@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-30T15:27:30Z: `scripts/restore.sh` line check widened (transaction-control forms, backslash lines, COMMIT kept on its own line); `docs/configuration.md` gains the restore line-check paragraph. `rescan-and-staleness.md`: its only claim about `docs/configuration.md` (where `SCAN_INTERVAL_MINUTES` is documented) still holds; re-read, unchanged. Re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-10-29T12:37:47Z: `docs/configuration.md` guard paragraph (a null `DATABASE_URL` counts as unset). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
 - 2026-10-28T06:54:15Z: `docs/configuration.md` Restore paragraph and exit-code list (a signal before the confirmed load exits 1 with a hint to check the database). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, unchanged; re-stamped.
 - 2026-10-28T06:52:57Z: `docs/configuration.md` Restore paragraph (signal after COMMIT exits 4, private copy in `BACKUP_DIR`). `rescan-and-staleness.md` cites configuration.md only for `SCAN_INTERVAL_MINUTES`, which is unchanged; re-stamped.
