@@ -3,10 +3,12 @@
  * it computes. `dist-tags.latest` normally; when that tag is a prerelease
  * (prisma publishes its next major as `8.0.0-rc.29` under `latest` while 7.10.1
  * is the newest stable) the newest stable version of the packument, found among
- * the `versions` keys and the `time` keys (`created` / `modified` are not
- * versions); the tag stays when the packument has no stable version. Status
- * compares with semver, so a prerelease installed version sorts below its
- * release and does not break the comparison.
+ * the `versions` keys, or among the `time` keys (minus `created` / `modified`)
+ * only when the packument has no `versions` map, because `time` keeps
+ * unpublished versions; the tag stays when the packument has no stable version.
+ * Status compares with semver, so a prerelease installed version sorts below
+ * its release and does not break the comparison; a shown version that is no
+ * version (a git or URL spec) has status UNKNOWN.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -48,8 +50,19 @@ describe('pickLatestVersion: dist-tags.latest against the newest stable version'
     expect(pickLatestVersion(packument('8.0.0-rc.29', undefined, time))).toBe('7.10.1');
   });
 
-  it('a prerelease tag, stable only in `time` and prereleases in `versions`: both sources count', () => {
-    expect(pickLatestVersion(packument('8.0.0-rc.29', ['8.0.0-rc.29'], { '7.10.1': 'x' }))).toBe('7.10.1');
+  it('a prerelease tag with a `versions` map: a stable version only in `time` is ignored (the map says what is published), the tag stays', () => {
+    expect(pickLatestVersion(packument('8.0.0-rc.29', ['8.0.0-rc.29'], { '7.10.1': 'x' }))).toBe('8.0.0-rc.29');
+  });
+
+  it('a prerelease tag and an unpublished higher stable version (in `time`, not in `versions`): the highest published stable', () => {
+    const time = { '7.9.0': 'x', '7.10.1': 'x', '8.0.0-rc.29': 'x', unpublished: 'x' };
+    expect(pickLatestVersion(packument('8.0.0-rc.29', ['7.9.0', '8.0.0-rc.29'], time))).toBe('7.9.0');
+  });
+
+  it('a `versions` map that is not an object (an array, null) counts as absent: the `time` keys are read', () => {
+    const time = { '7.9.0': 'x' };
+    expect(pickLatestVersion({ ...packument('8.0.0-rc.29', undefined, time), versions: ['7.10.1'] as never })).toBe('7.9.0');
+    expect(pickLatestVersion({ ...packument('8.0.0-rc.29', undefined, time), versions: null as never })).toBe('7.9.0');
   });
 
   it('a prerelease tag and every version a prerelease: the tag stays', () => {
@@ -94,7 +107,16 @@ describe('classifyStatus: semver comparison', () => {
     ['5.0.0-beta.1', '7.10.1', 'MAJOR_BEHIND'],
     ['8.0.0-rc.1', '7.10.1', 'UP_TO_DATE'], // a prerelease of a newer major is not behind
     ['7.10.0-rc.1', '7.10.1', 'OUTDATED'],
-    ['2#main', '3.0.0', 'MAJOR_BEHIND'], // digits of a git spec strip, as before
+    ['1.x', '1.4.0', 'OUTDATED'], // an x-range strip is read as its first version, 1.0.0
+    ['1.x', '2.0.0', 'MAJOR_BEHIND'],
+    ['1.2.3||2.0.0', '3.0.0', 'MAJOR_BEHIND'], // the first alternative of a range strip
+    // a shown string that is no version has no status (its digits are not a version)
+    ['2#main', '3.0.0', 'UNKNOWN'],
+    ['github:acme/widget2#main', '3.0.0', 'UNKNOWN'],
+    ['file:../a', '3.0.0', 'UNKNOWN'],
+    ['https://example.com/pkg-1.2.3.tgz', '3.0.0', 'UNKNOWN'],
+    ['1.2.3.tgz', '3.0.0', 'UNKNOWN'],
+    ['latest', '3.0.0', 'UNKNOWN'],
   ];
   for (const [installed, latest, want] of cases) {
     it(`installed ${installed} against latest ${latest}: ${want}`, () => {
@@ -166,6 +188,27 @@ describe('analyzeDepAge: a prerelease dist-tags.latest', () => {
     const { time } = prisma.prisma as { time: Record<string, string> };
     const { rows } = await report(single('5.22.0'), { prisma: { latest: '8.0.0-rc.29', time } });
     expect(rows[0]).toMatchObject({ latestVersion: '7.10.1', status: 'MAJOR_BEHIND' });
+  });
+
+  it('a git spec whose digits strip to `2#main` is no version: UNKNOWN row, not MAJOR_BEHIND', async () => {
+    const reg: Registry = { lib: { latest: '3.0.0', time: { '3.0.0': '2026-01-01T00:00:00Z' } } };
+    const s: Scenario = { files: { 'package.json': pkg({ name: 'app', dependencies: { lib: 'github:acme/widget2#main' } }) } };
+    const { rows } = await report(s, reg);
+    expect(rows[0]).toMatchObject({ installedVersion: '2#main', status: 'UNKNOWN', updateAvailable: false });
+  });
+
+  it('an unpublished higher stable version in `time` is not chosen (prerelease tag, `versions` without it)', async () => {
+    const reg: Registry = {
+      pkg: {
+        latest: '8.0.0-rc.29',
+        versions: ['5.22.0', '7.9.0', '8.0.0-rc.29'],
+        time: { '5.22.0': '2026-01-01T00:00:00Z', '7.9.0': '2026-08-01T00:00:00Z', '7.10.1': '2026-09-01T00:00:00Z', '8.0.0-rc.29': '2026-10-20T00:00:00Z' },
+      },
+    };
+    const s: Scenario = { files: { 'package.json': pkg({ name: 'app', dependencies: { pkg: '5.22.0' } }) } };
+    const { rows } = await report(s, reg);
+    expect(rows[0]).toMatchObject({ latestVersion: '7.9.0', status: 'MAJOR_BEHIND' });
+    expect(rows[0].latestPublishedAt?.toISOString()).toBe('2026-08-01T00:00:00.000Z');
   });
 
   it('a package with only prereleases keeps dist-tags.latest and compares prereleases with semver', async () => {

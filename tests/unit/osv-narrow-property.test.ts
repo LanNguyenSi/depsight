@@ -935,8 +935,9 @@ function forcesBaseRow(model: Model): boolean {
 // The row's reading of `overrides` (the report's proof, not the drop rule's):
 // only a plain string override can be checked against the lockfile, so only it
 // can make a manifest not locked; an override of any other kind (`$` reference,
-// nested object, number, key with a version selector) never does, because
-// `npm ci` refuses a lockfile that does not reflect it.
+// nested object, number, key with a version selector) never does: the scan
+// cannot evaluate it, and the row is only the lockfile's top-level entry, which
+// is never above what `npm ci` installs.
 function overridesViolatedForRow(m: ModelManifest): boolean {
   if (!m.overrides || m.overrides.kind !== 'string') return false;
   return overridesViolated(m);

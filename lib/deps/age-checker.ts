@@ -60,15 +60,22 @@ interface NpmPackageData {
  * The version the report compares against. Normally `dist-tags.latest`. When
  * that tag points at a prerelease (a package can publish its next major as an
  * `rc` under `latest`), the newest stable release in the packument is used
- * instead: the highest non-prerelease version among the `versions` keys and
- * the `time` keys (`created` and `modified` are not versions). When the
- * packument holds no stable version, or the tag is not a semver version at
+ * instead: the highest non-prerelease version among the `versions` keys, or,
+ * when the packument has no `versions` map, among the `time` keys (`time` keeps
+ * unpublished versions, and `created` and `modified` are not versions). When
+ * the packument holds no stable version, or the tag is not a semver version at
  * all, the tag stays.
  */
 export function pickLatestVersion(data: NpmPackageData): string {
   const tagged = data['dist-tags']?.latest ?? '';
   if (!tagged || semver.valid(tagged) === null || semver.prerelease(tagged) === null) return tagged;
-  const candidates = new Set([...Object.keys(data.versions ?? {}), ...Object.keys(data.time ?? {})]);
+  // `versions` lists what is published. `time` keeps unpublished versions (and
+  // `created`, `modified`), so it is read only when the packument has no `versions` map.
+  const versions = data.versions;
+  const candidates =
+    typeof versions === 'object' && versions !== null && !Array.isArray(versions)
+      ? Object.keys(versions)
+      : Object.keys(data.time ?? {});
   let best: string | null = null;
   for (const candidate of candidates) {
     if (semver.valid(candidate) === null || semver.prerelease(candidate) !== null) continue;
@@ -77,11 +84,17 @@ export function pickLatestVersion(data: NpmPackageData): string {
   return best ?? tagged;
 }
 
+// A numeric prefix of a floor strip: `8`, `8.1`, `1.x`, `7.3.5 <8`, `1.2.3||2`.
+// Digits inside a git, URL or file spec (`2#main`, `1.2.3.tgz`) are not one.
+const PARTIAL_VERSION = /^\d+(\.(\d+|x|X|\*)){0,2}(?=\s|\||$)/;
+
 // A version string as a SemVer: a full version as it is (a prerelease keeps its
-// tag, so 7.3.5-beta.2 sorts below 7.3.5), else the first x.y.z found in it
-// (`8` gives 8.0.0, `7.3.5 <8` gives 7.3.5), else null.
+// tag, so 7.3.5-beta.2 sorts below 7.3.5), else the first x.y.z of a partial
+// numeric strip (`8` gives 8.0.0, `7.3.5 <8` gives 7.3.5), else null: a string
+// that is no version has no status.
 function toSemver(v: string): semver.SemVer | null {
-  return semver.parse(v.trim()) ?? semver.coerce(v);
+  const text = v.trim();
+  return semver.parse(text) ?? (PARTIAL_VERSION.test(text) ? semver.coerce(text) : null);
 }
 
 export function classifyStatus(

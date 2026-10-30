@@ -2406,11 +2406,15 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // `forReport` is the dependency-age report's reading, for which `overrides`
   // no longer make a manifest not locked: a member's `overrides` are ignored
   // (npm applies the workspace root's only), and a root or standalone manifest's
-  // `overrides` of any shape are accepted, because `npm ci` refuses a lockfile
-  // that does not reflect them, so the installed tree is the lockfile's. What it
-  // can still see stays checked: a plain string override that the lockfile does
-  // not honour keeps the floor (an `npm install` would re-resolve to the
-  // override, so the lockfile's version is not what the project installs then).
+  // `overrides` of any shape are accepted. The row is the top-level lockfile
+  // entry of a declared dependency: when `npm ci` accepts the lockfile it
+  // installs exactly those entries (npm 10 and 11 do not enforce a workspace
+  // root's `overrides` against the lockfile, and ignore a member's), and when
+  // it refuses the lockfile nothing is installed from it, so the row is never
+  // above what `npm ci` installs. What the scan can still see stays checked, as
+  // a conservative choice: a plain string override that the lockfile does not
+  // honour keeps the floor (an `npm install` would re-resolve to the override,
+  // so the lockfile's version is not what the project installs then).
   // The CVE scan keeps the strict reading (`forReport` false).
   const manifestLocked = (m: NarrowManifest, forReport: boolean): boolean => {
     const g = governanceOf(m);

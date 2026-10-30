@@ -10,12 +10,16 @@
  * lockfiles, `.npmrc`, `packageManager`, a declarer without a lockfile, a floor
  * copy installed anywhere) and one thing about overrides: a plain string
  * override at the root or in a standalone project that its lockfile does not
- * honour. Evidence for that choice: `npm ci` (npm 10.9.2 and 11.21.1, bounded
- * runs against the live registry) exits 1 with "Invalid: lock file's ms@2.1.2
- * does not satisfy ms@2.1.3" for a stale plain or nested override, installs
- * nothing, and installs the lockfile's version for a member's `overrides`
- * (npm ignores them). So a stale override means no `npm ci` tree to report, and
- * an `npm install` would re-resolve to the override: the row keeps the floor.
+ * honour, kept as a conservative choice. The row is the top-level lockfile
+ * entry of a declared dependency, so it is never above what `npm ci` installs:
+ * when `npm ci` accepts the lockfile it installs exactly those entries, when it
+ * refuses it nothing is installed from it. Measured with bounded runs against
+ * the live registry (npm 10.9.2 and 11.21.1): in a standalone project a stale
+ * plain or nested override makes `npm ci` exit 1 ("Invalid: lock file's ms@2.1.2
+ * does not satisfy ms@2.1.3"); in a workspace a stale root override (plain or
+ * nested) is not enforced against the lockfile and `npm ci` installs the
+ * lockfile's ms 2.1.2; a member's `overrides` are ignored. An `npm install`
+ * would re-resolve to a stale plain override, hence the floor for that case.
  *
  * End to end through `analyzeDepAge` (GitHub client and registry `fetch`
  * mocked), plus the two gates side by side at the `resolveNarrowNpm` and
@@ -212,8 +216,8 @@ describe('age row: a floor copy installed anywhere keeps the floor, overrides pr
 });
 
 describe('age row: a plain string override that the lockfile does not honour keeps the floor', () => {
-  // `npm ci` refuses such a lockfile (nothing installs) and an `npm install`
-  // would install the override's version, so the lockfile's is not the answer.
+  // Conservative: an `npm install` would install the override's version, so the
+  // lockfile's is not certain to be what the project installs.
   it('root override react 19.1.0 against a lockfile holding react 19.2.6: the floors', async () => {
     const { rows } = await report(workspace({ rootOverrides: { react: '19.1.0' } }), registry);
     expect(installed(rows)).toEqual(FLOORS);
@@ -234,11 +238,49 @@ describe('age row: a plain string override that the lockfile does not honour kee
     expect(installed(rows)).toEqual(FLOORS);
   });
 
-  it('a nested override the lockfile cannot be checked against is accepted (npm ci rejects an out-of-sync lockfile): the lockfile versions', async () => {
-    // postcss 8.4.31 would violate `next > postcss ^8.5.18`; the scan cannot see that, `npm ci` can.
+  it('a nested override the lockfile cannot be checked against is accepted (the scan cannot evaluate it): the lockfile versions', async () => {
+    // postcss 8.4.31 would violate `next > postcss ^8.5.18`; the scan cannot see that.
     const stale = { 'node_modules/next/node_modules/postcss': { version: '8.4.31' } };
     const { rows } = await report(workspace({ rootOverrides: NESTED_ROOT, lockExtra: stale }), registry);
     expect(installed(rows)).toEqual(LOCKED);
+  });
+
+  it('a stale nested root override in a workspace with an npm-generated lockfile shape: the row is the lockfile version', async () => {
+    // Shape written by `npm install` for root {workspaces:[cli]} with cli depending on debug 4.3.4 (ms 2.1.2 hoisted).
+    // The root override {debug:{ms:'2.1.3'}} was added afterwards; `npm ci` (npm 10.9.2 and 11.21.1) exits 0 and installs ms 2.1.2.
+    const lock = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'root', version: '1.0.0', workspaces: ['cli'] },
+        cli: { name: 'cli', version: '1.0.0', dependencies: { debug: '^4.3.0' } },
+        'node_modules/cli': { resolved: 'cli', link: true },
+        'node_modules/debug': { version: '4.3.4', dependencies: { ms: '2.1.2' } },
+        'node_modules/ms': { version: '2.1.2' },
+      },
+    });
+    const s: Scenario = {
+      files: {
+        'package.json': pkg({ name: 'root', version: '1.0.0', private: true, workspaces: ['cli'], overrides: { debug: { ms: '2.1.3' } } }),
+        'cli/package.json': pkg({ name: 'cli', version: '1.0.0', dependencies: { debug: '^4.3.0' } }),
+        'package-lock.json': lock,
+      },
+    };
+    const reg: Registry = { debug: knows('4.3.0', '4.3.4', '4.4.0') };
+    expect(installed((await report(s, reg)).rows)).toEqual({ debug: '4.3.4' });
+  });
+
+  it('an empty-string override value is no plain entry (it would read as `*` and reject a prerelease lockfile entry): the lockfile version', async () => {
+    const reg: Registry = { react: knows('19.2.6-rc.0', '19.2.6-rc.1') };
+    const s = (overrides: unknown): Scenario => ({
+      files: {
+        'package.json': pkg({ name: 'app', dependencies: { react: '^19.2.6-rc.0' }, overrides }),
+        'package-lock.json': v3({ 'node_modules/react': '19.2.6-rc.1' }),
+      },
+    });
+    expect(installed((await report(s({ react: '' }), reg)).rows)).toEqual({ react: '19.2.6-rc.1' });
+    expect(installed((await report(s({ react: '  ' }), reg)).rows)).toEqual({ react: '19.2.6-rc.1' });
+    // control: a plain `*` the prerelease entry does not satisfy (npm judges it without includePrerelease) keeps the floor
+    expect(installed((await report(s({ react: '*' }), reg)).rows)).toEqual({ react: '19.2.6-rc.0' });
   });
 
   it('a stale member override is no reason for the floor (it is ignored): the lockfile versions', async () => {
