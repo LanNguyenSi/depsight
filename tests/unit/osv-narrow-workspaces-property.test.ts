@@ -588,36 +588,35 @@ const declaredOutside = (model: Model) =>
 const memberLockedForRow = (model: Model, f: Facts, i: number): boolean =>
   memberLocked({ ...model, members: model.members.map((m) => ({ ...m, overrides: false })) }, f, i);
 
-// The row's reading of the folder below a member that the root lockfile does
-// not know (`nonMember`: a project of its own with a lockfile of its own, no
-// pattern of the model matches it): when the root lockfile proves membership at
-// all, the folder is a nested standalone project, installed by its own
-// lockfile, whose vite entry (7.3.7, in range of its `^7.0.0`) is a narrow
-// declaration. Otherwise it is unknown, as for the drop rule. (`npm ci` installs
-// such a folder from its own lockfile, or refuses when a pattern matches it
-// while the root lockfile lacks it: nothing is then installed.)
-const nonMemberReadAsStandalone = (model: Model, f: Facts) => model.nonMember && f.membersProven;
-
 // `dropOracle` with the row's reading of member `overrides` and of the folder
-// below a member that the root lockfile does not know.
+// below a member that the root lockfile does not know (`nonMember`: a project of
+// its own with a lockfile of its own, which no pattern of the model matches).
+// The row reads that folder as a nested standalone project, installed by its own
+// lockfile, when the root lockfile proves membership at all, else it is unknown
+// as for the drop rule. Its vite entry (7.3.7, in range of its `^7.0.0`) is a
+// narrow declaration, so it blocks nothing; and since the root declares vite in
+// every model, `rootNarrow` below already needs the membership proof, which is
+// the only condition left for the folder. (`npm ci` installs such a folder from
+// its own lockfile, or refuses when a pattern matches it while the root lockfile
+// lacks it: nothing is then installed.)
 function dropOracleForRow(model: Model, version: string): boolean {
   if (model.truncated || model.foreign || model.npmrc) return false;
   if (model.lock === 'v1' || model.lock === 'malformed' || model.lock === 'error') return false;
   const f = facts(model);
   if (!rootLocked(model, f)) return false;
   if (!model.members.every((_, i) => memberLockedForRow(model, f, i))) return false;
-  if (model.nonMember && !nonMemberReadAsStandalone(model, f)) return false;
   if (model.app && !appNarrow(model)) return false;
   if (!rootNarrow(model, f)) return false;
   if (!model.members.every((m, i) => !declaresVite(m) || memberNarrow(model, f, i))) return false;
   return !installedVite(model).has(version);
 }
 
-// `oracleAdditions` plus the nested standalone folder's version, which only the row reads.
+// `oracleAdditions` plus the nested standalone folder's version, which only the
+// row reads (the row's drop rule, which gates the raise, holds only with the membership proof).
 function oracleAdditionsForRow(model: Model): Set<string> {
   const out = oracleAdditions(model);
   if (model.truncated || model.foreign) return out;
-  if (nonMemberReadAsStandalone(model, facts(model))) out.add('7.3.7');
+  if (model.nonMember) out.add('7.3.7');
   return out;
 }
 
