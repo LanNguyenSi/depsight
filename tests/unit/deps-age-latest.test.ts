@@ -116,6 +116,7 @@ describe('classifyStatus: semver comparison', () => {
     ['file:../a', '3.0.0', 'UNKNOWN'],
     ['https://example.com/pkg-1.2.3.tgz', '3.0.0', 'UNKNOWN'],
     ['1.2.3.tgz', '3.0.0', 'UNKNOWN'],
+    ['2x', '3.0.0', 'UNKNOWN'], // digits glued to letters are no version
     ['latest', '3.0.0', 'UNKNOWN'],
   ];
   for (const [installed, latest, want] of cases) {
