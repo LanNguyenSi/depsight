@@ -399,18 +399,25 @@ no_tmp_left() {
 guard_dump() {
   { sed '/^-- PostgreSQL database dump complete/,$d' "$DUMP"; printf '%s\n' "$2"; printf -- '-- PostgreSQL database dump complete\n'; } > "$1"
 }
+# Optional arguments: $4 the line number the message must name ("first at line N,"),
+# $5 the LC_ALL the script runs under.
 guard_refused() {
+  local at="${4:-}" loc="${5:-}" envs=()
+  [ -z "$loc" ] || envs=("LC_ALL=$loc")
   guard_dump "$WORKDIR/guard.sql" "$2"
-  run_restore -- --yes "$WORKDIR/guard.sql"
-  if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && grep -q -F -- "$3" <<< "$out_text" && no_tmp_left; then
+  run_restore ${envs[@]+"${envs[@]}"} -- --yes "$WORKDIR/guard.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && grep -q -F -- "$3" <<< "$out_text" && no_tmp_left \
+    && { [ -z "$at" ] || grep -q -F -- "first at line $at," <<< "$out_text"; }; then
     pass "$1"
   else
     fail "$1: rc=$rc out=$out_text"
   fi
 }
 guard_accepted() {
+  local loc="${3:-}" envs=()
+  [ -z "$loc" ] || envs=("LC_ALL=$loc")
   guard_dump "$WORKDIR/guard.sql" "$2"
-  run_restore -- --yes --no-pre-backup "$WORKDIR/guard.sql"
+  run_restore ${envs[@]+"${envs[@]}"} -- --yes --no-pre-backup "$WORKDIR/guard.sql"
   if [ "$rc" -eq 0 ] && [ "$(tail -n 1 "$FAKE_PSQL_STDIN")" = "COMMIT;" ] \
     && sed -n '7,$p' "$FAKE_PSQL_STDIN" | sed '$d' | cmp -s - "$WORKDIR/guard.sql" && no_tmp_left; then
     pass "$1"
@@ -642,6 +649,91 @@ PGDUMP
     fail "(w5.3) trailing newline: rc=$rc"
   fi
 }
+
+# (w6) a keyword right after the end of a block comment, and after a carriage return (psql
+# ends a "--" comment at a carriage return, so what follows one starts a statement); the
+# message counts a carriage return as a line break, the guard line is line 52
+CR=$'\r'
+guard_refused "(w6.1) /**/COMMIT; is refused" '/**/COMMIT;' "$TX" 52
+guard_refused "(w6.2) SELECT 1; /* c */ COMMIT; is refused" 'SELECT 1; /* c */ COMMIT;' "$TX" 52
+guard_refused "(w6.3) */ COMMIT; on the line after the /* is refused" "/* c${NL}*/ COMMIT;" "$TX" 53
+guard_refused "(w6.4) a -- comment ended by a carriage return, then COMMIT; is refused" "-- c${CR}COMMIT;" "$TX" 53
+guard_refused "(w6.5) SELECT 1; -- x, carriage return, COMMIT; is refused" "SELECT 1; -- x${CR}COMMIT;" "$TX" 53
+guard_refused "(w6.6) a carriage return before ROLLBACK alone on a line is refused" "SELECT 1;${CR}ROLLBACK" "$TX" 53
+guard_refused "(w6.7) a carriage return before a \\gexec line is refused" "SELECT 1; -- c${CR}\\gexec" "$BS" 53
+guard_refused "(w6.8) a carriage return before \\q is refused" "-- c${CR}\\q" "$BS" 53
+guard_refused "(w6.9) a block comment then BEGIN; is refused" '/* x */ BEGIN;' "$TX" 52
+guard_refused "(w6.10) a block comment closed on the line of an END; is refused" "/* a${NL}b */ END;" "$TX" 53
+# a carriage return alone does not refuse a dump
+guard_accepted "(w6.11) a lone carriage return between plain statements is accepted" "SELECT 1;${CR}SELECT 2;"
+guard_accepted "(w6.12) a keyword-looking word after a carriage return that is not a statement is accepted" "-- the end${CR}-- of the commit and begin"
+
+# (w7) a grep that fails (here: a stub on PATH that exits 2 for one of the three greps)
+# refuses the dump instead of passing it; the same dump passes with the stub idle
+grep_stub_dir="$(mktemp -d "$WORKDIR/grepstub.XXXXXX")" || { echo "FAIL: could not create the grep stub directory"; exit 1; }
+real_grep="$(command -v grep)"
+cat > "$grep_stub_dir/grep" <<EOF4
+#!/usr/bin/env bash
+if [ -n "\${GREP_STUB_FAIL_MATCH:-}" ]; then
+  case "\$*" in *"\$GREP_STUB_FAIL_MATCH"*) exit 2 ;; esac
+fi
+exec "$real_grep" "\$@"
+EOF4
+chmod +x "$grep_stub_dir/grep"
+grep_stub_case() {
+  guard_dump "$WORKDIR/guard.sql" "$2"
+  run_restore PATH="$grep_stub_dir:$FAKE_BIN:$PATH" GREP_STUB_FAIL_MATCH="$3" -- --yes "$WORKDIR/guard.sql"
+  if [ "$4" = refused ]; then
+    if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && grep -q -F -- "could not check" <<< "$out_text" \
+      && grep -q -F -- "$5" <<< "$out_text" && no_tmp_left; then
+      pass "$1"
+    else
+      fail "$1: rc=$rc out=$out_text"
+    fi
+  elif [ "$rc" -eq 0 ] && no_tmp_left; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+grep_stub_case "(w7.1) the transaction control grep failing (exit 2) refuses the dump" 'SELECT 1;' '-i -E' refused "transaction control"
+grep_stub_case "(w7.2) the backslash command grep failing (exit 2) refuses the dump" 'SELECT 1;' '-a -n -E' refused "backslash command"
+grep_stub_case "(w7.3) the backslash filter grep failing (exit 2) refuses a dump that has a \\restrict line" '\restrict Ab1Cd2Ef3' '-a -v -E' refused "backslash command"
+grep_stub_case "(w7.4) the filter grep is not run without a backslash line, so its failure does not matter (control)" 'SELECT 1;' '-a -v -E' accepted ""
+grep_stub_case "(w7.5) the stub with no failure configured lets the dump through (control)" '\restrict Ab1Cd2Ef3' '' accepted ""
+
+# (w8) a NUL byte anywhere refuses the dump before anything else is looked at, and the
+# message names the line (counted in line feeds)
+nul_case() {
+  run_restore -- --yes "$WORKDIR/nul.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && [ ! -e "$FAKE_PSQL_STDIN" ] && no_tmp_left \
+    && grep -q -F -- "contains a NUL byte (first at line $2)" <<< "$out_text"; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+{ sed '/^-- PostgreSQL database dump complete/,$d' "$DUMP"; printf '\0\nCOMMIT;\n'; printf -- '-- PostgreSQL database dump complete\n'; } > "$WORKDIR/nul.sql"
+nul_case "(w8.1) a NUL on its own line before a COMMIT; line is refused as a NUL" 52
+{ cat "$DUMP"; printf '\0'; } > "$WORKDIR/nul.sql"
+nul_case "(w8.2) a NUL as the last byte of the dump is refused" 53
+{ sed '/^-- PostgreSQL database dump complete/,$d' "$DUMP"; printf -- '-- a\0b\nSELECT 1;\n'; printf -- '-- PostgreSQL database dump complete\n'; } > "$WORKDIR/nul.sql"
+nul_case "(w8.3) a NUL inside a comment line is refused" 52
+{ sed '/^-- PostgreSQL database dump complete/,$d' "$DUMP"; printf 'SELECT 1;\n\\q\n\0'; printf -- '\n-- PostgreSQL database dump complete\n'; } > "$WORKDIR/nul.sql"
+nul_case "(w8.4) the NUL is named before a later backslash command" 54
+
+# (w9) bytes, not characters: under a UTF-8 locale an invalid sequence on a line must not
+# hide it from the checks, nor refuse a COPY row that the byte-wise check accepts
+utf8_loc="$(locale -a 2> /dev/null | grep -i -E '^(C|en_US)\.utf-?8$' | sed -n 1p || true)"
+if [ -z "$utf8_loc" ]; then
+  echo "NOTE: (w9) skipped, no C.UTF-8 or en_US.UTF-8 locale in 'locale -a'"
+else
+  guard_refused "(w9.1) COMMIT with a -- comment holding an invalid UTF-8 byte is refused under $utf8_loc" $'COMMIT -- \xff' "$TX" 52 "$utf8_loc"
+  guard_refused "(w9.2) COMMIT; followed by an invalid UTF-8 byte is refused under $utf8_loc" $'COMMIT;\xff' "$TX" 52 "$utf8_loc"
+  guard_refused "(w9.3) a backslash command with an invalid UTF-8 byte is refused under $utf8_loc" $'\\q \xff' "$BS" 52 "$utf8_loc"
+  guard_refused "(w9.4) an invalid UTF-8 byte before a COMMIT; on the next line is refused under $utf8_loc" $'SELECT \xff;\nCOMMIT;' "$TX" 53 "$utf8_loc"
+  guard_accepted "(w9.5) a COPY row that starts with \\N and has an invalid UTF-8 byte is accepted under $utf8_loc" $'COPY t (a, b) FROM stdin;\n\\N\t\xff\n\\.' "$utf8_loc"
+fi
 
 # (x) the migrate failure message names the step, not only newer code
 {
