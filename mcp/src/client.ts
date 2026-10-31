@@ -142,6 +142,25 @@ export class DepsightClient {
   rescan(repoId: string): Promise<unknown> {
     return this.request("POST", "/api/scan", { body: { repoId } });
   }
+
+  /**
+   * Trigger a dependency-age scan for a single repository (`POST /api/deps`).
+   * The scan runs synchronously; the response carries the new scanId, which
+   * depsight_get_deps then reads back as the latest dependency scan.
+   * Requires a WRITE-scoped token (the route 403s a READ token; the message
+   * below names the missing scope) and spends the per-user deps rate limit
+   * (429 arrives as a RateLimitError through the shared request path).
+   */
+  async rescanDeps(repoId: string): Promise<unknown> {
+    try {
+      return await this.request("POST", "/api/deps", { body: { repoId } });
+    } catch (e) {
+      if (e instanceof HttpError && e.status === 403) {
+        e.message = `${e.message} (refreshing dependency data requires a WRITE-scoped token; this token is read-only)`;
+      }
+      throw e;
+    }
+  }
 }
 
 /** Used when a 429 carries neither a usable body value nor a Retry-After header. */
