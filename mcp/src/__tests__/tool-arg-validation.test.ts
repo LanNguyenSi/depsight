@@ -3,6 +3,7 @@ import { z } from "zod";
 import { registerCiTools } from "../tools/ci.js";
 import { registerCveTools } from "../tools/cves.js";
 import { registerDepsTools } from "../tools/deps.js";
+import { registerRescanTools } from "../tools/rescan.js";
 import type { DepsightClient } from "../client.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -147,6 +148,55 @@ describe("depsight_get_deps argument schema (required non-empty string)", () => 
     expect(json.properties.repoId.type).toBe("string");
     expect(json.properties.repoId.minLength).toBe(1);
     expect(json.required).toContain("repoId");
+  });
+});
+
+describe("depsight_rescan argument schema (optional target enum)", () => {
+  const schema = inputShape(registerRescanTools, "depsight_rescan");
+
+  it('accepts target "cves" and produces it unchanged', () => {
+    expect(schema.parse({ repoId: "r", target: "cves" }).target).toBe("cves");
+  });
+
+  it('accepts target "deps" and produces it unchanged', () => {
+    expect(schema.parse({ repoId: "r", target: "deps" }).target).toBe("deps");
+  });
+
+  it('accepts target "all" and produces it unchanged', () => {
+    expect(schema.parse({ repoId: "r", target: "all" }).target).toBe("all");
+  });
+
+  it("omits target entirely (optional; the handler defaults it to cves)", () => {
+    const parsed = schema.parse({ repoId: "r" });
+    expect(parsed.target).toBeUndefined();
+    expect("target" in parsed).toBe(false);
+  });
+
+  it('rejects target "dependencies" (not in the enum)', () => {
+    expect(() => schema.parse({ repoId: "r", target: "dependencies" })).toThrow();
+  });
+
+  it('rejects target "CVEs" (enum is case sensitive)', () => {
+    expect(() => schema.parse({ repoId: "r", target: "CVEs" })).toThrow();
+  });
+
+  it("rejects an empty-string target", () => {
+    expect(() => schema.parse({ repoId: "r", target: "" })).toThrow();
+  });
+
+  it("rejects a non-string target", () => {
+    expect(() => schema.parse({ repoId: "r", target: 3 })).toThrow();
+  });
+
+  it("publishes target as an optional string enum [cves, deps, all] and repoId as required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: { target: { type?: string; enum?: unknown[] } };
+      required?: string[];
+    };
+    expect(json.properties.target.type).toBe("string");
+    expect(json.properties.target.enum).toEqual(["cves", "deps", "all"]);
+    expect(json.required).toContain("repoId");
+    expect(json.required ?? []).not.toContain("target");
   });
 });
 
