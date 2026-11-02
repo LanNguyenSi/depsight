@@ -46,7 +46,10 @@ jobs:
           cache: 'npm'
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx prisma generate
+      # The real-npm oracle of the workspace proof needs the npm on PATH, no network
       - run: npm run test:coverage
+        env:
+          DEPSIGHT_NPM_ORACLE: '1'
 
   build:
     name: Build

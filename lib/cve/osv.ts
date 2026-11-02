@@ -821,21 +821,22 @@ function raisedNpmVersion(
  * member `dependencies` / `devDependencies` declaration, and removes a chain
  * entry only when `resolveNarrowNpm` proves its version is installed by no
  * package-lock.json the scan reads. Workspace membership comes from the root's
- * lockfile, never from the `workspaces` patterns: the lockfile (version 2 or
- * 3) records the root's `workspaces` value unchanged, has an entry for the
- * member's folder and a `node_modules/<member name>` `link: true` entry that
- * resolves to exactly that folder, and every link entry it has resolves to
- * such a member. A workspace is narrowed only when every dependency spec of
- * every read manifest and of every entry of a workspace root's lockfile is a
- * registry range, version, dist-tag or `npm:` alias: any other spec
- * (`file:`, `link:`, `workspace:`, a path, git, a URL, a tarball) can install a
- * folder as a project of its own with the lockfile shape of a member, so one
- * anywhere leaves every workspace root unproven. The rule does not close the
- * class of a folder that is no member: a folder the root lockfile still links
- * after it left the `workspaces` patterns, or after a `file:` spec became a
- * registry range, counts as a member; `npm ci` at the root installs it from the
- * root lockfile, but `npm install` inside that folder installs it on its own
- * without a lockfile. The proof needs everything to be
+ * lockfile: the lockfile (version 2 or 3) records the root's `workspaces`
+ * value unchanged, has an entry for the member's folder and a
+ * `node_modules/<member name>` `link: true` entry that resolves to exactly
+ * that folder, and every link entry it has resolves to such a linked folder.
+ * The `workspaces` patterns only demote: a linked folder they do not match (as
+ * npm matches them; a pattern of a syntax the matcher does not support demotes
+ * nothing) is no member, as when the folder left the patterns, or a `file:`
+ * spec became a registry range, and npm kept its link; `npm ci` at the root
+ * installs it from the root lockfile, but `npm install` inside that folder
+ * installs it on its own without a lockfile, so it keeps every chain entry. A
+ * workspace is narrowed only when every dependency spec of every read manifest
+ * and of every entry of a workspace root's lockfile is a registry range,
+ * version, dist-tag or `npm:` alias: any other spec (`file:`, `link:`,
+ * `workspace:`, a path, git, a URL, a tarball) can install a folder as a
+ * project of its own with the lockfile shape of a member, so one anywhere
+ * leaves every workspace root unproven. The proof needs everything to be
  * positively accounted for (conditions in manifest-discovery.ts): a complete
  * tree; no other package manager's lockfile (yarn.lock, pnpm-lock.yaml,
  * bun.lock, bun.lockb, npm-shrinkwrap.json, deno.lock), no `.npmrc`, no
