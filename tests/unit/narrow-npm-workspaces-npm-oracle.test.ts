@@ -14,11 +14,12 @@
  * of a folder that is no workspace any more; before the patterns were read,
  * the scan proved that folder.
  *
- * Opt-in, because it runs npm about 30 times (several seconds): set
- * DEPSIGHT_NPM_ORACLE=1. No network is needed (`--offline`, no registry
- * dependency, scoped package names no registry holds); the npm on PATH is used,
- * with an empty user config and a cache in the temp dir. Every npm run has a
- * timeout.
+ * It runs npm about 35 times (several seconds), so locally it is opt-in: set
+ * DEPSIGHT_NPM_ORACLE=1. With `CI` set it runs by default (the CI test job
+ * also sets DEPSIGHT_NPM_ORACLE=1 itself); DEPSIGHT_NPM_ORACLE=0 skips it
+ * anywhere. No network is needed (`--offline`, no registry dependency, scoped
+ * package names no registry holds); the npm on PATH is used, with an empty
+ * user config and a cache in the temp dir. Every npm run has a timeout.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -27,7 +28,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { provenWorkspaceFolders } from '@/lib/manifest-discovery';
 
-const ENABLED = process.env.DEPSIGHT_NPM_ORACLE === '1';
+const ENABLED = process.env.DEPSIGHT_NPM_ORACLE === '1' || (Boolean(process.env.CI) && process.env.DEPSIGHT_NPM_ORACLE !== '0');
 const NPM_TIMEOUT_MS = 60_000;
 
 type Json = Record<string, unknown>;
@@ -114,6 +115,19 @@ const SHAPES: Shape[] = [
       { '': root(['packages/*']), 'packages/a': member('a', { [n('t')]: '^1.0.0' }), 'tools/t': member('t', { [n('a')]: '^1.0.0' }) },
     ],
   },
+  {
+    // npm's minimatch stops reading a pattern after 200 sections and keeps the
+    // positive pattern the negation would remove: both folders stay members,
+    // the matcher reads the list as unsupported and demotes nothing
+    name: 'patterns past the minimatch recursion limit',
+    states: [
+      {
+        '': root([`${'**/'.repeat(250)}a`, `!**/${'*/**/'.repeat(201)}a`]),
+        'packages/a': member('a', { [n('b')]: '^1.0.0' }),
+        'x/b/a': member('b'),
+      },
+    ],
+  },
 ];
 
 function runNpm(cwd: string, env: NodeJS.ProcessEnv, args: string[]): string {
@@ -137,7 +151,7 @@ function linkedFolders(lock: Json, state: State): Set<string> {
   return out;
 }
 
-describe.skipIf(!ENABLED)('npm workspace proof against real npm (DEPSIGHT_NPM_ORACLE=1)', () => {
+describe.skipIf(!ENABLED)('npm workspace proof against real npm (DEPSIGHT_NPM_ORACLE=1, or CI)', () => {
   let base = '';
   let env: NodeJS.ProcessEnv = {};
   beforeAll(() => {

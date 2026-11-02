@@ -2023,6 +2023,15 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
 export const MAX_WORKSPACE_PATTERNS = 1000;
 export const MAX_WORKSPACE_PATTERN_CHARS = 1024;
 export const MAX_WORKSPACE_MATCH_STEPS = 10_000_000;
+// minimatch 10.2 stops matching a pattern after 200 globstar-delimited
+// sections (`maxGlobstarRecursion`) and then reports no match, so npm keeps
+// what such a pattern would have dropped. The matcher does not model that: a
+// pattern with more than `MAX_WORKSPACE_PATTERN_GLOBSTARS` globstar segments
+// counts as unsupported. Half the 200 sections: the sections of a pattern are
+// at most its globstars plus one (adjacent globstars collapse to one), so the
+// limit cannot bite below 200 globstars, and no real pattern has more than a
+// few.
+export const MAX_WORKSPACE_PATTERN_GLOBSTARS = 100;
 
 // The steps of matching work a pass may still spend (see above).
 interface PatternBudget {
@@ -2085,6 +2094,16 @@ function parseWorkspacePattern(raw: string): WorkspacePattern | null {
 function hasDotSegmentAfterGlobstar(segments: readonly string[]): boolean {
   const first = segments.indexOf(GLOBSTAR_SEGMENT);
   return first !== -1 && segments.slice(first + 1).some((s) => s.charCodeAt(0) === 46);
+}
+
+// Does a pattern have more globstar segments than the matcher reads
+// (`MAX_WORKSPACE_PATTERN_GLOBSTARS`)?
+function hasTooManyGlobstars(segments: readonly string[]): boolean {
+  let count = 0;
+  for (const segment of segments) {
+    if (segment === GLOBSTAR_SEGMENT && ++count > MAX_WORKSPACE_PATTERN_GLOBSTARS) return true;
+  }
+  return false;
 }
 
 // A path segment `*` or `**` may not swallow: `.` and `..` never, a segment
@@ -2185,12 +2204,16 @@ function patternMatchesPath(path: readonly string[], pattern: readonly string[],
  *     Case: glob matches the folder case-insensitively on macOS and Windows
  *     and its `ignore` does too; reading the patterns case-insensitively and
  *     the negations case-sensitively counts a folder as matched whenever npm
- *     on any platform does.
+ *     on any platform does, as far as case goes (the globstar limit below is
+ *     the one other way npm keeps a folder that the matcher drops, and that
+ *     is read as unsupported).
  *
  * Returns 'unsupported' when a pattern uses syntax this matcher does not
  * support (`parseWorkspacePattern`), when a pattern that does not negate has a
  * segment starting with a dot after a globstar (`hasDotSegmentAfterGlobstar`),
- * and when npm's own walk over its negations skips one that a later pattern
+ * when a pattern has more than `MAX_WORKSPACE_PATTERN_GLOBSTARS` globstars
+ * (minimatch stops matching at 200 sections and npm then keeps what the
+ * pattern would drop), and when npm's own walk over its negations skips one that a later pattern
  * matches (npm's loop steps past the entry after each one it drops, so the
  * result would rest on that); the caller then keeps every folder. Returns null
  * when `rootWorkspaces` is no shape npm reads or a bound is hit
@@ -2208,7 +2231,7 @@ export function matchWorkspacePatterns(
   const parsed: WorkspacePattern[] = [];
   for (const raw of list as string[]) {
     const pattern = parseWorkspacePattern(raw);
-    if (pattern === null || (!pattern.negate && hasDotSegmentAfterGlobstar(pattern.segments))) return 'unsupported';
+    if (pattern === null || hasTooManyGlobstars(pattern.segments) || (!pattern.negate && hasDotSegmentAfterGlobstar(pattern.segments))) return 'unsupported';
     parsed.push(pattern);
   }
   const budget: PatternBudget = { remaining: maxSteps };

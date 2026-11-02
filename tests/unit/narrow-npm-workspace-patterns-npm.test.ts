@@ -4,7 +4,9 @@
  * against npm itself: `@npmcli/map-workspaces` from the npm on PATH, the code
  * npm runs to list a root's workspaces, on a real folder tree in a temp dir.
  * No network is needed. The npm install is found through `npm root -g`; when
- * it cannot be found (no npm on PATH) the tests are skipped.
+ * it cannot be found (no npm on PATH) the tests are skipped locally; with
+ * `CI` set they fail instead, so a runner without that npm cannot pass
+ * without the comparison.
  *
  * The matcher may count more folders as matched than npm does (that only
  * keeps a proof the root lockfile already gives), never fewer. On the
@@ -17,7 +19,7 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { matchWorkspacePatterns } from '@/lib/manifest-discovery';
+import { MAX_WORKSPACE_PATTERN_CHARS, matchWorkspacePatterns } from '@/lib/manifest-discovery';
 
 type MapWorkspaces = (opts: { cwd: string; pkg: { workspaces: unknown } }) => Promise<Map<string, string>>;
 
@@ -33,6 +35,8 @@ function loadMapWorkspaces(): MapWorkspaces | null {
 }
 
 const mapWorkspaces = loadMapWorkspaces();
+// A CI runner always has npm; a missing map-workspaces there must not skip the comparison silently.
+const SKIP = mapWorkspaces === null && !process.env.CI;
 
 // Every folder holds a package.json with a name of its own (npm refuses two
 // workspaces of one name).
@@ -54,6 +58,15 @@ const FOLDERS = [
   'tools/t',
   'x-y/z.z',
   'packages/@s/a',
+  // upper-case folder names: no two folders differ in case only, and the
+  // first letter of a name is the upper-case form of no letter that starts a generated lower-case segment, so
+  // every platform reads a pattern of this tree alike
+  'Quux/Vim',
+  'Quux/Vex',
+  // dot segments below plain folders, so a dot segment sits between globstars
+  'dotx/.h/y',
+  'dotx/.h/y/z',
+  'dotx/k/.h',
 ];
 
 // A small deterministic PRNG (mulberry32), so a failure replays.
@@ -68,7 +81,7 @@ function prng(seed: number): () => number {
   };
 }
 
-const SEGMENTS = ['packages', 'apps', 'a', 'b', 'ab', 'group', 'inner', 'web', 'c', 'd', 'sub', 'tools', 't', 'x-y', 'z.z', '@s', '.hidden', '.dot', 'x', '*', '*', '**', '**', 'a*', '*b', '.*', '*.*', 'x-*', '***', 'a**', 'p*s', '*a*'];
+const SEGMENTS = ['packages', 'apps', 'a', 'b', 'ab', 'group', 'inner', 'web', 'c', 'd', 'sub', 'tools', 't', 'x-y', 'z.z', '@s', '.hidden', '.dot', 'x', 'Quux', 'Vim', 'Vex', 'dotx', '.h', '.h', 'k', 'y', '*', '*', '**', '**', 'a*', '*b', '.*', '*.*', 'x-*', '***', 'a**', 'p*s', '*a*'];
 const UNSUPPORTED = ['{a,b}', '?', '[ab]', 'a\\b', '#x', '..', '.', '', '+(a)', '@(a)', '!(a)', 'a b'];
 
 // A pattern of random segments, or one made from a folder of the tree with
@@ -91,7 +104,11 @@ function randomPattern(rand: () => number, allowUnsupported: boolean): string {
   return `${'!'.repeat(bangs)}${prefix}${parts.join('/')}${trailing}`;
 }
 
-describe.skipIf(mapWorkspaces === null)('matchWorkspacePatterns against npm (@npmcli/map-workspaces)', () => {
+describe.skipIf(SKIP)('matchWorkspacePatterns against npm (@npmcli/map-workspaces)', () => {
+  it('finds @npmcli/map-workspaces in the npm on PATH', () => {
+    expect(mapWorkspaces, 'npm root -g holds npm/node_modules/@npmcli/map-workspaces').not.toBeNull();
+  });
+
   // The tree sits two empty folders deep, so a `..` pattern (which npm walks
   // out of the root with) finds nothing but these folders.
   let base = '';
@@ -163,6 +180,13 @@ describe.skipIf(mapWorkspaces === null)('matchWorkspacePatterns against npm (@np
       ['**/**'],
       ['packages/**/', '!packages/**/**'],
       ['!packages/**', 'packages/.hidden'],
+      ['Quux/*'],
+      ['Quux/Vim'],
+      ['**/Vim', '!Quux/Vex'],
+      ['*/*', '!Quux/*'],
+      ['packages/.hidden/**', '!packages/*/*'],
+      ['dotx/.h/**'],
+      ['dotx/*/y', 'dotx/.h/y'],
     ];
     for (const workspaces of shapes) {
       const { want, got } = await compare(workspaces);
@@ -221,12 +245,32 @@ describe.skipIf(mapWorkspaces === null)('matchWorkspacePatterns against npm (@np
       compared++;
       // on a case-insensitive file system glob reports a literal segment in
       // the pattern's case (`B` for the folder `b`); the tree is lower case
-      const missing = [...want].map((f) => f.toLowerCase()).filter((f) => !got.has(f));
+      const gotLower = new Set([...got].map((f) => f.toLowerCase()));
+      const missing = [...want].map((f) => f.toLowerCase()).filter((f) => !gotLower.has(f));
       if (missing.length > 0) fewer.push(`${JSON.stringify(workspaces)} misses ${JSON.stringify(missing)}`);
     }
     expect(fewer.slice(0, 10)).toEqual([]);
     expect(compared).toBeGreaterThan(1000);
   }, 120_000);
+
+  it('a pattern past the globstar bound: npm keeps what the plain reading would drop, the matcher reads it as unsupported', async () => {
+    // minimatch 10.2 stops after 200 sections of a pattern and reports no
+    // match: the negation below cannot remove the positive pattern in npm,
+    // although its text matches the positive pattern
+    const positive = `${'**/'.repeat(250)}a`;
+    const negation = `!**/${'*/**/'.repeat(201)}a`;
+    expect(positive.length).toBeLessThanOrEqual(MAX_WORKSPACE_PATTERN_CHARS);
+    expect(negation.length).toBeLessThanOrEqual(MAX_WORKSPACE_PATTERN_CHARS);
+    const tree = ['a', 'packages/a', 'packages/group/c/d', 'Quux/Vim'];
+    for (const workspaces of [[positive], [positive, negation], [negation, positive], ['packages/*', negation, positive]]) {
+      expect(matchWorkspacePatterns(workspaces, tree), JSON.stringify(workspaces).slice(0, 40)).toBe('unsupported');
+    }
+    const kept = await compare([positive, negation]);
+    expect(kept.want.has('packages/a')).toBe(true);
+    // 200 sections are still read by npm: the negation removes the positive pattern
+    const underLimit = await compare([positive, `!**/${'*/**/'.repeat(199)}a`]);
+    expect(underLimit.want.size).toBe(0);
+  });
 
   it('the shapes it does not support, where npm reads them in a way the matcher does not model', async () => {
     // glob finds packages/.hidden for `**/.*`, then npm drops it (minimatch's
@@ -234,6 +278,11 @@ describe.skipIf(mapWorkspaces === null)('matchWorkspacePatterns against npm (@np
     const dotAfterGlobstar = await compare(['**/.*']);
     expect(dotAfterGlobstar.got).toBe('unsupported');
     expect(dotAfterGlobstar.want.has('packages/.hidden')).toBe(false);
+    // a dot segment between two globstars: npm reads it plainly, the matcher
+    // does not claim to (the dot segment is checked against the first globstar)
+    const betweenGlobstars = await compare(['dotx/**/.h/**']);
+    expect(betweenGlobstars.got).toBe('unsupported');
+    expect(betweenGlobstars.want.has('dotx/.h/y')).toBe(true);
     // npm drops the first `!packages/a`, steps past the second, and so keeps
     // excluding packages/a although `packages/a` comes after both
     const skipped = await compare(['packages/*', '!packages/a', '!packages/a', 'packages/a']);

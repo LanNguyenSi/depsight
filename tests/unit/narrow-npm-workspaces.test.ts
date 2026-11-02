@@ -42,6 +42,7 @@ import {
   MAX_SLOW_SPEC_CHARS,
   MAX_WORKSPACE_MATCH_STEPS,
   MAX_WORKSPACE_PATTERN_CHARS,
+  MAX_WORKSPACE_PATTERN_GLOBSTARS,
   MAX_WORKSPACE_PATTERNS,
   isRegistrySpec,
   matchWorkspacePatterns,
@@ -458,6 +459,23 @@ describe('matchWorkspacePatterns: what it reads', () => {
     expect(match(['packages/*', '!packages/B'])).toEqual(match(['packages/*']));
   });
 
+  it('case: a folder with upper-case letters is matched by a pattern of the same case and by a glob', () => {
+    const folders = ['packages/MyLib', 'Apps/web', 'packages/mylib2'];
+    expect(match(['packages/MyLib'], folders)).toEqual(['packages/MyLib']);
+    expect(match(['Apps/*'], folders)).toEqual(['Apps/web']);
+    expect(match(['packages/*'], folders)).toEqual(['packages/MyLib', 'packages/mylib2']);
+    expect(match(['**'], folders)).toEqual(sorted(folders));
+  });
+
+  it('a negation matches with `dot`, the text of a pattern is compared without it', () => {
+    // the text `packages/.hidden/**` is not matched by `!packages/*/*` (no dot:
+    // `*` does not read `.hidden`), so the pattern stays; the folder
+    // `packages/.hidden/x` is excluded (dot: `*` reads `x` and the folder)
+    expect(match(['packages/.hidden/**', '!packages/*/*'])).toEqual(['packages/.hidden']);
+    // the same negation with a plain folder name removes the pattern's text
+    expect(match(['packages/hidden/**', '!packages/*/*'], ['packages/hidden', 'packages/hidden/x'])).toEqual([]);
+  });
+
   it('the object form reads `packages`', () => {
     expect(match({ packages: ['packages/a'], nohoist: ['**'] })).toEqual(['packages/a']);
   });
@@ -485,13 +503,41 @@ describe('matchWorkspacePatterns: what it reads', () => {
       '.',
       '**/.*',
       'packages/**/.hidden',
+      // the dot segment is checked against the first globstar, a globstar after it does not hide it
+      'x/**/.h/**',
+      '**/.h/**',
+      '**/.h/*/**',
     ]) {
       expect(match([pattern]), JSON.stringify(pattern)).toBe('unsupported');
       expect(match(['packages/*', pattern]), JSON.stringify(pattern)).toBe('unsupported');
-      if (pattern !== '' && pattern !== '!' && !pattern.includes('.*') && !pattern.includes('.hidden')) {
+      if (pattern !== '' && pattern !== '!' && !pattern.includes('.*') && !pattern.includes('.h')) {
         expect(match(['packages/*', `!${pattern}`]), JSON.stringify(pattern)).toBe('unsupported');
       }
     }
+  });
+
+  it('a pattern with more globstars than the matcher reads is unsupported (minimatch stops at 200 sections)', () => {
+    expect(MAX_WORKSPACE_PATTERN_GLOBSTARS).toBe(100);
+    const withGlobstars = (count: number, tail = 'a') => `${'**/'.repeat(count)}${tail}`;
+    // a positive pattern: 100 globstars are read, 101 are not
+    expect(match([withGlobstars(MAX_WORKSPACE_PATTERN_GLOBSTARS)])).toEqual(['apps/a', 'packages/a']);
+    expect(match([withGlobstars(MAX_WORKSPACE_PATTERN_GLOBSTARS + 1)])).toBe('unsupported');
+    // a negation: the same bound
+    expect(match(['packages/*', `!${withGlobstars(MAX_WORKSPACE_PATTERN_GLOBSTARS)}`])).not.toBe('unsupported');
+    expect(match(['packages/*', `!${withGlobstars(MAX_WORKSPACE_PATTERN_GLOBSTARS + 1)}`])).toBe('unsupported');
+    // the count is per pattern: two patterns of 60 globstars are read
+    expect(match([withGlobstars(60), withGlobstars(60, 'b')])).not.toBe('unsupported');
+    // the shape that made the matcher drop members npm keeps: a positive with
+    // 250 globstars, a negation with 201 sections of `*/**` (npm's minimatch
+    // gives up on it and keeps the pattern, the plain reading removes it)
+    const positive = withGlobstars(250);
+    const negation = `!**/${'*/**/'.repeat(201)}a`;
+    for (const ws of [[positive, negation], [negation, positive], ['packages/*', negation, positive]]) {
+      expect(match(ws, ['packages/a', 'x/b/a'])).toBe('unsupported');
+    }
+    // through the proof: the folders stay proven
+    const lock = { lockfileVersion: 3, packages: { '': { workspaces: [positive, negation] }, 'packages/a': { name: 'a' }, 'node_modules/a': { resolved: 'packages/a', link: true } } };
+    expect(provenWorkspaceFolders([positive, negation], lock, [{ folder: 'packages/a', name: 'a' }])).toEqual(new Set(['packages/a']));
   });
 
   it("npm's walk over its negations: when it skips one that the pattern matches, the list is unsupported", () => {
@@ -523,7 +569,7 @@ describe('matchWorkspacePatterns: what it reads', () => {
   });
 
   it('adversarial patterns within the bounds end quickly', () => {
-    const star = Array.from({ length: MAX_WORKSPACE_PATTERNS }, (_, i) => `${'*a'.repeat(250)}/**/${'**/b/'.repeat(150)}${i}`.slice(0, MAX_WORKSPACE_PATTERN_CHARS));
+    const star = Array.from({ length: MAX_WORKSPACE_PATTERNS }, (_, i) => `${'*a'.repeat(250)}/**/${'**/b/'.repeat(MAX_WORKSPACE_PATTERN_GLOBSTARS - 2)}${i}`.slice(0, MAX_WORKSPACE_PATTERN_CHARS));
     const negations = star.map((p, i) => (i % 2 === 0 ? `!${p}`.slice(0, MAX_WORKSPACE_PATTERN_CHARS) : p));
     const folders = Array.from({ length: 100 }, (_, i) => `${'a'.repeat(120)}/${'b/'.repeat(14)}${i}`);
     const started = performance.now();
