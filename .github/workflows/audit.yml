@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
       - name: npm audit (full report, non-blocking)
         working-directory: ${{ matrix.working-directory }}
         # Bounded (step timeout plus an internal `timeout`) so a hanging
