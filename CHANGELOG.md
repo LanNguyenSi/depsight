@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The root `postcss` override now references the direct dependency (`"$postcss"`), so a dependency update of `postcss` no longer fails with `EOVERRIDE`; the security floor stays in the direct dependency range.
 - Dependency updates: `renovate.json` extends the shared `github>LanNguyenSi/renovate-config` preset (weekly grouped patch/minor pull requests, 7-day minimum release age, no automerge, majors only through the Dependency Dashboard).
 - **Runtime and CI move from Node 20 (EOL) to Node 24 LTS; `@types/node` ^24:** the `Dockerfile` (all four stages) and `Dockerfile.dev` use `node:24-slim`, every CI job and the audit workflow run on Node 24, and the root `@types/node` is `^24` (lockfile: `@types/node` 24.19.2 and its dependency `undici-types` 7.24.6 only). The published MCP package keeps `engines` `>=20` and `@types/node` `^20.0.0`, and its CI job now runs on Node 22 and 24. No source changes were needed. The `migrate` and `runner` images build and the runner reaches "Ready" on Node 24.22.2 with npm 11.19.1.
 
