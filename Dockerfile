@@ -1,5 +1,5 @@
 # ── Stage 1: Dependencies ────────────────────────────────────────────
-FROM node:20-slim AS deps
+FROM node:24-slim AS deps
 
 RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
@@ -10,7 +10,7 @@ RUN npm ci
 RUN npx prisma generate
 
 # ── Stage 2: Build ───────────────────────────────────────────────────
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
@@ -76,7 +76,7 @@ find /out/node_modules -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.
 rm -rf /out/node_modules/effect/src
 EOF
 
-FROM node:20-slim AS migrate
+FROM node:24-slim AS migrate
 
 RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
@@ -93,7 +93,7 @@ RUN CHECKPOINT_DISABLE=1 prisma --version
 USER node
 
 # ── Stage 3: Production ─────────────────────────────────────────────
-FROM node:20-slim AS runner
+FROM node:24-slim AS runner
 
 RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
