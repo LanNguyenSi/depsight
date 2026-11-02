@@ -23,6 +23,14 @@ npm run test:coverage # with coverage and the global and per-file coverage floor
 DEPSIGHT_TEST_DATABASE_URL=postgresql://dev:dev@localhost:5432/depsight_dev npx vitest run tests/unit/advisory-dedupe-db.test.ts
 ```
 
+`tests/unit/narrow-npm-workspaces-npm-oracle.test.ts` runs the real `npm` on PATH (about 30 runs of `npm install --package-lock-only --offline` and `npm query`, several seconds) to check the npm workspace proof against npm's own workspace list. It is skipped unless `DEPSIGHT_NPM_ORACLE=1`; it needs no network:
+
+```bash
+DEPSIGHT_NPM_ORACLE=1 npx vitest run tests/unit/narrow-npm-workspaces-npm-oracle.test.ts
+```
+
+`tests/unit/narrow-npm-workspace-patterns-npm.test.ts` loads `@npmcli/map-workspaces` from the npm on PATH (`npm root -g`) and runs by default; it is skipped when that npm cannot be found.
+
 ## Current Status
 
 - ✅ CI pipeline configured (.github/workflows/ci.yml)

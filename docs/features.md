@@ -91,10 +91,14 @@ A complete list of what depsight does today, beyond the headline value props in 
     `node_modules/<name>`, and only without `overrides` of its own); for a
     manifest with a `workspaces` key in or above it, a root lockfile that
     proves the membership: lockfileVersion 2 or 3, its root entry recording the
-    `workspaces` value of the root package.json unchanged (the patterns are
-    compared, never evaluated), an entry for each member's folder and a
-    `node_modules/<member name>` `link: true` entry resolving to exactly that
-    folder, every link entry of the lockfile resolving to such a member, every
+    `workspaces` value of the root package.json unchanged, an entry for each
+    member's folder and a `node_modules/<member name>` `link: true` entry
+    resolving to exactly that folder, the `workspaces` patterns matching the
+    folder as npm matches them (literal paths, `*`, `**`, `!` negation in npm's
+    order, a trailing slash, a leading `./`; the patterns only demote a linked
+    folder, never prove one, and a pattern of any other syntax demotes
+    nothing), every link entry of the lockfile resolving to such a linked
+    folder, every
     dependency spec the scan reads (the four dependency maps and every value
     inside `overrides`, and the spec after the package name in an `overrides`
     key such as `t@file:tools/t`, of every `package.json`, and the same maps of
@@ -104,12 +108,12 @@ A complete list of what depsight does today, beyond the headline value props in 
     install a folder as a project of its own with the lockfile shape of a
     member, so one anywhere leaves every workspace root unproven; the specs
     that go through `semver` share one budget of 2,000,000 characters, beyond
-    which no root is proven; this does
-    not close the case of a folder that is no member: a folder the root
-    lockfile still links after it left the `workspaces` patterns, or after a
-    `file:` spec became a registry range, counts as a member; `npm ci` at the
-    root installs it from the root lockfile, but `npm install` inside that folder
-    installs it on its own without a lockfile), and a
+    which no root is proven; a folder the root lockfile still links after it
+    left the `workspaces` patterns, or after a `file:` spec became a registry
+    range, is no member because the patterns do not match it: `npm ci` at the
+    root installs it from the root lockfile, but `npm install` inside that
+    folder installs it on its own without a lockfile, so it keeps the floor and
+    nothing in the repository drops), and a
     link that satisfies a declared range only where the member's package.json
     version (equal to its folder entry's) is in that range; in a workspace only
     `dependencies` and `devDependencies` declarations that resolve the root's

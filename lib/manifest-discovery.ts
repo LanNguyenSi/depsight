@@ -1264,15 +1264,17 @@ export async function fetchNpmManifests(
 // different places of one lockfile) it drops out of `resolved` and is queried
 // at a manifest floor that nothing may install.
 //
-// Workspace membership comes from the root's lockfile, never from the
-// `workspaces` patterns, which are not evaluated (`provenWorkspaceFolders`).
-// The lockfile (lockfileVersion 2 or 3) must record the root's `workspaces`
-// value unchanged in its root entry, as npm writes it (a lockfile written for
-// other patterns is stale). A manifest below the root is a member when the
-// lockfile has an entry for its folder and a `node_modules/<its name>` entry
-// with `link: true` that resolves to exactly that folder. Every `link` entry
-// of the lockfile must resolve to such a member folder, so no linked package
-// escapes the check. A member resolves a dependency from its own
+// Workspace membership comes from the root's lockfile; the `workspaces`
+// patterns only demote a folder the lockfile links (`provenWorkspaceFolders`,
+// `matchWorkspacePatterns`). The lockfile (lockfileVersion 2 or 3) must record
+// the root's `workspaces` value unchanged in its root entry, as npm writes it
+// (a lockfile written for other patterns is stale). A manifest below the root
+// is linked when the lockfile has an entry for its folder and a
+// `node_modules/<its name>` entry with `link: true` that resolves to exactly
+// that folder, and a member when it is linked and the patterns match its
+// folder as npm matches them. Every `link` entry of the lockfile must resolve
+// to such a linked folder, so no linked package escapes the check. A member
+// resolves a dependency from its own
 // `<folder>/node_modules/<name>` entry, else from the root's
 // `node_modules/<name>` (`workspaceMemberLockKey`); an entry under a folder
 // between the two is not followed.
@@ -1293,12 +1295,16 @@ export async function fetchNpmManifests(
 // share one character budget over the whole pass (`MAX_SLOW_SPEC_CHARS`);
 // beyond it no root is proven.
 //
-// This does not close the class of a folder that is no member. Residual: a
-// folder the root lockfile still links after it left the `workspaces`
-// patterns, or after a `file:` spec became a registry range, counts as a
-// member. `npm ci` at the root installs it from the root lockfile, but
-// `npm install` inside that folder installs it on its own without a lockfile.
-// npm itself keeps such a link in a lockfile it rewrites.
+// npm keeps the link of a folder in a lockfile it rewrites after the folder
+// left the `workspaces` patterns, or after a `file:` spec became a registry
+// range the link satisfies (measured with npm 11.21.1). `npm ci` at the root
+// installs such a folder from the root lockfile, but `npm install` inside it
+// installs it on its own without a lockfile, so the patterns demote it: the
+// patterns no longer match it, it is no member, and its governance is unknown
+// (it keeps the floor and is not locked, so nothing drops). A pattern of a
+// syntax the matcher does not support (`?`, brackets, braces, extglobs, `\`,
+// `.` or `..` segments, a dot segment after a globstar, among others) demotes
+// nothing, so such a folder still counts as a member there.
 //
 // What a removal guarantees: no under-reporting for an install that honours the
 // lockfiles, that is `npm ci`, or `npm install` on a lockfile that has no
@@ -1403,7 +1409,9 @@ export async function fetchNpmManifests(
 // manifest with a lockfileVersion 1 lockfile is not narrow and keeps the
 // baseline chain. No pattern is built from repository content: `workspaces` is
 // tested for presence and compared, as a whole value, with the copy in the
-// root's lockfile, never evaluated. Whatever a check cannot establish (a read or parse error, an
+// root's lockfile, and its patterns are read by a bounded hand matcher only to
+// demote a linked folder (`matchWorkspacePatterns`); no regular expression is
+// made from them. Whatever a check cannot establish (a read or parse error, an
 // unknown shape, an exhausted budget) keeps the baseline entry: under-reporting
 // is worse than over-reporting. "Installed nowhere" means in no package-lock.json
 // the scan reads; vendored, build and fixture directories are not read. A
@@ -2000,6 +2008,251 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
   return isPlainObject(link) && link.link === true && !link.extraneous && link.resolved === folder;
 }
 
+// ---- npm workspaces: the patterns, read only to demote a linked folder -----
+
+// Bounds on the `workspaces` patterns `matchWorkspacePatterns` reads: at most
+// `MAX_WORKSPACE_PATTERNS` patterns of at most `MAX_WORKSPACE_PATTERN_CHARS`
+// characters each, and at most `MAX_WORKSPACE_MATCH_STEPS` steps of matching
+// work in all (a step is one cell of `patternMatchesPath` or one character it
+// compares). A list past any bound is not read to the end and proves no member
+// (fail closed, like `MAX_LOCK_INDEX_NODES`). Real repositories list a handful
+// of short patterns; a thousand short patterns (half of them negations)
+// against the 100 manifests a scan reads (`MAX_MANIFESTS`) stay inside the
+// step budget, and the costliest shapes measured (long `*a*a...` segments,
+// hundreds of globstars) end in under 0.1 seconds.
+export const MAX_WORKSPACE_PATTERNS = 1000;
+export const MAX_WORKSPACE_PATTERN_CHARS = 1024;
+export const MAX_WORKSPACE_MATCH_STEPS = 10_000_000;
+
+// The steps of matching work a pass may still spend (see above).
+interface PatternBudget {
+  remaining: number;
+}
+
+// The characters a supported pattern may hold once npm has stripped its leading
+// `!` and `/` or `./` (see `parseWorkspacePattern`). Everything else (`?`,
+// `[...]`, `{a,b}`, extglobs such as `@(a)`, a `\` escape or Windows separator,
+// a leading `#`, spaces, any other character) is syntax this matcher does not
+// claim to read.
+const SUPPORTED_PATTERN_TEXT = /^[A-Za-z0-9._@*/-]+$/;
+// The segment of a parsed pattern that is a globstar.
+const GLOBSTAR_SEGMENT = '**';
+
+// One `workspaces` pattern as npm reads it (`@npmcli/map-workspaces`): `text`
+// is what is left after the leading `!` characters (an odd number of them
+// negates) and then a leading `/` or `./` (`/^\.?\/+/`) are stripped, the string
+// npm compares the other patterns against; `segments` is `text` split on `/`,
+// `**` a globstar, a trailing slash kept as an empty last segment. (minimatch
+// collapses adjacent globstars; `patternMatchesPath` reads two adjacent ones
+// as one.)
+interface WorkspacePattern {
+  negate: boolean;
+  text: string;
+  segments: string[];
+}
+
+// The pattern npm reads from `raw`, or null when it uses syntax this matcher
+// does not support: a character outside `SUPPORTED_PATTERN_TEXT`, nothing left
+// after the stripping, an empty segment other than one trailing slash, or a `.`
+// or `..` segment.
+function parseWorkspacePattern(raw: string): WorkspacePattern | null {
+  let bangs = 0;
+  while (bangs < raw.length && raw.charCodeAt(bangs) === 33) bangs++;
+  const text = raw.slice(bangs).replace(/^\.?\/+/, '');
+  if (!SUPPORTED_PATTERN_TEXT.test(text)) return null;
+  const parts = text.split('/');
+  const segments: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (part === '') {
+      if (i === parts.length - 1 && i > 0) {
+        segments.push('');
+        continue;
+      }
+      return null;
+    }
+    if (part === '.' || part === '..') return null;
+    segments.push(part);
+  }
+  return { negate: bangs % 2 === 1, text, segments };
+}
+
+// Does a segment starting with a dot follow a globstar (`**/.*`,
+// `packages/**/.hidden`)? glob finds such a folder, but npm then keeps only the
+// matches that minimatch's partial mode accepts, and that mode rejects a
+// folder whose hidden segment is where the pattern after the globstar matches.
+// The matcher does not model that, so such a pattern counts as unsupported.
+function hasDotSegmentAfterGlobstar(segments: readonly string[]): boolean {
+  const first = segments.indexOf(GLOBSTAR_SEGMENT);
+  return first !== -1 && segments.slice(first + 1).some((s) => s.charCodeAt(0) === 46);
+}
+
+// A path segment `*` or `**` may not swallow: `.` and `..` never, a segment
+// starting with a dot only with `dot`.
+function isHiddenSegment(segment: string, dot: boolean): boolean {
+  return segment === '.' || segment === '..' || (!dot && segment.charCodeAt(0) === 46);
+}
+
+// Does the path segment `segment` match the pattern segment `pattern` (not a
+// globstar), as minimatch reads it? A segment without `*` compares as text. A
+// run of `*` matches any characters of the one segment; a segment with a `*`
+// never matches an empty path segment, nor one starting with a dot unless the
+// pattern segment starts with a dot itself or `dot` is set (`.` and `..` never).
+function segmentMatches(segment: string, pattern: string, dot: boolean, budget: PatternBudget): boolean {
+  budget.remaining -= segment.length + 1;
+  if (!pattern.includes('*')) return segment === pattern;
+  if (segment === '' || segment === '.' || segment === '..') return false;
+  if (!dot && segment.charCodeAt(0) === 46 && pattern.charCodeAt(0) !== 46) return false;
+  // Two-pointer wildcard match: back up to the last `*` on a mismatch.
+  let s = 0;
+  let p = 0;
+  let star = -1;
+  let starFrom = 0;
+  while (s < segment.length) {
+    budget.remaining--;
+    if (p < pattern.length && pattern[p] === '*') {
+      star = p++;
+      starFrom = s;
+    } else if (p < pattern.length && pattern[p] === segment[s]) {
+      p++;
+      s++;
+    } else if (star !== -1) {
+      p = star + 1;
+      s = ++starFrom;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === '*') p++;
+  return p === pattern.length;
+}
+
+/**
+ * Pure: does the path `path` (its segments; a trailing slash is an empty last
+ * segment) match the pattern `pattern` (`WorkspacePattern.segments`), as
+ * minimatch 10 matches a pattern of the supported syntax? A segment matches by
+ * `segmentMatches`. A globstar matches zero or more whole segments, none of
+ * them hidden (`isHiddenSegment`); a globstar that ends the pattern must match
+ * at least one segment (`a/**` does not match `a`, but matches `a/`). When the
+ * pattern runs out, the path may still hold one empty last segment (`a/*`
+ * matches `a/b/`). `dot` lets `*` and `**` match a segment starting with a dot.
+ * Every cell charges `budget` one step; once it is spent the answer is false
+ * and the caller discards it.
+ */
+function patternMatchesPath(path: readonly string[], pattern: readonly string[], dot: boolean, budget: PatternBudget): boolean {
+  const fl = path.length;
+  // next[fi]: does the rest of the pattern after the current segment match path[fi..]?
+  let next: boolean[] = [];
+  for (let fi = 0; fi <= fl; fi++) next.push(fi === fl || (fi === fl - 1 && path[fi] === ''));
+  for (let pi = pattern.length - 1; pi >= 0; pi--) {
+    budget.remaining -= fl + 1;
+    if (budget.remaining < 0) return false;
+    const segment = pattern[pi];
+    const cur: boolean[] = new Array<boolean>(fl + 1).fill(false);
+    if (segment === GLOBSTAR_SEGMENT && pi === pattern.length - 1) {
+      for (let fi = fl - 1; fi >= 0; fi--) cur[fi] = !isHiddenSegment(path[fi], dot) && (fi === fl - 1 || cur[fi + 1]);
+    } else if (segment === GLOBSTAR_SEGMENT) {
+      cur[fl] = next[fl];
+      for (let fi = fl - 1; fi >= 0; fi--) cur[fi] = next[fi] || (!isHiddenSegment(path[fi], dot) && cur[fi + 1]);
+    } else {
+      for (let fi = 0; fi < fl; fi++) cur[fi] = next[fi + 1] && segmentMatches(path[fi], segment, dot, budget);
+    }
+    next = cur;
+  }
+  return next[0];
+}
+
+/**
+ * Pure: which of `folders` (relative to a workspace root, `/`-separated) do the
+ * root package.json's `workspaces` patterns match, as npm 11 maps workspaces
+ * (`@npmcli/map-workspaces` 5 with glob 13 and minimatch 10)? Only ever used to
+ * demote a folder, never to prove one (`provenWorkspaceFolders`).
+ *
+ *   - Each pattern is parsed as npm does (`parseWorkspacePattern`): leading `!`
+ *     characters (an odd number negates), a leading `/` or `./`, a trailing
+ *     slash (the folder is matched as a directory either way).
+ *   - In list order, a pattern that does not negate drops every earlier
+ *     negation its text matches (`!packages/b/**` before `packages/b/a` no
+ *     longer excludes `packages/b/a`); then every pattern whose text an
+ *     remaining negation matches is dropped (`packages/**` with `!packages/*`
+ *     leaves no pattern at all). Both compare the pattern's text as a path,
+ *     without `dot`, case-sensitive, as npm's minimatch calls do.
+ *   - A folder matches when a remaining pattern matches it as a directory
+ *     (`<folder>/` against the pattern with a trailing slash: `packages/**`
+ *     matches `packages` itself, `*` and `**` skip a segment starting with a
+ *     dot, the folder's case is ignored) and no remaining negation matches
+ *     `<folder>` or `<folder>/` with `dot` (as glob's `ignore`), case-sensitive.
+ *     Case: glob matches the folder case-insensitively on macOS and Windows
+ *     and its `ignore` does too; reading the patterns case-insensitively and
+ *     the negations case-sensitively counts a folder as matched whenever npm
+ *     on any platform does.
+ *
+ * Returns 'unsupported' when a pattern uses syntax this matcher does not
+ * support (`parseWorkspacePattern`), when a pattern that does not negate has a
+ * segment starting with a dot after a globstar (`hasDotSegmentAfterGlobstar`),
+ * and when npm's own walk over its negations skips one that a later pattern
+ * matches (npm's loop steps past the entry after each one it drops, so the
+ * result would rest on that); the caller then keeps every folder. Returns null
+ * when `rootWorkspaces` is no shape npm reads or a bound is hit
+ * (`MAX_WORKSPACE_PATTERNS`, `MAX_WORKSPACE_PATTERN_CHARS`, `maxSteps`):
+ * nothing can be said.
+ */
+export function matchWorkspacePatterns(
+  rootWorkspaces: unknown,
+  folders: Iterable<string>,
+  maxSteps: number = MAX_WORKSPACE_MATCH_STEPS,
+): Set<string> | 'unsupported' | null {
+  const list = Array.isArray(rootWorkspaces) ? rootWorkspaces : isPlainObject(rootWorkspaces) ? ownValue(rootWorkspaces, 'packages') : undefined;
+  if (!Array.isArray(list) || list.length > MAX_WORKSPACE_PATTERNS) return null;
+  if (!list.every((raw) => typeof raw === 'string' && raw.length <= MAX_WORKSPACE_PATTERN_CHARS)) return null;
+  const parsed: WorkspacePattern[] = [];
+  for (const raw of list as string[]) {
+    const pattern = parseWorkspacePattern(raw);
+    if (pattern === null || (!pattern.negate && hasDotSegmentAfterGlobstar(pattern.segments))) return 'unsupported';
+    parsed.push(pattern);
+  }
+  const budget: PatternBudget = { remaining: maxSteps };
+  const asPath = (pattern: WorkspacePattern) => pattern.text.split('/');
+  const positives: WorkspacePattern[] = [];
+  const negations: WorkspacePattern[] = [];
+  for (const pattern of parsed) {
+    if (pattern.negate) {
+      negations.push(pattern);
+      continue;
+    }
+    const path = asPath(pattern);
+    for (let i = 0; i < negations.length; i++) {
+      if (!patternMatchesPath(path, negations[i].segments, false, budget)) continue;
+      negations.splice(i, 1);
+      // npm's loop skips the entry that moved into this index
+      if (i < negations.length && patternMatchesPath(path, negations[i].segments, false, budget)) {
+        return budget.remaining < 0 ? null : 'unsupported';
+      }
+    }
+    if (budget.remaining < 0) return null;
+    positives.push(pattern);
+  }
+  const kept: WorkspacePattern[] = [];
+  for (const p of positives) {
+    const path = asPath(p);
+    if (!negations.some((n) => patternMatchesPath(path, n.segments, false, budget))) kept.push(p);
+    if (budget.remaining < 0) return null;
+  }
+  const lower = (segments: readonly string[]) => segments.map((s) => s.toLowerCase());
+  const globs = kept.map((p) => lower(p.segments[p.segments.length - 1] === '' ? p.segments : [...p.segments, '']));
+  const matched = new Set<string>();
+  for (const folder of folders) {
+    const segments = folder.split('/');
+    const asDir = [...segments, ''];
+    const dirLower = lower(asDir);
+    const positive = globs.some((g) => patternMatchesPath(dirLower, g, false, budget));
+    const negated = positive && negations.some((n) => patternMatchesPath(segments, n.segments, true, budget) || patternMatchesPath(asDir, n.segments, true, budget));
+    if (budget.remaining < 0) return null;
+    if (positive && !negated) matched.add(folder);
+  }
+  return matched;
+}
+
 /**
  * Pure: which candidate manifests below a workspace root does the root's own
  * lockfile prove to be members? `rootWorkspaces` is the root package.json's
@@ -2014,22 +2267,28 @@ function lockfileLinksFolder(packages: JsonObject, folder: string, name: unknown
  *     `{ packages: [...] }`) and the root entry's `workspaces` is the same value
  *     (compared as JSON text): npm copies it there when it writes the
  *     lockfile, so a lockfile written for other patterns is stale;
- *   - every entry with a `link` value is `link: true` and resolves to a proven
- *     folder, so no linked package is left unread (a link outside the root,
- *     to a folder whose package.json the scan did not read, or to the root);
- *   - at most `MAX_LOCK_INDEX_NODES` entries.
+ *   - every entry with a `link` value is `link: true` and resolves to a linked
+ *     candidate folder (below), so no linked package is left unread (a link
+ *     outside the root, to a folder whose package.json the scan did not read,
+ *     or to the root);
+ *   - at most `MAX_LOCK_INDEX_NODES` entries;
+ *   - the patterns are within the bounds of `matchWorkspacePatterns`.
  *
- * A candidate is proven when the lockfile has an entry for its folder and
- * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`).
- * The same lockfile shape records a folder that a `file:` or `link:` spec
- * installs as a project of its own, so the caller asks this only when every
- * spec the scan reads is a registry spec (`repoHasOnlyRegistrySpecs`). That
- * does not make a proven folder a member: a folder the root lockfile still
- * links after it left the `workspaces` patterns, or after a `file:` spec became
- * a registry range, is proven all the same. `npm ci` at the root installs it
- * from the root lockfile, but `npm install` inside that folder installs it on its
- * own without a lockfile. The patterns are never evaluated and nothing is
- * built from them.
+ * A candidate is linked when the lockfile has an entry for its folder and
+ * links `node_modules/<its name>` to exactly that folder (`lockfileLinksFolder`),
+ * and proven when it is linked and the `workspaces` patterns match its folder
+ * (`matchWorkspacePatterns`). The proof rests on the lockfile alone; the
+ * patterns only demote. npm keeps a folder's link in a lockfile it rewrites
+ * after the folder left the patterns, or after a `file:` spec became a
+ * registry range that the link satisfies, so a linked folder the patterns do
+ * not match is no member (`npm ci` at the root installs it from the root
+ * lockfile, but `npm install` inside that folder installs it on its own
+ * without a lockfile); its link still counts as read, so the members stay
+ * proven and the demoted folder's own governance is unknown. Patterns that use
+ * syntax the matcher does not support demote nothing. The same lockfile shape
+ * records a folder that a `file:` or `link:` spec installs as a project of its
+ * own, so the caller asks this only when every spec the scan reads is a
+ * registry spec (`repoHasOnlyRegistrySpecs`).
  */
 export function provenWorkspaceFolders(
   rootWorkspaces: unknown,
@@ -2044,18 +2303,19 @@ export function provenWorkspaceFolders(
   if (!isPlainObject(rootEntry)) return null;
   if (!hasWorkspacePatterns(rootWorkspaces)) return null;
   if (JSON.stringify(ownValue(rootEntry, 'workspaces')) !== JSON.stringify(rootWorkspaces)) return null;
-  const proven = new Set<string>();
+  const linked = new Set<string>();
   for (const { folder, name } of candidates) {
-    if (lockfileLinksFolder(packages, folder, name)) proven.add(folder);
+    if (lockfileLinksFolder(packages, folder, name)) linked.add(folder);
   }
   // Defensive: `repoHasOnlyRegistrySpecs` already bounds the entries of all root lockfiles; this per-lockfile bound keeps the function safe alone.
   let visited = 0;
   for (const entry of Object.values(packages)) {
     if (++visited > MAX_LOCK_INDEX_NODES) return null;
     if (!isPlainObject(entry) || !entry.link) continue;
-    if (entry.link !== true || !proven.has(entry.resolved as string)) return null;
+    if (entry.link !== true || !linked.has(entry.resolved as string)) return null;
   }
-  return proven;
+  const matched = matchWorkspacePatterns(rootWorkspaces, linked);
+  return matched === 'unsupported' ? linked : matched;
 }
 
 /**
@@ -2420,8 +2680,9 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // The folders of a workspace root's lockfile that some entry key names
   // (`addClaimedFolders`, bounded per key). A folder in this set is one the
   // root's lockfile knows something about: a member, an install below it. (A
-  // link entry resolves to a proven member, which has an entry key of its own:
-  // `provenMembersOf` is null for any other link.) Built once per root, only
+  // link entry resolves to a linked folder, a member or one the patterns
+  // demote, which has an entry key of its own: `provenMembersOf` is null for
+  // any other link.) Built once per root, only
   // when a nested standalone candidate asks.
   const claimedByRoot = new Map<string, Set<string>>();
   const claimedFoldersOf = (root: NarrowManifest, lock: NarrowLockfile): Set<string> => {
@@ -2442,7 +2703,8 @@ function computeNarrowNpm(inputs: NarrowNpmInputs): NarrowNpmResolution {
   // resolving to a proven member, registry specs only) and says nothing about
   // the manifest's folder (no entry for it or below it, no link to it; the
   // folder is not a member), and the manifest has an own lockfile that was read
-  // and parsed. The workspace patterns are never evaluated. `npm ci` installs
+  // and parsed. The workspace patterns are not read for this (they only demote
+  // a linked folder, whose entry key claims it). `npm ci` installs
   // such a folder from its own lockfile only when the patterns do not match it
   // (measured with npm 10.9.2 and 11.21.1: root `npm ci` leaves it alone,
   // `npm ci` inside it installs its own lockfile); when the patterns do match

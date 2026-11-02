@@ -1,12 +1,16 @@
 /**
  * Unit tests for the npm workspace part of the narrow lockfile override
- * (lib/manifest-discovery.ts, task b031d380): workspace membership comes from
- * the root package-lock.json (its folder and `link: true` entries), never from
- * the `workspaces` patterns.
+ * (lib/manifest-discovery.ts, tasks b031d380 and 15162e9f): workspace
+ * membership comes from the root package-lock.json (its folder and
+ * `link: true` entries); the `workspaces` patterns only demote a linked folder
+ * they do not match (`matchWorkspacePatterns`), they never prove one.
  *
  * Part 1 enumerates the truth tables of the two pure predicates
  * (`provenWorkspaceFolders`, `workspaceMemberLockKey`) against expectations
- * written as plain boolean logic, not by calling the code under test.
+ * written as plain boolean logic, not by calling the code under test, and the
+ * features of the pattern matcher (differential tests against npm itself are in
+ * narrow-npm-workspace-patterns-npm.test.ts, a real-npm oracle in
+ * narrow-npm-workspaces-npm-oracle.test.ts).
  *
  * Part 2 drives `resolveNarrowNpm` on a workspace fixture. The fixture is
  * droppable as it stands (the positive control pins that), and every negative
@@ -36,7 +40,11 @@ import {
   MAX_MEMBER_FOLDER_CHARS,
   MAX_MEMBER_FOLDER_SEGMENTS,
   MAX_SLOW_SPEC_CHARS,
+  MAX_WORKSPACE_MATCH_STEPS,
+  MAX_WORKSPACE_PATTERN_CHARS,
+  MAX_WORKSPACE_PATTERNS,
   isRegistrySpec,
+  matchWorkspacePatterns,
   provenWorkspaceFolders,
   registrySpecCount,
   repoHasOnlyRegistrySpecs,
@@ -52,7 +60,7 @@ type Packages = Record<string, unknown>;
 // ---- part 1: truth tables of the pure predicates ------------------------------
 
 describe('provenWorkspaceFolders: truth table', () => {
-  // Ten independent conditions. Each is true in the fixture and has one
+  // Eleven independent conditions. Each is true in the fixture and has one
   // representative way to be false; every combination is built and checked.
   const DIMENSIONS = [
     'lockShape', // lockfileVersion 3 with a packages map (false: lockfileVersion 1)
@@ -65,13 +73,14 @@ describe('provenWorkspaceFolders: truth table', () => {
     'noStrayLink', // no other link entry (false: a link to a folder that is no candidate)
     'cleanFolder', // the folder is a clean relative path (false: it holds a `..` segment)
     'linkableName', // the name addresses one node_modules entry (false: a name with `..`)
+    'patternsMatch', // the patterns match the folder (false: `apps/*`, recorded unchanged)
   ] as const;
   type Dim = (typeof DIMENSIONS)[number];
 
   const build = (on: Record<Dim, boolean>) => {
     const folder = on.cleanFolder ? 'packages/a' : 'packages/x/../a';
     const name = on.linkableName ? 'a' : '../a';
-    const pkgWorkspaces = on.patterns ? ['packages/*'] : [];
+    const pkgWorkspaces = !on.patterns ? [] : on.patternsMatch ? ['packages/*'] : ['apps/*'];
     const recorded = on.recorded ? pkgWorkspaces : ['packages/*', 'tools/*'];
     const packages: Packages = {};
     if (on.rootEntry) packages[''] = { name: 'root', workspaces: recorded };
@@ -87,16 +96,18 @@ describe('provenWorkspaceFolders: truth table', () => {
 
   // The expectation, from the rule alone: the lockfile proves something only
   // with a known shape, a root entry, an npm pattern value recorded unchanged,
-  // and every link entry resolving to a proven folder. The candidate is proven
-  // when its folder entry and its link resolving to it both exist and its
-  // folder and name are clean. Its own link counts as a link entry: when the
-  // candidate is not proven, that link resolves to an unproven folder.
+  // and every link entry resolving to a linked candidate folder. The candidate
+  // is linked when its folder entry and its link resolving to it both exist and
+  // its folder and name are clean, and proven when it is linked and the
+  // patterns match its folder. Its own link counts as a link entry: when the
+  // candidate is not linked, that link resolves to no linked folder; when it is
+  // linked but the patterns do not match, the link is still accounted for.
   const expected = (on: Record<Dim, boolean>): string[] | null => {
     const lockOk = on.lockShape && on.rootEntry && on.patterns && on.recorded;
-    const memberProven = on.folderEntry && on.linkEntry && on.linkResolves && on.cleanFolder && on.linkableName;
-    const linksAccounted = on.noStrayLink && (!on.linkEntry || memberProven);
+    const linked = on.folderEntry && on.linkEntry && on.linkResolves && on.cleanFolder && on.linkableName;
+    const linksAccounted = on.noStrayLink && (!on.linkEntry || linked);
     if (!lockOk || !linksAccounted) return null;
-    return memberProven ? [on.cleanFolder ? 'packages/a' : 'packages/x/../a'] : [];
+    return linked && on.patternsMatch ? [on.cleanFolder ? 'packages/a' : 'packages/x/../a'] : [];
   };
 
   const combos: Array<Record<Dim, boolean>> = [];
@@ -196,11 +207,29 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
     }
   });
 
-  it('the patterns are compared, never evaluated: a lockfile that records them proves its own entries', () => {
-    // packages/a does not match `apps/*`; only the lockfile's entries count.
+  it('the patterns only demote: a linked folder they do not match is not proven, and its link still counts as read', () => {
+    // packages/a does not match `apps/*`: not proven, but the lockfile still
+    // proves (an empty set, not null), so other members keep their proof
     const packages = okPackages();
     packages[''] = { name: 'root', workspaces: ['apps/*'] };
-    expect(prove(packages, { workspaces: ['apps/*'] })).toEqual(['packages/a']);
+    expect(prove(packages, { workspaces: ['apps/*'] })).toEqual([]);
+    packages['node_modules/w'] = { resolved: 'apps/w', link: true };
+    packages['apps/w'] = { name: 'w', version: '1.0.0' };
+    const both = provenWorkspaceFolders(['apps/*'], { lockfileVersion: 3, packages }, [
+      { folder: 'packages/a', name: 'a' },
+      { folder: 'apps/w', name: 'w' },
+    ]);
+    expect(both === null ? null : [...both]).toEqual(['apps/w']);
+  });
+
+  it('the patterns never prove: a folder they match without its link is not proven', () => {
+    const packages = okPackages();
+    delete packages['node_modules/a'];
+    expect(prove(packages)).toEqual([]);
+    const noEntry = okPackages();
+    delete noEntry['node_modules/a'];
+    delete noEntry['packages/a'];
+    expect(prove(noEntry)).toEqual([]);
   });
 
   it('the folder entry must be an object, not a link, not extraneous, and named like the member when it names one', () => {
@@ -295,10 +324,11 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
   });
 
   it('own properties only: __proto__ and constructor keys are not looked up on the prototype', () => {
-    const packages = JSON.parse('{"": {"workspaces": ["packages/*"]}, "__proto__": {"version": "1.0.0"}, "node_modules/__proto__": {"resolved": "__proto__", "link": true}}');
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }]) ?? [])]).toEqual(['__proto__']);
-    const missing = { '': { workspaces: ['packages/*'] } };
-    expect([...(provenWorkspaceFolders(['packages/*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }]) ?? ['x'])]).toEqual([]);
+    // `*` matches the top-level folders `__proto__` and `constructor`
+    const packages = JSON.parse('{"": {"workspaces": ["*"]}, "__proto__": {"version": "1.0.0"}, "node_modules/__proto__": {"resolved": "__proto__", "link": true}}');
+    expect([...(provenWorkspaceFolders(['*'], { lockfileVersion: 3, packages }, [{ folder: '__proto__', name: '__proto__' }]) ?? [])]).toEqual(['__proto__']);
+    const missing = { '': { workspaces: ['*'] } };
+    expect([...(provenWorkspaceFolders(['*'], { lockfileVersion: 3, packages: missing }, [{ folder: 'constructor', name: 'constructor' }]) ?? ['x'])]).toEqual([]);
   });
 
   it('a lockfile above the entry budget proves nothing', () => {
@@ -306,6 +336,245 @@ describe('provenWorkspaceFolders: the variants of each condition', () => {
     for (let i = 0; i <= MAX_LOCK_INDEX_NODES; i++) packages[`node_modules/f${i}`] = { version: '1.0.0' };
     expect(prove(packages)).toBeNull();
   });
+});
+
+describe('matchWorkspacePatterns: what it reads', () => {
+  const FOLDERS = [
+    'packages',
+    'packages/a',
+    'packages/ab',
+    'packages/b',
+    'packages/b/inner',
+    'packages/x-ui',
+    'packages/a/x',
+    'packages/a/b/x',
+    'packages/x',
+    'packages/.hidden',
+    'packages/.hidden/x',
+    'apps/a',
+    'tools/t',
+  ];
+  const match = (workspaces: unknown, folders: string[] = FOLDERS) => {
+    const got = matchWorkspacePatterns(workspaces, folders);
+    return got instanceof Set ? [...got].sort() : got;
+  };
+  const sorted = (list: string[]) => [...list].sort();
+
+  it('a literal folder path matches that folder only', () => {
+    expect(match(['packages/a'])).toEqual(['packages/a']);
+    expect(match(['packages/a', 'tools/t'])).toEqual(['packages/a', 'tools/t']);
+    expect(match(['packages'])).toEqual(['packages']);
+  });
+
+  it('`*` matches within one segment, never across a slash', () => {
+    expect(match(['packages/*'])).toEqual(sorted(['packages/a', 'packages/ab', 'packages/b', 'packages/x-ui', 'packages/x']));
+    expect(match(['packages/a*'])).toEqual(['packages/a', 'packages/ab']);
+    expect(match(['packages/*-ui'])).toEqual(['packages/x-ui']);
+    expect(match(['*/a'])).toEqual(['apps/a', 'packages/a']);
+    expect(match(['*'])).toEqual(['packages']);
+    // a run of stars is one star, also `***` (not a globstar)
+    expect(match(['packages/***'])).toEqual(match(['packages/*']));
+    expect(match(['packages/a**'])).toEqual(['packages/a', 'packages/ab']);
+  });
+
+  it('`**` matches zero or more segments, the folder before it included', () => {
+    expect(match(['packages/**'])).toEqual(sorted(FOLDERS.filter((f) => f.startsWith('packages') && !f.includes('.'))));
+    expect(match(['packages/**/x'])).toEqual(['packages/a/b/x', 'packages/a/x', 'packages/x']);
+    expect(match(['**'])).toEqual(sorted(FOLDERS.filter((f) => !f.includes('.'))));
+    expect(match(['**/a'])).toEqual(['apps/a', 'packages/a']);
+    expect(match(['packages/**/**/x'])).toEqual(match(['packages/**/x']));
+  });
+
+  it('`*` and `**` skip a segment starting with a dot; a pattern segment starting with a dot matches it', () => {
+    expect(match(['packages/*'])).not.toContain('packages/.hidden');
+    expect(match(['packages/**'])).not.toContain('packages/.hidden/x');
+    expect(match(['packages/.hidden'])).toEqual(['packages/.hidden']);
+    expect(match(['packages/.*'])).toEqual(['packages/.hidden']);
+    expect(match(['packages/.hidden/*'])).toEqual(['packages/.hidden/x']);
+  });
+
+  it('a trailing slash and a leading ./ or / change nothing', () => {
+    for (const ws of [['packages/*/'], ['./packages/*'], ['/packages/*'], ['.//packages/*'], ['///packages/*/']]) {
+      expect(match(ws), JSON.stringify(ws)).toEqual(match(['packages/*']));
+    }
+    expect(match(['packages/a/'])).toEqual(['packages/a']);
+    expect(match(['./tools/t/'])).toEqual(['tools/t']);
+  });
+
+  it('an odd number of leading ! negates, an even number does not', () => {
+    expect(match(['packages/*', '!packages/b'])).toEqual(sorted(['packages/a', 'packages/ab', 'packages/x-ui', 'packages/x']));
+    expect(match(['packages/*', '!!packages/b'])).toEqual(match(['packages/*']));
+    expect(match(['packages/*', '!!!packages/b'])).toEqual(match(['packages/*', '!packages/b']));
+    expect(match(['packages/*', '!./packages/b'])).toEqual(match(['packages/*', '!packages/b']));
+  });
+
+  it('a negation excludes the folder, with a trailing slash too; `/**` excludes what is below as well', () => {
+    expect(match(['packages/*', '!packages/b/'])).toEqual(match(['packages/*', '!packages/b']));
+    expect(match(['packages/**', '!packages/b/**'])).not.toContain('packages/b');
+    expect(match(['packages/**', '!packages/b/**'])).not.toContain('packages/b/inner');
+    expect(match(['packages/**', '!packages/b'])).toContain('packages/b/inner');
+    expect(match(['packages/**', '!packages/b'])).not.toContain('packages/b');
+    // a negation matches a segment starting with a dot (npm's ignore list reads with `dot`)
+    expect(match(['packages/.hidden', '!packages/*'])).toEqual([]);
+    // a negation with a dot segment after a globstar is read
+    expect(match(['packages/*', '!**/.x'])).toEqual(match(['packages/*']));
+  });
+
+  it('negation order: a later pattern drops an earlier negation its text matches, a negation drops the patterns whose text it matches', () => {
+    // a negation before the pattern still applies (the pattern's text `packages/*` does not match `packages/b`)
+    expect(match(['!packages/b', 'packages/*'])).toEqual(match(['packages/*', '!packages/b']));
+    // `packages/b` after the negation drops it
+    expect(match(['packages/*', '!packages/b', 'packages/b'])).toEqual(match(['packages/*']));
+    // `packages/b/inner` drops `!packages/b/**` entirely, so `packages/b` is back as well
+    expect(match(['packages/**', '!packages/b/**', 'packages/b/inner'])).toEqual(match(['packages/**']));
+    // `packages/a` drops `!packages/*`
+    expect(match(['packages/*', '!packages/*', 'packages/a'])).toEqual(match(['packages/*']));
+    // a negation that matches a pattern's text removes the pattern: nothing is left
+    expect(match(['packages/a', '!packages/*'])).toEqual([]);
+    expect(match(['packages/**', '!packages/*'])).toEqual([]);
+    // only negations: nothing matches
+    expect(match(['!packages/a'])).toEqual([]);
+    // a pattern's text is compared case-sensitively and without `dot`
+    expect(match(['packages/*', '!packages/B', 'packages/b'])).toEqual(match(['packages/*']));
+    expect(match(['packages/*', '!packages/*', 'packages/.hidden'])).toEqual([]);
+  });
+
+  it("a pattern's text is read as a path with its trailing slash, as npm's minimatch reads it", () => {
+    // `packages/b` does not match the negation `packages/b/` (the negation needs the slash): b stays excluded
+    expect(match(['packages/*', '!packages/b/', 'packages/b'])).not.toContain('packages/b');
+    // `packages/b/` matches the negation `packages/b` (a path may end in one slash): the negation is dropped
+    expect(match(['packages/*', '!packages/b', 'packages/b/'])).toContain('packages/b');
+    // `*` never matches an empty segment: `packages/` is not matched by `!packages/*`
+    expect(match(['packages/', '!packages/*'])).toEqual(['packages']);
+    // a globstar that ends the pattern needs a segment: `packages` does not match `!packages/**`, so the negation stays
+    expect(match(['!packages/**', 'packages'])).toEqual([]);
+    // a globstar that ends the pattern does not swallow a segment starting with a dot when it compares a text
+    expect(match(['!packages/**', 'packages/.hidden'])).toEqual([]);
+  });
+
+  it('case: a pattern matches a folder whatever its case, a negation only in its own case', () => {
+    expect(match(['Packages/*'])).toEqual(match(['packages/*']));
+    expect(match(['PACKAGES/A'])).toEqual(['packages/a']);
+    expect(match(['packages/*', '!packages/B'])).toEqual(match(['packages/*']));
+  });
+
+  it('the object form reads `packages`', () => {
+    expect(match({ packages: ['packages/a'], nohoist: ['**'] })).toEqual(['packages/a']);
+  });
+
+  it('syntax the matcher does not support: the whole list is unsupported', () => {
+    for (const pattern of [
+      'packages/{a,b}',
+      'packages/?',
+      'packages/[ab]',
+      'packages\\a',
+      '#packages/a',
+      'packages/../a',
+      '../packages/a',
+      'packages/./a',
+      'packages//a',
+      'packages/a//',
+      'packages/@(a)',
+      'packages/+(a)',
+      'packages/!(a)',
+      'packages/a b',
+      'packages/ä',
+      '',
+      '!',
+      './',
+      '.',
+      '**/.*',
+      'packages/**/.hidden',
+    ]) {
+      expect(match([pattern]), JSON.stringify(pattern)).toBe('unsupported');
+      expect(match(['packages/*', pattern]), JSON.stringify(pattern)).toBe('unsupported');
+      if (pattern !== '' && pattern !== '!' && !pattern.includes('.*') && !pattern.includes('.hidden')) {
+        expect(match(['packages/*', `!${pattern}`]), JSON.stringify(pattern)).toBe('unsupported');
+      }
+    }
+  });
+
+  it("npm's walk over its negations: when it skips one that the pattern matches, the list is unsupported", () => {
+    // npm drops the first `!packages/a` and steps past the second, so it keeps
+    // excluding packages/a; the matcher does not rest on that
+    expect(match(['packages/*', '!packages/a', '!packages/a', 'packages/a'])).toBe('unsupported');
+    // the entry it steps past does not match the pattern: read as usual
+    expect(match(['packages/*', '!packages/a', '!packages/b', 'packages/a'])).toEqual(sorted(['packages/a', 'packages/ab', 'packages/x-ui', 'packages/x']));
+  });
+
+  it('a value npm does not read is null', () => {
+    for (const value of [null, 'packages/*', 1, {}, { packages: 'packages/*' }, [1], ['packages/*', null]]) {
+      expect(match(value), JSON.stringify(value)).toBeNull();
+    }
+  });
+
+  it('bounds: the number of patterns, the length of a pattern, the matching work (null past each)', () => {
+    expect([MAX_WORKSPACE_PATTERNS, MAX_WORKSPACE_PATTERN_CHARS, MAX_WORKSPACE_MATCH_STEPS]).toEqual([1000, 1024, 10_000_000]);
+    const many = Array.from({ length: MAX_WORKSPACE_PATTERNS }, (_, i) => `packages/p${i}`);
+    expect(match(many, ['packages/p7'])).toEqual(['packages/p7']);
+    expect(match([...many, 'packages/a'], ['packages/a'])).toBeNull();
+    const long = `packages/${'a'.repeat(MAX_WORKSPACE_PATTERN_CHARS - 'packages/'.length)}`;
+    expect(long.length).toBe(MAX_WORKSPACE_PATTERN_CHARS);
+    expect(match([long], ['packages/a'])).toEqual([]);
+    expect(match([`${long}a`], ['packages/a'])).toBeNull();
+    // the step budget: the same question with too few steps left is null
+    expect(matchWorkspacePatterns(['packages/*'], ['packages/a'], 1_000)).toEqual(new Set(['packages/a']));
+    expect(matchWorkspacePatterns(['packages/*'], ['packages/a'], 3)).toBeNull();
+  });
+
+  it('adversarial patterns within the bounds end quickly', () => {
+    const star = Array.from({ length: MAX_WORKSPACE_PATTERNS }, (_, i) => `${'*a'.repeat(250)}/**/${'**/b/'.repeat(150)}${i}`.slice(0, MAX_WORKSPACE_PATTERN_CHARS));
+    const negations = star.map((p, i) => (i % 2 === 0 ? `!${p}`.slice(0, MAX_WORKSPACE_PATTERN_CHARS) : p));
+    const folders = Array.from({ length: 100 }, (_, i) => `${'a'.repeat(120)}/${'b/'.repeat(14)}${i}`);
+    const started = performance.now();
+    const got = matchWorkspacePatterns(negations, folders);
+    const elapsed = performance.now() - started;
+    expect(got).toBeNull(); // the step budget ran out
+    expect(elapsed).toBeLessThan(5_000);
+  }, 30_000);
+});
+
+describe('provenWorkspaceFolders: the lockfile proves, the patterns only demote', () => {
+  // One candidate, packages/a. Linked: the lockfile has its folder entry and
+  // links node_modules/a to it (not linked: no link entry). Patterns: they
+  // match the folder, do not match it, use syntax the matcher does not
+  // support, or exceed a bound; recorded unchanged in the root entry. Which
+  // input wins: a bound makes the root prove nothing (null); otherwise the
+  // lockfile decides the proof and the patterns can only take it away, and
+  // unsupported patterns take nothing away.
+  const PATTERNS = {
+    match: ['packages/*'],
+    noMatch: ['apps/*'],
+    unsupported: ['packages/{a,b}'],
+    overBound: Array.from({ length: MAX_WORKSPACE_PATTERNS + 1 }, () => 'packages/*'),
+  } as const;
+  const prove = (linked: boolean, patterns: readonly string[]) => {
+    const packages: Packages = {
+      '': { name: 'root', workspaces: patterns },
+      'packages/a': { name: 'a', version: '1.0.0' },
+    };
+    if (linked) packages['node_modules/a'] = { resolved: 'packages/a', link: true };
+    const got = provenWorkspaceFolders(patterns, { lockfileVersion: 3, packages }, [{ folder: 'packages/a', name: 'a' }]);
+    return got === null ? null : [...got];
+  };
+  const EXPECTED: Record<string, string[] | null> = {
+    'linked,match': ['packages/a'],
+    'linked,noMatch': [],
+    'linked,unsupported': ['packages/a'],
+    'linked,overBound': null,
+    'unlinked,match': [],
+    'unlinked,noMatch': [],
+    'unlinked,unsupported': [],
+    'unlinked,overBound': null,
+  };
+  for (const linked of [true, false]) {
+    for (const [kind, patterns] of Object.entries(PATTERNS)) {
+      const key = `${linked ? 'linked' : 'unlinked'},${kind}`;
+      it(key, () => {
+        expect(prove(linked, patterns)).toEqual(EXPECTED[key]);
+      });
+    }
+  }
 });
 
 describe('workspaceMemberLockKey: truth table', () => {
@@ -636,11 +905,15 @@ describe('workspace: declarations the drop proof does not vouch for keep the flo
   });
 
   it('a copy in a folder between the member and the root', () => {
+    // the patterns must match the nested member, or it is no member at all
+    const ws = [...WS, 'packages/group/*'];
     const m = {
       ...manifests(),
+      'package.json': pkg(rootManifest({ workspaces: ws })),
       'packages/group/c/package.json': pkg({ name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } }),
     };
     const l = withPackages((p) => {
+      p[''] = { name: 'root', workspaces: ws, devDependencies: ROOT_DEV };
       p['node_modules/c'] = { resolved: 'packages/group/c', link: true };
       p['packages/group/c'] = { name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } };
       p['packages/group/node_modules/vite'] = { version: '7.3.6' };
@@ -651,6 +924,7 @@ describe('workspace: declarations the drop proof does not vouch for keep the flo
     expect(r.dropSafe('vitest', '3.2.0')).toBe(false);
     // control: the same member without the copy between
     const l2 = withPackages((p) => {
+      p[''] = { name: 'root', workspaces: ws, devDependencies: ROOT_DEV };
       p['node_modules/c'] = { resolved: 'packages/group/c', link: true };
       p['packages/group/c'] = { name: 'c', version: '1.0.0', dependencies: { vite: '^7.0.0' } };
     });
@@ -1733,13 +2007,15 @@ describe('workspace: long slow-path ranges in root lockfiles stay within a time 
   });
 });
 
-describe('workspace: documented residuals, a folder the root lockfile still links counts as a member', () => {
+describe('workspace: a folder the root lockfile still links but the patterns do not match is no member', () => {
   // Both files below are the shape `npm install` writes (the registry versions
-  // are the ones the lockfile pins). `npm ci` at the root installs `tools/t`
-  // from the root lockfile, but `npm run` inside `tools/t` installs it on its
-  // own without a lockfile, which can bring the dropped floor. This is not
-  // closed. The tests assert today's behaviour, so a future closure flips them
-  // on purpose.
+  // are the ones the lockfile pins; narrow-npm-workspaces-npm-oracle.test.ts
+  // has npm write them). `npm ci` at the root installs `tools/t` from the root
+  // lockfile, but `npm install` inside `tools/t` installs it on its own without
+  // a lockfile, which can bring the dropped floor. The patterns do not match
+  // `tools/t`, so it is no member: its governance is unknown, so it is not
+  // locked, no name drops, and it adds nothing; the root and `packages/a` stay
+  // proven and keep their additions.
   const SCAN = (files: Files) => {
     const manifestFiles: Files = {};
     for (const [path, content] of Object.entries(files)) if (path.endsWith('package.json')) manifestFiles[path] = content;
@@ -1764,9 +2040,10 @@ describe('workspace: documented residuals, a folder the root lockfile still link
         'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
       }),
     });
-    // today: tools/t is a member, so the floor rb@1.0.0 counts as installed nowhere
-    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
-    expect(versions(r)).toEqual(['ra@1.2.0', 'rb@1.5.0']);
+    // tools/t is no member: the floor rb@1.0.0 stays, and so does every other floor
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(versions(r)).toEqual(['ra@1.2.0']);
   });
 
   it('residual: tools/t was a file: dependency, became a registry range, and npm kept the link', () => {
@@ -1783,6 +2060,51 @@ describe('workspace: documented residuals, a folder the root lockfile still link
         'node_modules/rb/node_modules/ra': { version: '2.1.0' },
         'node_modules/a': { resolved: 'packages/a', link: true },
         'node_modules/t': { resolved: 'tools/t', link: true },
+      }),
+    });
+    expect(r.dropSafe('rb', '1.0.0')).toBe(false);
+    expect(r.dropSafe('ra', '1.0.0')).toBe(false);
+    expect(versions(r)).toEqual(['ra@1.2.0']);
+  });
+
+  it('control: with tools/* still in the patterns, tools/t is a member and the floor drops', () => {
+    const ws = ['packages/*', 'tools/*'];
+    const r = SCAN({
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ws, dependencies: { ra: '^1.0.0' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'package-lock.json': lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ws, dependencies: { ra: '^1.0.0' } },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/ra': { version: '1.2.0' },
+        'node_modules/rb': { version: '1.5.0', dependencies: { ra: '^2.0.0' } },
+        'node_modules/rb/node_modules/ra': { version: '2.1.0' },
+        'node_modules/t': { resolved: 'tools/t', link: true },
+        'packages/a': { version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } },
+        'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
+      }),
+    });
+    expect(r.dropSafe('rb', '1.0.0')).toBe(true);
+    expect(versions(r)).toEqual(['ra@1.2.0', 'rb@1.5.0']);
+  });
+
+  it('a pattern the matcher does not support demotes nothing: the result is the one the lockfile alone gives', () => {
+    // `{packages,apps}/*` (braces) is not read, so tools/t stays proven as
+    // before the patterns were read
+    const ws = ['{packages,apps}/*'];
+    const r = SCAN({
+      'package.json': pkg({ name: 'root', version: '1.0.0', workspaces: ws, dependencies: { ra: '^1.0.0' } }),
+      'packages/a/package.json': pkg({ name: 'a', version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } }),
+      'tools/t/package.json': pkg({ name: 't', version: '1.0.0', dependencies: { rb: '^1.0.0' } }),
+      'package-lock.json': lockOf({
+        '': { name: 'root', version: '1.0.0', workspaces: ws, dependencies: { ra: '^1.0.0' } },
+        'node_modules/a': { resolved: 'packages/a', link: true },
+        'node_modules/ra': { version: '1.2.0' },
+        'node_modules/rb': { version: '1.5.0', dependencies: { ra: '^2.0.0' } },
+        'node_modules/rb/node_modules/ra': { version: '2.1.0' },
+        'node_modules/t': { resolved: 'tools/t', link: true },
+        'packages/a': { version: '1.0.0', dependencies: { ra: '^1.0.0', t: '^1.0.0' } },
+        'tools/t': { version: '1.0.0', dependencies: { rb: '^1.0.0' } },
       }),
     });
     expect(r.dropSafe('rb', '1.0.0')).toBe(true);
