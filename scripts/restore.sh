@@ -47,8 +47,9 @@
 #
 # How a load (steps 3 and 6) keeps the dump inside its transaction, without reading the
 # SQL itself (psql does that): the load first sets standard_conforming_strings and
-# client_encoding, so psql reads the same bytes the same way in both databases whatever
-# their database-level settings are. The dump runs in psql's restricted mode under a key
+# client_encoding, so psql reads the bytes before the dump's own SET lines the same way in
+# both databases whatever their database-level settings are (a RESET in the dump brings the
+# database default back; out of scope, see 'Not a security boundary'). The dump runs in psql's restricted mode under a key
 # this script draws from /dev/urandom (`\restrict <key>` before the dump, `\unrestrict
 # <key>` after it), so every psql meta-command in the dump (\connect, \q, \!, \i, \o,
 # \set ..., also in the middle of a line) is an error and stops psql. Before the dump psql

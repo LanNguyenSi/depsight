@@ -296,7 +296,7 @@ expect "skipped-COPY real load: repos" "$(sql "$DST_DB" 'SELECT count(*) FROM "R
 expect "skipped-COPY real load: tags files left" "$(tags_count)" 0
 rm -f "$WORK"/backups/depsight-*.sql
 
-echo "drill: database-level settings that change how psql reads the dump do not change the load"
+echo "drill: database-level settings do not change how psql reads the dump before its own SET lines"
 # A database whose default standard_conforming_strings is off (or client_encoding SJIS)
 # makes psql read the start of the dump, before the dump's own SET lines, differently
 # than in the scratch database (created from template0 with the defaults). The load sets
@@ -634,6 +634,9 @@ refused_mid d.stray-comment-mid '/* c */ ;'
 # a statement between the end of COPY data and the empty one ends the skip state: with
 # psql 16.15 this loads every table (BEGIN inside the open transaction only warns)
 loads_same_mid d.begin-semicolon-mid 'BEGIN;\n;'
+# a query result line that contains a COPY tag's text is not a tag: only a whole
+# line 'COPY <n>' counts (grep -x in restore.sh's COUNT_CMD)
+loads_same_mid d.copy-tag-text-in-result "SELECT 'x COPY 1' AS drill_tag_text;"
 refused d.stray-two-tables 'CREATE TABLE public.ps_a (v text);\nCREATE TABLE public.ps_b (v text);\nCOPY public.ps_a (v) FROM stdin;\na\n\\.\n;\nCOPY public.ps_b (v) FROM stdin;\nb\n\\.'
 refused d.stray-end-line 'CREATE TABLE public.st (v text);\nCOPY public.st (v) FROM stdin;\nx\n\\.\n;\nDELETE FROM public."Repo";\n\\.'
 refused d.end-line-in-string "CREATE TABLE public.sl (v text);\nINSERT INTO public.sl VALUES ('a\n\\\\.\nb');"
