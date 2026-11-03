@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Guard for the shipped compose files: the database of every file (production and dev)
-// must stay off the host's network stack, the edge network and external networks and
-// publish its port on loopback only (in the hosted file it also sits only on internal
-// networks), one variable must carry the production password, a routed service on several
-// networks must name the edge network for Traefik, and the dev and production stacks must
-// not share a project name or a database volume. It also
-// holds the operational invariants of the same files: every service rotates its logs and
-// has a memory limit, and the app has a healthcheck on /api/health that waits for the
-// database to be healthy.
+// must stay off the host's network stack, the edge network and external networks, use
+// only bridge-driver networks and publish its port on loopback only (in the hosted file
+// it also sits only on internal networks), one variable must carry the production
+// password, a routed service on several networks must name the edge network for Traefik,
+// and the dev and production stacks must not share a project name or a database volume.
+// It also holds the operational invariants of the same files: every service rotates its
+// logs and has a memory limit, and the app has a healthcheck on /api/health that waits
+// for the database to be healthy.
 //
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
@@ -33,6 +33,8 @@ const PROD_VOLUME = 'depsight_postgres_data';
 const EDGE_NETWORK = 'traefik-public';
 // Docker's own host network: a container attached to it shares the host's interfaces.
 const HOST_NETWORK = 'host';
+// The driver compose uses when a network sets none: a private bridge on the host.
+const BRIDGE_DRIVER = 'bridge';
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
 // Value fed through ${POSTGRES_PASSWORD} to see where it lands.
 const SENTINEL = 'sentinel-pw-0f3a';
@@ -193,6 +195,11 @@ function checkOperations(file, cfg) {
 //   not on a network named host           yes   yes  compose reuses an existing network by
 //                                                    name without external: true as well, so
 //                                                    name: host is the same request
+//   only on bridge-driver networks        yes   yes  macvlan or ipvlan give the container its
+//     (driver absent or bridge)                      own address on the host's LAN, overlay
+//                                                    and third-party drivers reach other
+//                                                    hosts; none of them needs a published
+//                                                    port, so the port rule never sees them
 //   only on internal: true networks       hosted no  requireInternalNetworks, see below
 //                                         only
 //   ports published on loopback only      yes   yes  any other address hands the database
@@ -220,6 +227,12 @@ function checkDbExposure(file, cfg, { requireInternalNetworks }) {
     if (network?.external) fail(file, `db is on the external network "${key}"`);
     if ((network?.name ?? key) === HOST_NETWORK) {
       fail(file, `db is on the network "${key}" named ${HOST_NETWORK} (host networking)`);
+    }
+    if (network?.driver && network.driver !== BRIDGE_DRIVER) {
+      fail(
+        file,
+        `db is on the network "${key}" with driver ${network.driver}, expected the ${BRIDGE_DRIVER} driver`,
+      );
     }
     if (requireInternalNetworks && network?.internal !== true) {
       fail(file, `db is on the network "${key}", which is not internal: true`);

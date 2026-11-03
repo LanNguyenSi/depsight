@@ -298,6 +298,26 @@ describeIfCompose('check-compose-isolation guard', () => {
       expect(result.stderr).not.toContain('external network');
     });
 
+    it('fails on a db on an ipvlan network, while an explicit bridge driver passes', () => {
+      const result = runGuard(
+        fixture(PLAIN, (text) =>
+          replaceFirst(
+            '      - "127.0.0.1:5432:5432"\n',
+            '      - "127.0.0.1:5432:5432"\n    networks:\n      - default\n      - lan\n',
+          )(
+            replaceFirst(
+              '\nvolumes:\n',
+              '\nnetworks:\n  default:\n    driver: bridge\n  lan:\n    driver: ipvlan\n    driver_opts:\n      parent: eth0\n\nvolumes:\n',
+            )(text),
+          ),
+        ),
+      );
+      expectFailure(result, PLAIN, [
+        'db is on the network "lan" with driver ipvlan, expected the bridge driver',
+      ]);
+      expect(result.stderr).not.toContain('"default" with driver');
+    });
+
     it('fails on a hosted file whose fallback is not the live password', () => {
       const result = runGuard(
         fixture(HOSTED, (text) =>
@@ -501,6 +521,20 @@ describeIfCompose('check-compose-isolation guard', () => {
         ),
       );
       expectFailure(result, DEV, ['db is on the edge network traefik-public']);
+      expect(result.stderr).not.toContain('external network');
+    });
+
+    it('fails on a dev db on a macvlan network, which needs no published port', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  lan:\n    driver: macvlan\n    driver_opts:\n      parent: eth0\n')(
+            replaceFirst(DEV_PORTS, '    networks:\n      - lan\n')(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db is on the network "lan" with driver macvlan, expected the bridge driver',
+      ]);
       expect(result.stderr).not.toContain('external network');
     });
 
