@@ -106,8 +106,8 @@ services:
   # this repo's Dockerfile: the Prisma CLI is the version package-lock.json pins, openssl and
   # the schema are baked in at build time, so the run fetches nothing and the service sits
   # only on db-internal, which has no route out. The image is built by the post_update hook
-  # itself (`run --build`): the relay runs pre_update on the tree from before the pull, a
-  # plain `docker compose build` skips a profile-scoped service, and `run` alone reuses an
+  # itself (`run --build`) after the pull: the relay's own build runs after the pull too but is a
+  # plain `docker compose build`, which skips a profile-scoped service, and `run` alone reuses an
   # existing image, so any earlier build would bake in the previous commit's schema.
   migrate:
     profiles: ["tools"]

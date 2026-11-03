@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Guard for the shipped compose files: the production database must stay off the
-// edge network (and, in the hosted file, only on internal networks), its port must
-// not be published on every interface, one variable must carry its password, a routed
-// service on several networks must name the edge network for Traefik, and the dev
-// and production stacks must not share a project name or a database volume. It also
-// holds the operational invariants of the same files: every service rotates its logs and
-// has a memory limit, and the app has a healthcheck on /api/health that waits for the
-// database to be healthy.
+// Guard for the shipped compose files: the database of every file (production and dev)
+// must stay off the host's network stack, the edge network and external networks, use
+// only bridge-driver networks and publish its port on loopback only (in the hosted file
+// it also sits only on internal networks), one variable must carry the production
+// password, a routed service on several networks must name the edge network for Traefik,
+// and the dev and production stacks must not share a project name or a database volume.
+// It also holds the operational invariants of the same files: every service rotates its
+// logs and has a memory limit, and the app has a healthcheck on /api/health that waits
+// for the database to be healthy.
 //
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
@@ -30,6 +31,10 @@ const PROD_PROJECT = 'depsight';
 const DEV_PROJECT = 'depsight-dev';
 const PROD_VOLUME = 'depsight_postgres_data';
 const EDGE_NETWORK = 'traefik-public';
+// Docker's own host network: a container attached to it shares the host's interfaces.
+const HOST_NETWORK = 'host';
+// The driver compose uses when a network sets none: a private bridge on the host.
+const BRIDGE_DRIVER = 'bridge';
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
 // Value fed through ${POSTGRES_PASSWORD} to see where it lands.
 const SENTINEL = 'sentinel-pw-0f3a';
@@ -169,6 +174,83 @@ function checkOperations(file, cfg) {
   if (!cfg.services.db.healthcheck) fail(file, 'db has no healthcheck');
 }
 
+// The compose-level rules against exposing the db service beyond its own stack. checkProd
+// runs them for both production files and the dev block below runs them for the dev file,
+// so a rule added here holds for every shipped file. checkProd's other db rules are not
+// here because they do not decide who can reach the database.
+//
+//   rule                                  prod  dev  why
+//   no network_mode                       yes   yes  host, container:<id> or service:<name>
+//                                                    puts the db on another network stack,
+//                                                    where the port rule never sees it
+//   not on the edge network               yes   yes  Traefik and every routed stack share
+//                                                    traefik-public; compose reuses a network
+//                                                    of that name even without external: true
+//   not on an external network            yes   yes  an external network (a default network
+//     (the default network included)                 declared external too) is shared with
+//                                                    other stacks, and compose passes the name
+//                                                    of the primary one as the container's
+//                                                    network mode, so one named host asks for
+//                                                    host networking
+//   not on a network named host           yes   yes  compose reuses an existing network by
+//                                                    name without external: true as well, so
+//                                                    name: host is the same request
+//   only on bridge-driver networks        yes   yes  macvlan or ipvlan give the container its
+//     (driver absent or bridge)                      own address on the host's LAN, overlay
+//                                                    and third-party drivers reach other
+//                                                    hosts; none of them needs a published
+//                                                    port, so the port rule never sees them
+//   only on internal: true networks       hosted no  requireInternalNetworks, see below
+//                                         only
+//   ports published on loopback only      yes   yes  any other address hands the database
+//                                                    and its credentials to the network
+//   (checkProd only) app and db share a   yes   no   not an exposure rule: it keeps the app
+//     network                                        working; the dev wiring is not checked
+//   (checkProd only) password from        yes   no   not an exposure rule; the dev file has
+//     ${POSTGRES_PASSWORD}                           fixed dev/dev credentials on purpose
+//   (checkOperations) db logging, memory  yes   no   operational limits of the production
+//     limit, healthcheck                             files, not about who reaches the db
+//
+// requireInternalNetworks differs per file: the hosted file's db publishes nothing and is
+// reached only by app and migrate over db-internal, so all its networks must be internal.
+// docker-compose.yml (no migrate service: the schema is applied from the host) and the dev
+// file (host-side Prisma and database tests, see CONTRIBUTING.md) publish the db port on
+// loopback, so their db stays on the default network, which is not internal.
+//
+// Not covered (known gaps, tracked separately): bridge driver_opts that turn off Docker's
+// direct-routing protection (gateway_mode_ipv4/ipv6 routed or nat-unprotected,
+// trusted_host_interfaces), a non-external network named after another stack's network
+// (compose joins it by name), services other than db, and daemon-level settings such as
+// allow-direct-routing or iptables false, which no compose file can show.
+function checkDbExposure(file, cfg, { requireInternalNetworks }) {
+  const db = cfg.services.db;
+  if (db.network_mode !== undefined) fail(file, `db sets network_mode "${db.network_mode}"`);
+  if (networkNames(cfg, db).includes(EDGE_NETWORK)) {
+    fail(file, `db is on the edge network ${EDGE_NETWORK}`);
+  }
+  for (const key of Object.keys(db.networks ?? { default: null })) {
+    const network = cfg.networks?.[key];
+    if (network?.external) fail(file, `db is on the external network "${key}"`);
+    if ((network?.name ?? key) === HOST_NETWORK) {
+      fail(file, `db is on the network "${key}" named ${HOST_NETWORK} (host networking)`);
+    }
+    if (network?.driver && network.driver !== BRIDGE_DRIVER) {
+      fail(
+        file,
+        `db is on the network "${key}" with driver ${network.driver}, expected the ${BRIDGE_DRIVER} driver`,
+      );
+    }
+    if (requireInternalNetworks && network?.internal !== true) {
+      fail(file, `db is on the network "${key}", which is not internal: true`);
+    }
+  }
+  for (const port of db.ports ?? []) {
+    if (!LOOPBACK.has(port.host_ip ?? '')) {
+      fail(file, `db publishes ${port.published}->${port.target} on ${port.host_ip || '0.0.0.0'}`);
+    }
+  }
+}
+
 function checkProd(file) {
   const cfg = resolveCompose(file);
   if (cfg.name !== PROD_PROJECT) {
@@ -186,26 +268,10 @@ function checkProd(file) {
     return cfg;
   }
 
-  if (db.network_mode !== undefined) fail(file, `db sets network_mode "${db.network_mode}"`);
-
-  const dbNets = networkNames(cfg, db);
-  if (dbNets.includes(EDGE_NETWORK)) fail(file, `db is on the edge network ${EDGE_NETWORK}`);
-  const dbKeys = Object.keys(db.networks ?? { default: null });
-  for (const key of dbKeys) {
-    if (cfg.networks?.[key]?.external) fail(file, `db is on the external network "${key}"`);
-    // The hosted file keeps db on networks with no route out.
-    if (file === HOSTED_FILE && cfg.networks?.[key]?.internal !== true) {
-      fail(file, `db is on the network "${key}", which is not internal: true`);
-    }
-  }
-  if (!dbNets.some((name) => networkNames(cfg, app).includes(name))) {
+  // The hosted file keeps db on networks with no route out.
+  checkDbExposure(file, cfg, { requireInternalNetworks: file === HOSTED_FILE });
+  if (!networkNames(cfg, db).some((name) => networkNames(cfg, app).includes(name))) {
     fail(file, 'app and db share no network');
-  }
-
-  for (const port of db.ports ?? []) {
-    if (!LOOPBACK.has(port.host_ip ?? '')) {
-      fail(file, `db publishes ${port.published}->${port.target} on ${port.host_ip || '0.0.0.0'}`);
-    }
   }
 
   // A routed service on several networks must tell Traefik to use the edge network, or
@@ -279,6 +345,10 @@ for (const unset of [null, '']) {
 const prod = PROD_FILES.map((file) => [file, checkProd(file)]);
 
 const dev = resolveCompose(DEV_FILE);
+// The dev database has fixed credentials (dev/dev), so it is held to the same exposure
+// rules as the production files' db (the table above checkDbExposure).
+if (!dev.services?.db) fail(DEV_FILE, 'needs a db service');
+else checkDbExposure(DEV_FILE, dev, { requireInternalNetworks: false });
 if (dev.name !== DEV_PROJECT) {
   fail(DEV_FILE, `project name is "${dev.name}", expected "${DEV_PROJECT}"`);
 }
