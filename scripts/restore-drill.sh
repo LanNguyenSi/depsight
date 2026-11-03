@@ -436,7 +436,13 @@ inject_mid() {
     tail -n "+$at" "$corpus_base"
   } > "$2"
 }
-refused_mid() { inject_mid "$2" "$WORK/case.sql"; run_refused "$1" "$WORK/case.sql"; }
+# refused_mid also asserts that the scratch load refused it (before the app is stopped),
+# not only the real load, which repeats the check
+refused_mid() {
+  inject_mid "$2" "$WORK/case.sql"
+  run_refused "$1" "$WORK/case.sql"
+  grep -q 'does not load into the scratch database' "$WORK/last.err" || fail "corpus $1: not refused by the scratch load: $(cat "$WORK/last.err")"
+}
 loads_same() { # loads_same <id> <format>
   inject "$2" "$WORK/case.sql"
   drill_restore "$DST_DB" "$WORK/case.sql" --no-pre-backup
