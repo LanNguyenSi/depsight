@@ -24,7 +24,7 @@
 // plugin and no running daemon. Exit 0 = all checks pass, 1 = a check failed, 2 = a file
 // could not be resolved.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -423,13 +423,19 @@ function checkDbService(file, cfg, raw, renamed, name, service, { requireInterna
     }
     // Compose joins a network of the resolved name that already exists, whoever created
     // it. External networks are rejected above. Any other network must be named
-    // `<project>_<key>` for whatever project the stack runs under: resolved with a
-    // sentinel -p, the name must follow it. A literal name:, even one equal to
-    // `<this file's project>_<key>`, stays the same under -p or COMPOSE_PROJECT_NAME and so
-    // is shared with every other stack that resolves to it.
+    // `<project>_<key>` for whatever project the stack runs under, so two conditions
+    // must both hold: the name is `<this file's project>_<key>`, and resolved with a
+    // sentinel -p it is `<sentinel>_<key>`. A literal name: fails one of the two: a name
+    // equal to `<this file's project>_<key>` fails the sentinel test (it stays the same
+    // under -p or COMPOSE_PROJECT_NAME), a name equal to `<sentinel>_<key>` fails the
+    // first, and either one is shared with every other stack that resolves to it.
     const followed = renamed.networks?.[key];
+    const own = `${cfg.name}_${key}`;
     const expected = `${SENTINEL_PROJECT}_${key}`;
-    if (!network?.external && (followed?.name ?? key) !== expected) {
+    if (
+      !network?.external &&
+      ((network?.name ?? key) !== own || (followed?.name ?? key) !== expected)
+    ) {
       fail(
         file,
         `${name} is on the network "${key}" named "${network?.name ?? key}", expected the project-scoped name "<project>_${key}" (a name that does not follow the project name -p or COMPOSE_PROJECT_NAME sets is shared with any other stack that resolves to it)`,
@@ -618,11 +624,15 @@ makefile.split('\n').forEach((line, index) => {
 // `make prod` runs docker compose without -f: a compose.yaml (preferred over
 // docker-compose.yml) or an override file (merged over it) in the repo root decides what
 // runs and is never read by this check. Failing on their presence is the choice over
-// checking them: no shipped target needs one.
-for (const name of IMPLICIT_COMPOSE_FILES) {
-  if (existsSync(join(dir, name))) {
+// checking them: no shipped target needs one. The directory is listed once and compared in
+// lower case, so a dangling symlink (existsSync would follow it and say no) and a case
+// variant (Docker-Compose.Override.yml, which compose merges on a case-insensitive
+// filesystem) are found too; the entry is named as found.
+const implicit = new Set(IMPLICIT_COMPOSE_FILES);
+for (const entry of readdirSync(dir)) {
+  if (implicit.has(entry.toLowerCase())) {
     fail(
-      name,
+      entry,
       'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
     );
   }

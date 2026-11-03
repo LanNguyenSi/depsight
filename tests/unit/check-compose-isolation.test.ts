@@ -714,6 +714,34 @@ describeIfCompose('check-compose-isolation guard', () => {
 
       // A `$$` is a literal dollar sign in compose: a name that holds one is a literal
       // name (reported by the name rule), not a variable reference.
+      // The sentinel project name is no name to hide behind: a literal name equal to it
+      // passes the -p test and must fail the test against the file's own project name.
+      it('fails on a dev network named after the sentinel project of the check', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: guard-sentinel-project_default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "guard-sentinel-project_default", expected the project-scoped name "<project>_default"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on a hosted db network named after the sentinel project of the check', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    name: guard-sentinel-project_db-internal',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on the network "db-internal" named "guard-sentinel-project_db-internal", expected the project-scoped name "<project>_db-internal"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
       it('reads $$ in a network name as a literal dollar sign, not as interpolation', () => {
         const result = runGuard(
           fixture(DEV_FILE, withNetworks('  default:\n    name: depsight-dev_$$default\n')),
@@ -1020,6 +1048,33 @@ describeIfCompose('check-compose-isolation guard', () => {
         ]);
         expect(result.stderr).toContain('compose isolation check failed (1)');
       });
+    });
+
+    describe('implicit compose files that a plain existence test misses', () => {
+      const message =
+        'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it';
+
+      it('fails on a dangling symlink named like an override file', () => {
+        const dir = fixture(null);
+        fs.symlinkSync(
+          '../deploy-only/override.yml',
+          path.join(dir, 'docker-compose.override.yml'),
+        );
+        const result = runGuard(dir);
+        expectFailure(result, 'docker-compose.override.yml', [message]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it.each(['Docker-Compose.Override.yml', 'COMPOSE.YAML'])(
+        'fails on the case variant %s and names it as found',
+        (name) => {
+          const dir = fixture(null);
+          fs.writeFileSync(path.join(dir, name), 'services: {}\n');
+          const result = runGuard(dir);
+          expectFailure(result, name, [message]);
+          expect(result.stderr).toContain('compose isolation check failed (1)');
+        },
+      );
     });
 
     describe("the caller's environment", () => {
