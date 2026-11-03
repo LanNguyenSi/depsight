@@ -244,7 +244,7 @@ expect "table of the newer schema" "$(sql "$DST_DB" "SELECT coalesce(to_regclass
 expect "repos after the second restore" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
 expect "public schema owner" "$(sql "$DST_DB" "SELECT nspowner::regrole FROM pg_namespace WHERE nspname = 'public'")" pg_database_owner
 pre="$(find "$WORK/backups" -maxdepth 1 -name 'depsight-*.sql')"
-[ -n "$pre" ] && [ "$(wc -l <<< "$pre" | tr -d ' ')" = 1 ] || fail "expected exactly one pre-restore dump"
+if [ -z "$pre" ] || [ "$(wc -l <<< "$pre" | tr -d ' ')" != 1 ]; then fail "expected exactly one pre-restore dump"; fi
 grep -q 'drill_extra' "$pre" || fail "the pre-restore dump lacks the newer table"
 grep -q 'written-after-dump' "$pre" || fail "the pre-restore dump lacks the row written after the dump"
 rm -f "$pre"
