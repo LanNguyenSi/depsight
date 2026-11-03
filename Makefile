@@ -1,4 +1,4 @@
-.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down backup restore build test lint format ci clean help
+.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down backup restore build test lint format ci clean help backup-selfhost restore-selfhost
 
 .DEFAULT_GOAL := help
 
