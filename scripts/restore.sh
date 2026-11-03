@@ -30,7 +30,9 @@
 #      a rollback, so any error or short input leaves the database with its old content,
 #   6. runs the migrate service (RESTORE_MIGRATE_SERVICE), so a dump that predates a
 #      schema change gets the columns and tables the deployed code expects, exactly
-#      as every deploy does (`prisma db push`),
+#      as every deploy does (`prisma db push`). The self-hosting docker-compose.yml has
+#      no migrate service: with RESTORE_MIGRATE_SERVICE empty this step is skipped and
+#      the script says so (apply the schema by hand, docs/configuration.md, Self-hosting),
 #   7. starts the app again, only after steps 5 and 6 succeeded. After a failure the
 #      app stays stopped on purpose: look at the error first.
 #
@@ -38,13 +40,16 @@
 # fails validation: restore into a fresh database with --no-pre-backup.
 #
 # Environment (all optional; the compose, db and dump variables are the ones of backup.sh):
-#   BACKUP_COMPOSE_FILE      compose file of the stack (default: <repo>/docker-compose.traefik.yml)
+#   BACKUP_COMPOSE_FILE      compose file of the stack (default: <repo>/docker-compose.traefik.yml,
+#                            the hosted file; docker-compose.yml for the self-hosting stack)
 #   BACKUP_DB_SERVICE        Postgres service (default: db)
 #   BACKUP_DIR               where the pre-restore dump and the private copy of the
 #                            dump go (default: <repo>/backups)
 #   RESTORE_APP_SERVICE      service stopped during the restore (default: app; empty = leave alone)
-#   RESTORE_MIGRATE_SERVICE  one-shot schema service run after the restore (default: migrate;
-#                            empty = skip, then run the schema step yourself before the app starts)
+#   RESTORE_MIGRATE_SERVICE  one-shot schema service run after the restore (default: migrate,
+#                            the hosted file's service; set it empty for the self-hosting
+#                            docker-compose.yml, which has none: the step is skipped, the
+#                            script says so, and you apply the schema yourself)
 #   PG_USER / PG_DB          database user and name (default: depsight / depsight)
 #
 # Exit codes:
@@ -342,6 +347,8 @@ if [ -n "$MIGRATE_SERVICE" ]; then
     [ "$stopped_app" -eq 0 ] || echo "restore: $APP_SERVICE is still stopped; after fixing it run: $start_hint" >&2
     exit 4
   fi
+else
+  echo "restore: RESTORE_MIGRATE_SERVICE is empty, schema step skipped; if the dump predates the deployed code, apply the schema yourself now (self-hosting: docs/configuration.md, Self-hosting, step 3) and restart the app"
 fi
 
 if [ "$stopped_app" -eq 1 ]; then

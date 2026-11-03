@@ -73,6 +73,8 @@ make prod          # Production build + start (docker-compose.yml, project depsi
 make prod-down     # Stop production containers
 make backup        # Dump the hosted Postgres into backups/, see Backup and restore
 make restore       # FILE=<dump.sql> CONFIRM=yes [NO_PRE_BACKUP=yes]: replace the database with a dump (destructive)
+make backup-selfhost   # Same as make backup, for the self-hosting docker-compose.yml
+make restore-selfhost  # Same as make restore, for docker-compose.yml, without the schema step (apply it afterwards)
 make test          # Run tests inside the dev container
 make lint          # Lint + type-check inside the dev container
 make format        # Prettier (write) inside the dev container
@@ -178,7 +180,7 @@ Between steps 1 and 3 new connections from the old app container fail, so do it 
 
 ### Backup and restore
 
-The database in the volume `depsight_postgres_data` is the only state depsight keeps that cannot be rebuilt (repositories, scan history, tokens, policies, webhook secrets). A deploy never backs it up and nothing in the compose files does it for you: **scheduling `scripts/backup.sh` on the host is the operator's job**, and a lost volume without a dump is a lost instance. The commands below are for the hosted `docker-compose.traefik.yml`, run in the checkout.
+The database in the volume `depsight_postgres_data` is the only state depsight keeps that cannot be rebuilt (repositories, scan history, tokens, policies, webhook secrets). A deploy never backs it up and nothing in the compose files does it for you: **scheduling `scripts/backup.sh` on the host is the operator's job**, and a lost volume without a dump is a lost instance. The commands below are for the hosted `docker-compose.traefik.yml`, run in the checkout; for the self-hosting `docker-compose.yml` see [Backup and restore on the self-hosting stack](#backup-and-restore-on-the-self-hosting-stack) below.
 
 **Backup.** `scripts/backup.sh` (or `make backup`) runs `pg_dump --clean --if-exists` inside the `db` service through `docker compose exec -T`, so the host needs no Postgres client and the database stays on its private network. It writes plain SQL (readable, restorable with `psql` alone, validated on the host with `grep`), to a hidden temp file first, checks that the file is at least 1 KiB and carries pg_dump's "dump complete" marker, and only then renames it to `backups/depsight-<YYYYMMDD_HHMMSS>.sql` (directory mode 700, files 600; a second run in the same second gets a `-<pid>` suffix instead of overwriting). The marker must be a line of its own, so the text inside a data row does not count. A failed run never leaves a truncated `.sql` behind. It refuses to start (exit 2) while the `db` service is not running in the compose file, so a cron job cannot report success for a stack that is down. Exit codes: 0 done, 1 dump failed or invalid, 2 refused (configuration, compose file, db not running), 3 dump kept but the off-host hook failed.
 
@@ -226,6 +228,21 @@ curl -fsS https://depsight.opentriologue.ai/api/health          # the app answer
 ```
 
 The dump is the schema and the data of the moment it was taken. Restoring a dump taken from newer code than the deployed code is not supported: the migrate step may refuse to drop what the older schema lacks (exit 4, app left stopped). The dump does not carry roles: it assumes the `depsight` role of the same compose file exists, as it does on a stack created from it.
+
+#### Backup and restore on the self-hosting stack
+
+The scripts default to the hosted file because `BACKUP_COMPOSE_FILE` falls back to `docker-compose.traefik.yml` and `RESTORE_MIGRATE_SERVICE` to `migrate`. The self-hosting `docker-compose.yml` has the same `db` and `app` services but no `migrate` service (the schema is applied by hand, step 3 of [Self-hosting](#self-hosting)), so name the file and drop the migrate step. Run these in the checkout, with the stack up (`make prod`):
+
+```bash
+make backup-selfhost                                           # same as: BACKUP_COMPOSE_FILE=docker-compose.yml scripts/backup.sh
+make restore-selfhost FILE=backups/depsight-<ts>.sql CONFIRM=yes   # same as the three lines below
+# BACKUP_COMPOSE_FILE=docker-compose.yml RESTORE_MIGRATE_SERVICE= \
+#   scripts/restore.sh --yes backups/depsight-<ts>.sql
+```
+
+Precedence, for each variable: a non-empty `BACKUP_COMPOSE_FILE` wins; unset and empty both give `docker-compose.traefik.yml`, so a self-hosting stack that forgets the variable stops with exit 2 (`service 'db' is not running in ...`) instead of touching another stack. `RESTORE_MIGRATE_SERVICE` has three states: unset runs `migrate`, a name runs that service, and an empty value skips the step (`restore.sh` prints `schema step skipped`). The crontab line for the nightly dump becomes `17 3 * * * cd /path/to/depsight && make backup-selfhost >> "$HOME/depsight-backup.log" 2>&1`. All other variables and rules above (`BACKUP_DIR`, retention, off-host hook, `.env` backup) are the same.
+
+Because the migrate step is skipped, `restore.sh` starts the app right after the restore without applying the schema. A dump taken from the same release needs nothing more. A dump that predates the deployed code lacks the newer tables and columns: right after the restore apply the schema as in step 3 of Self-hosting (`( set -a; . ./.env; set +a; DATABASE_URL="postgresql://depsight:${POSTGRES_PASSWORD}@localhost:5432/depsight" npm run db:push )`, which works because `docker-compose.yml` publishes Postgres on `127.0.0.1:5432`) and run `docker compose restart app`. Then check `GET /api/health`. The restore drill above runs the same configuration (empty `RESTORE_MIGRATE_SERVICE`) against a real Postgres.
 
 **Restore drill.** A backup that has never been restored is a hope. CI job `Restore drill (Postgres)` runs `scripts/restore-drill.sh` on every push and pull request: it applies the schema like the `migrate` service (the pre-push SQL, then `prisma db push`), seeds users and repositories, runs the real `scripts/backup.sh`, restores that dump with the real `scripts/restore.sh` into a freshly created second database, and asserts the row counts, the content of one row, a stored token and the Advisory unique index. It then repeats the restore into that populated database after adding a table with a foreign key into a dumped table (what a newer release does) and a row written after the dump, and asserts that both are gone, that the pre-restore dump holds them, that the schema owner is the one of a fresh database and that `prisma db push` finds the restored schema in sync; then a dump that fails half way, and a dump whose private copy disappears after validation, must each leave the database unchanged. The scripts see a `docker` shim that forwards their `docker compose exec -T db ...` calls to a scratch Postgres container, so every `pg_dump` and `psql` option the drill uses is the one in the scripts; if the options drift or the dump stops restoring, the job fails. The shim has no `app` or `migrate` service, so stopping the app, the migrate step and the start are covered by the stub tests (`scripts/restore.test.sh`) only. Run it by hand against a scratch container (never production) with `DRILL_PG_CONTAINER=<container> DRILL_DATABASE_URL=postgresql://depsight:<password>@127.0.0.1:<port>/depsight scripts/restore-drill.sh`. The drill proves the scripts work; it does not prove that your cron job runs, that the off-host copy arrives, or that you hold the `.env` key material. Do a real restore into a spare stack now and then, and check the age of the newest dump in `backups/`.
 

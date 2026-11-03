@@ -849,5 +849,52 @@ fi
   fi
 }
 
+# (sh1) skipping the migrate step is announced: an empty RESTORE_MIGRATE_SERVICE (the
+# self-hosting docker-compose.yml has no migrate service) prints the skip and the way
+# to apply the schema; unset (migrate runs) and a named service print nothing of it
+{
+  run_restore RESTORE_MIGRATE_SERVICE= -- --yes "$DUMP"; r1=$rc; o1="$out_text"
+  s1=0; grep -q "schema step skipped" <<< "$o1" && s1=1
+  d1=0; grep -q "restore: done" <<< "$o1" && d1=1
+  run_restore -- --yes "$DUMP"; r2=$rc; s2=0; grep -q "schema step skipped" <<< "$out_text" && s2=1
+  run_restore RESTORE_MIGRATE_SERVICE=schema -- --yes "$DUMP"; r3=$rc; s3=0; grep -q "schema step skipped" <<< "$out_text" && s3=1
+  if [ "$r1$r2$r3" = 000 ] && [ "$s1" = 1 ] && [ "$d1" = 1 ] && [ "$s2" = 0 ] && [ "$s3" = 0 ]; then
+    pass "(sh1) empty RESTORE_MIGRATE_SERVICE says the schema step was skipped; unset and a name do not"
+  else
+    fail "(sh1) skip message: rc=$r1/$r2/$r3 skipped=$s1/$s2/$s3 done=$d1"
+  fi
+}
+
+# (sh2) BACKUP_COMPOSE_FILE precedence, with the variable truly absent (run_restore
+# always sets it): unset and empty both fall back to the hosted docker-compose.traefik.yml
+# of the checkout, a non-empty value wins and is the file used for every compose call,
+# including the pre-restore dump that backup.sh takes
+{
+  REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+  SELF_COMPOSE="$WORKDIR/docker-compose.yml"; : > "$SELF_COMPOSE"
+  # run_compose_case <unset|empty|set>: sets rc, files_used (distinct -f arguments in the log)
+  run_compose_case() {
+    : > "$FAKE_DOCKER_LOG"; rm -f "$FAKE_PSQL_STDIN" "$FAKE_SCRIPT_PID"; rm -rf "$BACKUPS"
+    rc=0
+    case "$1" in
+      unset) env -u BACKUP_COMPOSE_FILE PATH="$FAKE_BIN:$PATH" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" "$RESTORE_SCRIPT" --yes "$DUMP" > "$WORKDIR/out" 2>&1 || rc=$? ;;
+      empty) env BACKUP_COMPOSE_FILE= PATH="$FAKE_BIN:$PATH" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" "$RESTORE_SCRIPT" --yes "$DUMP" > "$WORKDIR/out" 2>&1 || rc=$? ;;
+      set) env BACKUP_COMPOSE_FILE="$SELF_COMPOSE" PATH="$FAKE_BIN:$PATH" BACKUP_DIR="$BACKUPS" TMPDIR="$TMPD" "$RESTORE_SCRIPT" --yes "$DUMP" > "$WORKDIR/out" 2>&1 || rc=$? ;;
+    esac
+    files_used="$(grep -o -- 'compose -f [^ ]*' "$FAKE_DOCKER_LOG" | sort -u | tr '\n' ' ')"
+  }
+  run_compose_case unset; c1="$rc"; f1="$files_used"
+  run_compose_case empty; c2="$rc"; f2="$files_used"
+  run_compose_case set; c3="$rc"; f3="$files_used"
+  if [ "$c1$c2$c3" = 000 ] \
+    && [ "$f1" = "compose -f $REPO_DIR/docker-compose.traefik.yml " ] \
+    && [ "$f2" = "compose -f $REPO_DIR/docker-compose.traefik.yml " ] \
+    && [ "$f3" = "compose -f $SELF_COMPOSE " ]; then
+    pass "(sh2) BACKUP_COMPOSE_FILE: unset and empty use the hosted file, a set value wins everywhere"
+  else
+    fail "(sh2) compose file precedence: rc=$c1/$c2/$c3 used=[$f1] [$f2] [$f3]"
+  fi
+}
+
 echo "restore tests: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ]

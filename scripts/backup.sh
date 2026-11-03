@@ -19,7 +19,8 @@
 #          script never runs at all)
 #
 # Environment (all optional):
-#   BACKUP_COMPOSE_FILE  compose file of the stack (default: <repo>/docker-compose.traefik.yml)
+#   BACKUP_COMPOSE_FILE  compose file of the stack (default: <repo>/docker-compose.traefik.yml,
+#                        the hosted file; set docker-compose.yml for the self-hosting stack)
 #   BACKUP_DB_SERVICE    compose service that runs Postgres (default: db)
 #   BACKUP_DIR           target directory (default: <repo>/backups, mode 700). Inside
 #                        the checkout only <repo>/backups is allowed: it is in

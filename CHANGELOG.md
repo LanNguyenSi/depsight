@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Backup and restore on the self-hosting stack:** `scripts/backup.sh` and `scripts/restore.sh` defaulted to the hosted `docker-compose.traefik.yml` and a `migrate` service that `docker-compose.yml` does not have. New `make backup-selfhost` and `make restore-selfhost` run them against `docker-compose.yml` with the migrate step skipped; `restore.sh` now says when `RESTORE_MIGRATE_SERVICE` is empty and the schema step was skipped. `docs/configuration.md` documents the self-hosting commands and the schema step to run after restoring an older dump. The hosted targets and defaults are unchanged.
+
 ### Changed
 
 - The root `postcss` override now references the direct dependency (`"$postcss"`), so a dependency update of `postcss` no longer fails with `EOVERRIDE`; the security floor stays in the direct dependency range.
