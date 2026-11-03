@@ -72,8 +72,10 @@ case "$*" in
     [ "${FAKE_CREATEDB_FAIL:-0}" = 1 ] && { echo "ERROR:  permission denied to create database" >&2; exit 1; }
     exit 0 ;;
   *" exec "*psql*" -c DROP DATABASE "*)
-    [ "${FAKE_DROPDB_FAIL:-0}" = 1 ] && { echo "ERROR:  database is being accessed by other users" >&2; exit 1; }
+    [ "${FAKE_DROPDB_FAIL:-0}" = 1 ] && { echo "${FAKE_DROPDB_ERR:-ERROR:  database is being accessed by other users}" >&2; exit 1; }
     exit 0 ;;
+  *" exec -T db rm -f -- /tmp/restore-"*)
+    [ "${FAKE_RM_FAIL:-0}" = 1 ] && exit 1; exit 0 ;;
   *" exec "*psql*" -d restore_scratch_"*)
     cat > "$FAKE_SCRATCH_STDIN"
     [ "${FAKE_SCRATCH_FAIL:-0}" = 1 ] && { echo "ERROR:  scratch load failed" >&2; exit 3; }
@@ -133,33 +135,44 @@ scratch_dropped() {
   local s; s="$(scratch_of)"
   [ -n "$s" ] && grep -q -F -- "-c DROP DATABASE IF EXISTS \"$s\" WITH (FORCE)" "$FAKE_DOCKER_LOG"
 }
-# wrapped_ok <psql stdin> <body>: the stdin psql saw is BEGIN, the txid capture, \restrict
-# <key>, the schema reset, the body byte for byte, \unrestrict <same key>, ANALYZE of pg_am, the
-# transaction check, COMMIT and the \echo of the sentinel, nothing else. The body must end
-# in a newline.
+# wrapped_ok <psql stdin> <body> [<COPY lines>]: the stdin psql saw is the two SET lines,
+# BEGIN, the txid capture, \o <tags file>, \restrict <key>, the schema reset, the body byte
+# for byte, \unrestrict <same key>, ANALYZE of pg_am, the transaction check, \o, the count
+# of the tags file (then removed), the COPY count check against <COPY lines> (default 0),
+# COMMIT and the \echo of the sentinel, nothing else. The body must end in a newline.
 wrapped_ok() {
-  local f="$1" body="$2" n k
+  local f="$1" body="$2" copies="${3:-0}" n k t
   [ -s "$f" ] || return 1
   n="$(wc -l < "$body" | tr -d ' ')"
-  [ "$(sed -n 1p "$f")" = "BEGIN;" ] || return 1
-  [ "$(sed -n 2p "$f")" = 'SELECT pg_catalog.txid_current() AS restore_t0 \gset' ] || return 1
-  [[ "$(sed -n 3p "$f")" =~ ^\\restrict\ ([0-9a-f]{32})$ ]] || return 1
+  [ "$(sed -n 1p "$f")" = "SET standard_conforming_strings = on;" ] || return 1
+  [ "$(sed -n 2p "$f")" = "SET client_encoding = 'UTF8';" ] || return 1
+  [ "$(sed -n 3p "$f")" = "BEGIN;" ] || return 1
+  [ "$(sed -n 4p "$f")" = 'SELECT pg_catalog.txid_current() AS restore_t0 \gset' ] || return 1
+  [[ "$(sed -n 5p "$f")" =~ ^\\o\ (/tmp/restore-[0-9a-f]{16}\.tags)$ ]] || return 1
+  t="${BASH_REMATCH[1]}"
+  [[ "$(sed -n 6p "$f")" =~ ^\\restrict\ ([0-9a-f]{32})$ ]] || return 1
   k="${BASH_REMATCH[1]}"
-  [ "$(sed -n 4p "$f")" = "SET client_min_messages = warning;" ] \
-    && [ "$(sed -n 5p "$f")" = "DROP SCHEMA public CASCADE;" ] \
-    && [ "$(sed -n 6p "$f")" = "CREATE SCHEMA public AUTHORIZATION pg_database_owner;" ] \
-    && [ "$(sed -n 7p "$f")" = "COMMENT ON SCHEMA public IS 'standard public schema';" ] \
-    && [ "$(sed -n 8p "$f")" = "GRANT USAGE ON SCHEMA public TO PUBLIC;" ] || return 1
-  sed -n "9,$((8 + n))p" "$f" | cmp -s - "$body" || return 1
-  [ "$(sed -n "$((9 + n))p" "$f")" = "\\unrestrict $k" ] || return 1
-  [ "$(sed -n "$((10 + n))p" "$f")" = "ANALYZE pg_catalog.pg_am;" ] || return 1
-  case "$(sed -n "$((11 + n))p" "$f")" in
+  [ "$(sed -n 7p "$f")" = "SET client_min_messages = warning;" ] \
+    && [ "$(sed -n 8p "$f")" = "DROP SCHEMA public CASCADE;" ] \
+    && [ "$(sed -n 9p "$f")" = "CREATE SCHEMA public AUTHORIZATION pg_database_owner;" ] \
+    && [ "$(sed -n 10p "$f")" = "COMMENT ON SCHEMA public IS 'standard public schema';" ] \
+    && [ "$(sed -n 11p "$f")" = "GRANT USAGE ON SCHEMA public TO PUBLIC;" ] || return 1
+  sed -n "12,$((11 + n))p" "$f" | cmp -s - "$body" || return 1
+  [ "$(sed -n "$((12 + n))p" "$f")" = "\\unrestrict $k" ] || return 1
+  [ "$(sed -n "$((13 + n))p" "$f")" = "ANALYZE pg_catalog.pg_am;" ] || return 1
+  case "$(sed -n "$((14 + n))p" "$f")" in
     "SELECT pg_catalog.int4("*" FROM (SELECT pg_catalog.int4(pg_catalog.txid_current() OPERATOR(pg_catalog.<>) :restore_t0) AS n) AS restore_check;") ;;
     *) return 1 ;;
   esac
-  [ "$(sed -n "$((12 + n))p" "$f")" = "COMMIT;" ] || return 1
-  [[ "$(sed -n "$((13 + n))p" "$f")" =~ ^\\echo\ restore:\ committed\ [0-9a-f]{32}$ ]] || return 1
-  [ "$(wc -l < "$f" | tr -d ' ')" = "$((13 + n))" ]
+  [ "$(sed -n "$((15 + n))p" "$f")" = '\o' ] || return 1
+  [ "$(sed -n "$((16 + n))p" "$f")" = "\\set restore_copies \`LC_ALL=C grep -c -x -E 'COPY [0-9]+' $t; rm -f $t\`" ] || return 1
+  case "$(sed -n "$((17 + n))p" "$f")" in
+    "SELECT pg_catalog.int4("*"the dump has $copies lines of the form COPY"*" FROM (SELECT pg_catalog.int4(:'restore_copies' OPERATOR(pg_catalog.<>) '$copies') AS n) AS restore_check;") ;;
+    *) return 1 ;;
+  esac
+  [ "$(sed -n "$((18 + n))p" "$f")" = "COMMIT;" ] || return 1
+  [[ "$(sed -n "$((19 + n))p" "$f")" =~ ^\\echo\ restore:\ committed\ [0-9a-f]{32}$ ]] || return 1
+  [ "$(wc -l < "$f" | tr -d ' ')" = "$((19 + n))" ]
 }
 # the real load and the scratch load read the same bytes
 same_loads() { [ -s "$FAKE_SCRATCH_STDIN" ] && cmp -s "$FAKE_SCRATCH_STDIN" "$FAKE_PSQL_STDIN"; }
@@ -175,11 +188,11 @@ no_tmp_left() {
   run_restore -- --yes "$DUMP"
   l_ver="$(line_of ' psql --version')"; l_create="$(line_of '-c CREATE DATABASE "restore_scratch_')"
   l_scratch="$(line_of '-d restore_scratch_[0-9a-f]*$')"; l_drop="$(line_of '-c DROP DATABASE IF EXISTS "restore_scratch_')"
-  l_stop="$(line_of ' stop app')"; l_dump="$(line_of ' pg_dump ')"; l_psql="$(line_of 'psql -X -v ON_ERROR_STOP=1 -q -U depsight -d depsight$')"
+  l_stop="$(line_of ' stop app')"; l_dump="$(line_of ' pg_dump ')"; l_psql="$(line_of 'psql -X -v ON_ERROR_STOP=1 -U depsight -d depsight$')"
   l_mig="$(line_of ' run --rm -T --build migrate')"; l_start="$(line_of ' start app')"
   order="$l_ver,$l_create,$l_scratch,$l_drop,$l_stop,$l_dump,$l_psql,$l_mig,$l_start"
   if [ "$rc" -eq 0 ] && stdin_is_reset_plus_dump \
-    && grep -q "exec -T db psql -X -v ON_ERROR_STOP=1 -q -U depsight -d depsight$" "$FAKE_DOCKER_LOG" \
+    && grep -q "exec -T db psql -X -v ON_ERROR_STOP=1 -U depsight -d depsight$" "$FAKE_DOCKER_LOG" \
     && ! grep -q -- "--single-transaction" "$FAKE_DOCKER_LOG" && no_tmp_left && scratch_dropped \
     && [ -n "$l_ver" ] && [ "$l_ver" -lt "$l_create" ] && [ "$l_create" -lt "$l_scratch" ] && [ "$l_scratch" -lt "$l_drop" ] \
     && [ "$l_drop" -lt "$l_stop" ] && [ "$l_stop" -lt "$l_dump" ] && [ "$l_dump" -lt "$l_psql" ] && [ "$l_psql" -lt "$l_mig" ] && [ "$l_mig" -lt "$l_start" ] \
@@ -390,13 +403,13 @@ no_tmp_left() {
 }
 
 # (u) the private copy itself becomes unreadable after the scratch load: the real psql gets
-# BEGIN, the txid capture, \restrict and the reset but no COMMIT, the script exits 1 and says
+# the SET lines, BEGIN, the txid capture, \o, \restrict and the reset but no COMMIT, the script exits 1 and says
 # nothing was committed. The glob is under BACKUP_DIR because that is where the copy lives;
 # it only removes something if restore.sh really put the copy there (proven again by (v2)).
 {
   run_restore FAKE_STOP_RM="$BACKUPS/restore-dump.*" -- --yes "$DUMP"
   if [ "$rc" -eq 1 ] && [ -e "$FAKE_PSQL_STDIN" ] && ! grep -q 'COMMIT' "$FAKE_PSQL_STDIN" \
-    && [ "$(sed -n 1p "$FAKE_PSQL_STDIN")" = "BEGIN;" ] && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = 8 ] \
+    && [ "$(sed -n 3p "$FAKE_PSQL_STDIN")" = "BEGIN;" ] && [ "$(wc -l < "$FAKE_PSQL_STDIN" | tr -d ' ')" = 11 ] \
     && grep -q "nothing was committed" <<< "$out_text" && ! grep -q "rolled back" <<< "$out_text" \
     && ! grep -q ' run ' "$FAKE_DOCKER_LOG" && ! grep -q ' start app' "$FAKE_DOCKER_LOG" \
     && grep -q "still stopped" <<< "$out_text" && no_tmp_left; then
@@ -486,9 +499,9 @@ scratch_refused "(sc.2) psql exits 0 in the scratch database without the sentine
 {
   # names, key and token: random per run, of the expected form, the same name in CREATE,
   # load and DROP, the same key in \restrict and \unrestrict, none of it from the dump
-  run_restore -- --yes --no-pre-backup "$DUMP"; r1=$rc; s1="$(scratch_of)"; k1="$(sed -n 3p "$FAKE_PSQL_STDIN")"; t1="$(tail -n 1 "$FAKE_PSQL_STDIN")"
+  run_restore -- --yes --no-pre-backup "$DUMP"; r1=$rc; s1="$(scratch_of)"; k1="$(sed -n 6p "$FAKE_PSQL_STDIN")"; t1="$(tail -n 1 "$FAKE_PSQL_STDIN")"
   sc_load=0; grep -q -- "-d $s1\$" "$FAKE_DOCKER_LOG" && sc_load=1
-  run_restore -- --yes --no-pre-backup "$DUMP"; r2=$rc; s2="$(scratch_of)"; k2="$(sed -n 3p "$FAKE_PSQL_STDIN")"; t2="$(tail -n 1 "$FAKE_PSQL_STDIN")"
+  run_restore -- --yes --no-pre-backup "$DUMP"; r2=$rc; s2="$(scratch_of)"; k2="$(sed -n 6p "$FAKE_PSQL_STDIN")"; t2="$(tail -n 1 "$FAKE_PSQL_STDIN")"
   if [ "$r1$r2" = 00 ] && [[ "$s1" =~ ^restore_scratch_[0-9a-f]{16}$ ]] && [ "$sc_load" = 1 ] && [ "$s1" != "$s2" ] \
     && [ "$k1" != "$k2" ] && [ "$t1" != "$t2" ] && ! grep -q -F -- "${k1#\\restrict }" "$DUMP" && scratch_dropped; then
     pass "(sc.5) scratch name, restrict key and sentinel token are random per run and well-formed"
@@ -523,7 +536,88 @@ scratch_refused "(sc.2) psql exits 0 in the scratch database without the sentine
   fi
 }
 
-# (ver) the psql version of the db service: 16.10+ and 17.6+ and 18+ have \restrict; older
+{
+  # a DROP that fails because the dump created a subscription in the scratch database: psql's
+  # error is shown, the hint says to drop the subscription first, exit 1, nothing changed
+  run_restore FAKE_DROPDB_FAIL=1 'FAKE_DROPDB_ERR=ERROR:  database "x" is being used by logical replication subscription' -- --yes "$DUMP"
+  if [ "$rc" -eq 1 ] && no_real_changes && grep -q "is being used by logical replication subscription" <<< "$out_text" \
+    && grep -q "the dump created a subscription in it" <<< "$out_text" && grep -q "DROP SUBSCRIPTION <name>" <<< "$out_text" \
+    && grep -q -F "DROP DATABASE \"$(scratch_of)\" WITH (FORCE)" <<< "$out_text" && grep -q "nothing was changed" <<< "$out_text" && no_tmp_left; then
+    pass "(sc.4b) the DROP fails on a subscription -> exit 1, the error and a DROP SUBSCRIPTION hint, nothing changed"
+  else
+    fail "(sc.4b) DROP DATABASE failure on a subscription: rc=$rc out=$out_text"
+  fi
+  # any other DROP failure gets the generic hint, not the subscription one
+  run_restore FAKE_DROPDB_FAIL=1 -- --yes "$DUMP"
+  if [ "$rc" -eq 1 ] && grep -q "being accessed by other users" <<< "$out_text" && grep -q "(see the error above); drop it by hand" <<< "$out_text" \
+    && ! grep -q "SUBSCRIPTION" <<< "$out_text"; then
+    pass "(sc.4c) another DROP failure -> the error and the generic hint"
+  else
+    fail "(sc.4c) generic DROP failure: rc=$rc out=$out_text"
+  fi
+}
+{
+  # CREATE and DROP of the scratch database run in the maintenance database postgres, not
+  # in PG_DB (a dump that dropped PG_DB in the scratch stage cannot leave it behind)
+  run_restore -- --yes --no-pre-backup "$DUMP"
+  if [ "$rc" -eq 0 ] && grep -q -F -- "-d postgres -c CREATE DATABASE \"$(scratch_of)\" TEMPLATE template0" "$FAKE_DOCKER_LOG" \
+    && grep -q -F -- "-d postgres -c DROP DATABASE IF EXISTS \"$(scratch_of)\" WITH (FORCE)" "$FAKE_DOCKER_LOG"; then
+    pass "(sc.8) the scratch database is created and dropped from the maintenance database postgres"
+  else
+    fail "(sc.8) maintenance database: rc=$rc log=$(cat "$FAKE_DOCKER_LOG")"
+  fi
+}
+{
+  # the tags file in the db service: a load that did not finish leaves it, the exit trap
+  # removes exactly that file; a run whose loads finished makes no such call
+  tags_of() { sed -n 's/^\\o \(\/tmp\/restore-[0-9a-f]*\.tags\)$/\1/p' "$1" | head -n 1; }
+  run_restore FAKE_SCRATCH_FAIL=1 -- --yes "$DUMP"; r1=$rc; t1="$(tags_of "$FAKE_SCRATCH_STDIN")"
+  rm1=0; grep -q -x -F -- "compose -f $COMPOSE_FILE exec -T db rm -f -- $t1" "$FAKE_DOCKER_LOG" && rm1=1
+  run_restore FAKE_PSQL_NO_SENTINEL=1 -- --yes "$DUMP"; r2=$rc; t2="$(tags_of "$FAKE_PSQL_STDIN")"
+  rm2=0; grep -q -x -F -- "compose -f $COMPOSE_FILE exec -T db rm -f -- $t2" "$FAKE_DOCKER_LOG" && rm2=1
+  run_restore -- --yes "$DUMP"; r3=$rc; rm3="$(grep -c ' rm -f ' "$FAKE_DOCKER_LOG" || true)"
+  run_restore FAKE_SCRATCH_FAIL=1 FAKE_RM_FAIL=1 -- --yes "$DUMP"; r4=$rc; m4=0; grep -q "could not remove /tmp/restore-[0-9a-f]*\.tags" <<< "$out_text" && m4=1
+  if [ "$r1$r2$r3$r4" = 1101 ] && [ -n "$t1" ] && [ "$rm1$rm2" = 11 ] && [ "$rm3" = 0 ] && [ "$m4" = 1 ]; then
+    pass "(sc.9) a load that did not finish: the trap removes its tags file in the db service; finished loads need no removal"
+  else
+    fail "(sc.9) tags file: rc=$r1/$r2/$r3/$r4 t1=$t1 rm=$rm1/$rm2/$rm3 msg=$m4"
+  fi
+}
+
+# (cc) the COPY lines: a dump needs as many lines of the form COPY ... FROM stdin; as lines
+# that end COPY data (exactly \., also with a carriage return), else it is refused before any
+# docker call; the count goes into the COPY count check of the load
+cc_dump() { # cc_dump <file> <lines before the marker>
+  { printf -- '-- PostgreSQL database dump\n'
+    for i in $(seq 1 50); do printf -- 'INSERT INTO t VALUES (%d);\n' "$i"; done
+    printf '%b' "$2"
+    printf -- '-- PostgreSQL database dump complete\n'
+  } > "$1"
+}
+cc_refused() { # cc_refused <label> <lines> <COPY lines> <ends>
+  cc_dump "$WORKDIR/cc.sql" "$2"
+  run_restore -- --yes "$WORKDIR/cc.sql"
+  if [ "$rc" -eq 1 ] && no_db_calls && grep -q -F "has $3 lines of the form COPY ... FROM stdin; but $4 lines that end COPY data" <<< "$out_text" && no_tmp_left; then
+    pass "$1"
+  else
+    fail "$1: rc=$rc out=$out_text"
+  fi
+}
+cc_refused "(cc.1) a COPY line without its end of data -> refused before any docker call" 'COPY public.t (a) FROM stdin;\n1\n' 1 0
+cc_refused "(cc.2) a line \\. that ends no COPY -> refused before any docker call" 'SELECT 1;\n\\.\n' 0 1
+cc_refused "(cc.3) a COPY that pg_dump does not write, with its end -> refused" 'COPY public.t FROM STDIN WHERE a > 0;\n1\n\\.\n' 0 1
+cc_refused "(cc.4) a COPY line inside COPY data -> refused (false refusal, fail closed)" 'COPY public.t (a) FROM stdin;\nCOPY public.u (b) FROM stdin;\n\\.\n' 2 1
+{
+  cc_dump "$WORKDIR/cc.sql" 'COPY public.t (a) FROM stdin;\n1\n\\.\nCOPY public."U v" (b, "c d") FROM stdin;\r\n2\r\n\\.\r\nCOPY public.w  FROM stdin;\n\\.\n'
+  run_restore -- --yes --no-pre-backup "$WORKDIR/cc.sql"
+  if [ "$rc" -eq 0 ] && wrapped_ok "$FAKE_PSQL_STDIN" "$WORKDIR/cc.sql" 3 && same_loads; then
+    pass "(cc.5) three COPY blocks (one with carriage returns, one without columns) -> loaded, the check expects 3 COPY commands"
+  else
+    fail "(cc.5) COPY count: rc=$rc out=$out_text"
+  fi
+}
+
+# (ver) the psql version of the db service: restore.sh supports 16.10+, 17.6+ and 18+; other
 # versions, an unreadable answer and a failing call are refused with exit 2 before
 # anything is created, loaded or stopped, and the message names what was found
 version_case() { # version_case <version output> <accepted|refused>
@@ -531,7 +625,7 @@ version_case() { # version_case <version output> <accepted|refused>
   if [ "$2" = accepted ]; then
     if [ "$rc" -eq 0 ] && stdin_is_reset_plus_dump; then pass "(ver) '$1' is accepted"; else fail "(ver) '$1' accepted: rc=$rc out=$out_text"; fi
   elif [ "$rc" -eq 2 ] && no_real_changes && ! grep -q 'CREATE DATABASE' "$FAKE_DOCKER_LOG" && [ ! -e "$FAKE_SCRATCH_STDIN" ] \
-    && grep -q "needs psql 16.10 or later" <<< "$out_text" && no_tmp_left; then
+    && grep -q "restore.sh supports psql 16.10+, 17.6+ and 18+" <<< "$out_text" && no_tmp_left; then
     pass "(ver) '$1' is refused"
   else
     fail "(ver) '$1' refused: rc=$rc out=$out_text"
@@ -582,10 +676,10 @@ expected_body() { # expected_body <dump> <out>
   a="$(grep -n -m 1 '^\\restrict ' "$1" | cut -d: -f1)"; b="$(grep -n -m 1 '^\\unrestrict ' "$1" | cut -d: -f1)"
   sed -e "${a}d" -e "${b},\$d" "$1" > "$2"
 }
-strip_accepted() { # strip_accepted <label> <dump>
+strip_accepted() { # strip_accepted <label> <dump> [<COPY lines>]
   expected_body "$2" "$WORKDIR/expected.sql"
   run_restore -- --yes --no-pre-backup "$2"
-  if [ "$rc" -eq 0 ] && wrapped_ok "$FAKE_PSQL_STDIN" "$WORKDIR/expected.sql" && same_loads \
+  if [ "$rc" -eq 0 ] && wrapped_ok "$FAKE_PSQL_STDIN" "$WORKDIR/expected.sql" "${3:-0}" && same_loads \
     && ! grep -q -F "$RKEY" "$FAKE_PSQL_STDIN" && no_tmp_left; then
     pass "$1"
   else
@@ -724,7 +818,7 @@ ALTER TABLE ONLY public.notes
 
 PGDUMP
 RKEY=RlBbBBmfdggGtkd0kKVvk0lxqSc5xqjnNpaoAkxhQgG07o8lxgOylqL0IMXCRbR
-strip_accepted "(st.15) a pg_dump 16.15 file (plpgsql END;, COPY lines with END; and \\\\q) is stripped and loaded unchanged" "$WORKDIR/pgdump.sql"
+strip_accepted "(st.15) a pg_dump 16.15 file (plpgsql END;, COPY lines with END; and \\\\q) is stripped and loaded unchanged" "$WORKDIR/pgdump.sql" 1
 RKEY=Ab1Cd2Ef3
 
 # (st.16) a grep that fails (here: a stub on PATH that exits 2 for one of the greps of the
@@ -825,7 +919,7 @@ nul_case "(w8.4) the NUL is named before a later backslash command" 54
 
 # (z) a TERM signal while the psql load of the real database runs (the COMMIT is not known
 # yet): exit 1, no claim that anything was committed, no migrate or start call, no leftover
-REAL_LOAD='*-q -U depsight -d depsight'
+REAL_LOAD='*ON_ERROR_STOP=1 -U depsight -d depsight'
 {
   run_restore "FAKE_KILL_ON=$REAL_LOAD" -- --yes "$DUMP"
   if [ "$rc" -eq 1 ] && ! grep -q "committed" <<< "$out_text" && grep -q "check it before assuming it is unchanged" <<< "$out_text" \

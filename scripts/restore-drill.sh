@@ -19,6 +19,10 @@
 #   - a second source database with the awkward content of tests/fixtures/restore-drill-rich.sql;
 #   - a data-only dump and a --create dump (both refused: restore.sh resets the public
 #     schema, and \connect is a psql command);
+#   - a dump that the shim changes between the scratch and the real load (a stray ";" after
+#     COPY data, which makes psql skip the next table's COPY): the real load rolls back;
+#   - a database whose default standard_conforming_strings or client_encoding differs: the
+#     load reads the dump as in the scratch database;
 #   - the corpus below: dumps with transaction control, psql commands, unterminated
 #     input and the like added; each must be refused with the database unchanged and no
 #     scratch database left, or load correctly. It ends with a table of the outcomes.
@@ -65,8 +69,18 @@ if [ "\$1" = compose ] && [ "\$2" = -f ]; then
       shift # service name
       # DRILL_RM_ON_DUMP: files (glob allowed) removed when a pg_dump runs, i.e. between
       # restore.sh validating its copy of the dump and loading it
+      # DRILL_STRAY_ON_DUMP: files (glob allowed) that get a stray ";" before the data of
+      # "Repo" at the same moment, so the real load reads other bytes than the scratch load
       case "\$*" in
-        *pg_dump*) [ -z "\${DRILL_RM_ON_DUMP:-}" ] || rm -f \$DRILL_RM_ON_DUMP ;;
+        *pg_dump*)
+          [ -z "\${DRILL_RM_ON_DUMP:-}" ] || rm -f \$DRILL_RM_ON_DUMP
+          if [ -n "\${DRILL_STRAY_ON_DUMP:-}" ]; then
+            for f in \$DRILL_STRAY_ON_DUMP; do
+              awk '/^-- Data for Name: Repo; Type: TABLE DATA;/ { print ";" } { print }' "\$f" > "\$f.stray" && cat "\$f.stray" > "\$f"
+              rm -f "\$f.stray"
+            done
+          fi
+          ;;
       esac
       exec "$REAL_DOCKER" exec -i "$DRILL_PG_CONTAINER" "\$@"
       ;;
@@ -102,6 +116,8 @@ fingerprint() {
   "$REAL_DOCKER" exec -i "$DRILL_PG_CONTAINER" pg_dump -U depsight -d "$1" | grep -v -E '^\\(un)?restrict ' | cksum
 }
 scratch_count() { sql postgres "SELECT count(*) FROM pg_database WHERE datname LIKE 'restore\\_scratch\\_%'"; }
+# tags_count: the tags files restore.sh's loads left in the container's /tmp (it removes them)
+tags_count() { "$REAL_DOCKER" exec "$DRILL_PG_CONTAINER" sh -c 'ls /tmp/restore-*.tags 2> /dev/null | wc -l' | tr -d ' '; }
 fresh_db() { sql postgres "DROP DATABASE IF EXISTS $1" > /dev/null; sql postgres "CREATE DATABASE $1 OWNER depsight" > /dev/null; }
 # drill_restore <database> <dump> [restore.sh options]: runs the real restore.sh through
 # the shim, self-hosting form (no app, no migrate step) unless DRILL_MIGRATE_URL is set;
@@ -120,7 +136,13 @@ drill_restore() {
 # checks below count them, so a leftover from an earlier run would fail every one.
 for db in $(sql postgres "SELECT datname FROM pg_database WHERE datname ~ '^restore_scratch_[0-9a-f]+\$'"); do
   echo "drill: dropping $db, left by an earlier run"
+  sql "$db" "SELECT subname FROM pg_catalog.pg_subscription WHERE subdbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database())" \
+    | while read -r sub; do sql "$db" "ALTER SUBSCRIPTION \"$sub\" DISABLE" > /dev/null; sql "$db" "ALTER SUBSCRIPTION \"$sub\" SET (slot_name = NONE)" > /dev/null; sql "$db" "DROP SUBSCRIPTION \"$sub\"" > /dev/null; done
   sql postgres "DROP DATABASE \"$db\" WITH (FORCE)" > /dev/null
+done
+"$REAL_DOCKER" exec "$DRILL_PG_CONTAINER" sh -c 'rm -f /tmp/restore-*.tags'
+for db in "$DST_DB" "$RICH_SRC" "$RICH_DST"; do
+  sql postgres "ALTER DATABASE $db RESET ALL" > /dev/null 2>&1 || true
 done
 
 echo "drill: applying the schema like the migrate service"
@@ -259,6 +281,42 @@ expect "repos after the vanished-dump restore" "$(sql "$DST_DB" 'SELECT count(*)
 [ -z "$(find "$WORK/backups" -maxdepth 1 -name 'restore-dump.*')" ] || fail "temporary copy of the dump was left behind"
 rm -f "$WORK"/backups/depsight-*.sql
 
+echo "drill: a dump that reads differently in the real load than in the scratch load is rolled back"
+# The shim puts a stray ";" before the data of "Repo" into the private copy when the
+# pre-restore pg_dump runs (after the scratch load passed, before the real load): psql
+# then drops the COPY of "Repo" in the real load, and the COPY count check before the
+# COMMIT must roll the load back.
+fp_before="$(fingerprint "$DST_DB")"
+DRILL_STRAY_ON_DUMP="$WORK/backups/restore-dump.*" drill_restore "$DST_DB" "$WORK/first.sql"
+[ "$rc" -eq 1 ] || fail "restore.sh accepted a real load in which psql skipped a COPY (exit $rc): $(cat "$WORK/last.err")"
+grep -q 'restore.sh: psql ran [0-9]* COPY commands, the dump has' "$WORK/last.err" || fail "skipped-COPY real load: unexpected message: $(cat "$WORK/last.err")"
+grep -q 'nothing was committed, the database is unchanged' "$WORK/last.err" || fail "skipped-COPY real load: no rollback message: $(cat "$WORK/last.err")"
+expect "skipped-COPY real load: database unchanged" "$(fingerprint "$DST_DB")" "$fp_before"
+expect "skipped-COPY real load: repos" "$(sql "$DST_DB" 'SELECT count(*) FROM "Repo"')" "$EXPECT_REPOS"
+expect "skipped-COPY real load: tags files left" "$(tags_count)" 0
+rm -f "$WORK"/backups/depsight-*.sql
+
+echo "drill: database-level settings that change how psql reads the dump do not change the load"
+# A database whose default standard_conforming_strings is off (or client_encoding SJIS)
+# makes psql read the start of the dump, before the dump's own SET lines, differently
+# than in the scratch database (created from template0 with the defaults). The load sets
+# both first. The line after \restrict is harmless with the defaults; with
+# standard_conforming_strings off it hides a COMMIT that would commit the schema reset,
+# and in SJIS the server refuses the A with a macron.
+at="$(grep -n -m 1 '^\\restrict ' "$WORK/first.sql" | cut -d: -f1)"
+{ head -n "$at" "$WORK/first.sql"
+  printf '%s\n' "SELECT 'a\\' AS x, ' ; COMMIT; SELECT 1/0 ; SELECT ' AS y;" "SELECT '"$'\304\200'"' AS z;"
+  tail -n "+$((at + 1))" "$WORK/first.sql"
+} > "$WORK/settings.sql"
+grep -q -F "SELECT 'a\\' AS x" "$WORK/settings.sql" || fail "the settings dump lacks its probe line"
+for setting in "standard_conforming_strings = off" "client_encoding = 'SJIS'"; do
+  sql postgres "ALTER DATABASE $DST_DB SET $setting" > /dev/null
+  drill_restore "$DST_DB" "$WORK/settings.sql" --no-pre-backup
+  sql postgres "ALTER DATABASE $DST_DB RESET ALL" > /dev/null
+  [ "$rc" -eq 0 ] || fail "database with $setting: exit $rc: $(cat "$WORK/last.err")"
+  expect "database with $setting: the database dumps like the source" "$(fingerprint "$DST_DB")" "$src_fp"
+done
+
 echo "drill: the restore modes (hosted with migrate, self-hosting without; with and without the pre-restore dump), for a dump with and without --clean"
 "$REAL_DOCKER" exec -i "$DRILL_PG_CONTAINER" pg_dump -U depsight "$SRC_DB" > "$WORK/plain.sql"
 ! grep -q '^DROP TABLE' "$WORK/plain.sql" || fail "the dump without --clean has DROP statements"
@@ -360,12 +418,37 @@ run_refused() { # run_refused <id> <file>
   [ "$rc" -ne 0 ] || fail "corpus $1: restore.sh accepted it"
   [ "$(fingerprint "$DST_DB")" = "$fp_cur" ] || fail "corpus $1: the database changed: $(cat "$WORK/last.err")"
   [ "$(scratch_count)" = 0 ] || fail "corpus $1: a scratch database is left"
+  [ "$(tags_count)" = 0 ] || fail "corpus $1: a tags file is left in the container"
   record "$1" refused "$rc" "$(reason)"
   echo "drill: ok: corpus $1 refused (exit $rc)"
 }
 refused() { inject "$2" "$WORK/case.sql"; run_refused "$1" "$WORK/case.sql"; }
+# inject_mid <format> <out file>: the shape goes into the middle of the dump, right before
+# the data of "Repo", so COPY blocks come before it and after it
+inject_mid() {
+  local at
+  at="$(grep -n -m 1 '^-- Data for Name: Repo; Type: TABLE DATA;' "$corpus_base" | cut -d: -f1)"
+  [ -n "$at" ] || fail "the dump has no data of Repo"
+  { head -n "$((at - 1))" "$corpus_base"
+    # shellcheck disable=SC2059
+    printf -- "$1"
+    printf '\n'
+    tail -n "+$at" "$corpus_base"
+  } > "$2"
+}
+refused_mid() { inject_mid "$2" "$WORK/case.sql"; run_refused "$1" "$WORK/case.sql"; }
 loads_same() { # loads_same <id> <format>
   inject "$2" "$WORK/case.sql"
+  drill_restore "$DST_DB" "$WORK/case.sql" --no-pre-backup
+  [ "$rc" -eq 0 ] || fail "corpus $1: refused (exit $rc): $(cat "$WORK/last.err")"
+  fp_cur="$(fingerprint "$DST_DB")"
+  [ "$fp_cur" = "$src_fp" ] || fail "corpus $1: loaded, but the database does not dump like the source"
+  [ "$(scratch_count)" = 0 ] || fail "corpus $1: a scratch database is left"
+  record "$1" loads 0 "same as the source"
+  echo "drill: ok: corpus $1 loads, same as the source"
+}
+loads_same_mid() { # loads_same_mid <id> <format>
+  inject_mid "$2" "$WORK/case.sql"
   drill_restore "$DST_DB" "$WORK/case.sql" --no-pre-backup
   [ "$rc" -eq 0 ] || fail "corpus $1: refused (exit $rc): $(cat "$WORK/last.err")"
   fp_cur="$(fingerprint "$DST_DB")"
@@ -468,7 +551,7 @@ refused k.function-named-begin "CREATE TABLE public.ct(a text);\nCREATE FUNCTION
 refused k.copy-from-program "CREATE TABLE public.cw(a int, stdin int);\nCOPY public.cw FROM PROGRAM 'true' WHERE a IS DISTINCT FROM stdin;\nCOMMIT;\n/*\n\\\\.\n*/ SELECT 1;"
 refused k.scs-off-concat "SELECT set_config('standard_' || 'conforming_strings', 'off', false);\nSELECT 'x\\\\''; COMMIT; --';"
 loads_same k.encoding-concat "SELECT set_config('client_' || 'encoding', 'SJIS', false);\nSELECT 1;"
-loads_check k.paren-in-copy-where "CREATE TABLE public.cq(a text);\nCOPY public.cq FROM STDIN WHERE a <> ')(' ;\nx\n\\\\." 'SELECT a FROM public.cq' x
+refused k.paren-in-copy-where "CREATE TABLE public.cq(a text);\nCOPY public.cq FROM STDIN WHERE a <> ')(' ;\nx\n\\\\."
 loads_same k.clean 'SELECT 1;'
 refused d.commit-after-delete 'DELETE FROM public."Repo";\nCOMMIT;'
 refused d.search-path-hijack 'CREATE TABLE public.drill_t0 AS SELECT pg_catalog.txid_current() AS t;\nCREATE FUNCTION public.txid_current() RETURNS bigint LANGUAGE sql AS $$ SELECT t FROM public.drill_t0 $$;\nSET search_path = public, pg_catalog;\nCOMMIT;'
@@ -534,6 +617,21 @@ refused d.empty-after-copy 'CREATE TABLE public.drill_drain (v text);\nCOPY publ
 loads_check d.copy-last 'CREATE TABLE public.drill_copy_last (v text);\nCOPY public.drill_copy_last (v) FROM stdin;\nlast row\n\\.' \
   'SELECT string_agg(v, $$,$$) FROM public.drill_copy_last' 'last row'
 
+# psql's skip after COPY data: an empty statement (and some others) right after COPY data
+# makes psql drop the input up to the next line that ends COPY data and go on. Mid-dump,
+# that is the COPY of the next table: the COPY count check refuses it. A line that ends
+# COPY data where no COPY is (a stray one, one inside a string) is refused before the
+# load, so a skip cannot end there.
+refused_mid d.stray-semicolon-mid ';'
+refused_mid d.stray-paren-mid '(SELECT 1);'
+refused_mid d.stray-comment-mid '/* c */ ;'
+# a statement between the end of COPY data and the empty one ends the skip state: with
+# psql 16.15 this loads every table (BEGIN inside the open transaction only warns)
+loads_same_mid d.begin-semicolon-mid 'BEGIN;\n;'
+refused d.stray-two-tables 'CREATE TABLE public.ps_a (v text);\nCREATE TABLE public.ps_b (v text);\nCOPY public.ps_a (v) FROM stdin;\na\n\\.\n;\nCOPY public.ps_b (v) FROM stdin;\nb\n\\.'
+refused d.stray-end-line 'CREATE TABLE public.st (v text);\nCOPY public.st (v) FROM stdin;\nx\n\\.\n;\nDELETE FROM public."Repo";\n\\.'
+refused d.end-line-in-string "CREATE TABLE public.sl (v text);\nINSERT INTO public.sl VALUES ('a\n\\\\.\nb');"
+
 # legitimate content the earlier line check refused: it loads now
 loads_same w4.2 'SAVEPOINT a;\nRELEASE a;\nSAVEPOINT b;\nSELECT 1;\nROLLBACK TO b;\nRELEASE SAVEPOINT b;'
 loads_check w4.6 'CREATE VIEW public.drill_case AS SELECT CASE WHEN true THEN 1 ELSE 2\nEND AS x, 1 AS endpoint;' \
@@ -590,8 +688,42 @@ expect "corpus e.no-restrict-pair" "$(fingerprint "$DST_DB")" "$src_fp"
 record e.no-restrict-pair loads 0 "same as the source"
 fp_cur="$src_fp"
 
+# The dump's SQL reaches the other databases of the server (not a security boundary): a
+# dump that ends the transaction and drops the target database in the scratch stage is
+# refused, the target is gone, and the scratch database is still dropped, because CREATE
+# and DROP connect to the maintenance database postgres.
+inject 'COMMIT;\nDROP DATABASE '"$DST_DB"' WITH (FORCE);' "$WORK/case.sql"
+drill_restore "$DST_DB" "$WORK/case.sql" --no-pre-backup
+[ "$rc" -ne 0 ] || fail "corpus d.drop-target: restore.sh accepted it"
+expect "corpus d.drop-target: the target database is gone" "$(sql postgres "SELECT count(*) FROM pg_database WHERE datname = '$DST_DB'")" 0
+expect "corpus d.drop-target: scratch databases left" "$(scratch_count)" 0
+expect "corpus d.drop-target: tags files left" "$(tags_count)" 0
+record d.drop-target refused "$rc" "$(reason) (and the target database was dropped)"
+fresh_db "$DST_DB"
+drill_restore "$DST_DB" "$corpus_base" --no-pre-backup
+[ "$rc" -eq 0 ] || fail "restore after d.drop-target: exit $rc"
+fp_cur="$(fingerprint "$DST_DB")"
+# A subscription in the dump (pg_dump writes it with connect = false, so it loads) keeps
+# the scratch database from being dropped: exit 1, nothing changed, and the hint printed
+# (drop the subscription first) works.
+inject "CREATE SUBSCRIPTION drill_sub CONNECTION 'host=127.0.0.1 dbname=nowhere' PUBLICATION drill_pub WITH (connect = false, slot_name = NONE, enabled = false, create_slot = false);" "$WORK/case.sql"
+drill_restore "$DST_DB" "$WORK/case.sql" --no-pre-backup
+[ "$rc" -eq 1 ] || fail "corpus d.subscription: exit $rc: $(cat "$WORK/last.err")"
+grep -q 'is being used by logical replication subscription' "$WORK/last.err" || fail "corpus d.subscription: no psql error: $(cat "$WORK/last.err")"
+grep -q 'the dump created a subscription in it' "$WORK/last.err" || fail "corpus d.subscription: no hint: $(cat "$WORK/last.err")"
+expect "corpus d.subscription: database unchanged" "$(fingerprint "$DST_DB")" "$fp_cur"
+expect "corpus d.subscription: scratch databases left" "$(scratch_count)" 1
+sub_db="$(sql postgres "SELECT datname FROM pg_database WHERE datname ~ '^restore_scratch_'")"
+for stmt in 'ALTER SUBSCRIPTION drill_sub DISABLE' 'ALTER SUBSCRIPTION drill_sub SET (slot_name = NONE)' 'DROP SUBSCRIPTION drill_sub'; do
+  sql "$sub_db" "$stmt" > /dev/null
+done
+sql postgres "DROP DATABASE \"$sub_db\" WITH (FORCE)" > /dev/null
+expect "corpus d.subscription: scratch databases left after the hint" "$(scratch_count)" 0
+record d.subscription refused "$rc" "the scratch database cannot be dropped (subscription), the hint drops it"
+
 expect "corpus: side effects of \\! and \\o" "$("$REAL_DOCKER" exec "$DRILL_PG_CONTAINER" sh -c "test -e $SIDE_EFFECT && echo present || echo absent")" absent
 expect "corpus: scratch databases left" "$(scratch_count)" 0
+expect "corpus: tags files left in the container" "$(tags_count)" 0
 echo "drill: corpus outcomes (case, outcome, exit code, reason)"
 sort -t "$(printf '\t')" -k 2,2 -k 1,1 "$WORK/corpus.tsv" | awk -F '\t' '{ printf "  %-28s %-8s %-3s %s\n", $1, $2, $3, $4 }'
 echo "drill: $(grep -c . "$WORK/corpus.tsv") corpus cases, $(awk -F '\t' '$2 == "refused"' "$WORK/corpus.tsv" | wc -l | tr -d ' ') refused"

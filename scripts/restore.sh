@@ -13,16 +13,18 @@
 #
 # What it does, in order:
 #   1. checks the file argument, copies the dump into a private temporary file inside
-#      BACKUP_DIR and checks THAT copy (size, "dump complete" marker, no NUL byte, and the
-#      \restrict and \unrestrict lines of pg_dump 16.10+, which it strips, see below);
-#      everything below uses the copy, so a file that is rotated away, truncated or
-#      replaced meanwhile cannot change what is loaded,
-#   2. checks that the db service is running and that its psql is 16.10 or later (17.6
-#      or later on 17): older psql has no \restrict,
+#      BACKUP_DIR and checks THAT copy (size, "dump complete" marker, no NUL byte, the
+#      \restrict and \unrestrict lines of pg_dump 16.10+, which it strips, and as many
+#      `COPY ... FROM stdin;` lines as lines that end COPY data, see below); everything
+#      below uses the copy, so a file that is rotated away, truncated or replaced
+#      meanwhile cannot change what is loaded,
+#   2. checks that the db service is running and that its psql is one restore.sh
+#      supports: 16.10 or later, 17.6 or later, or 18 and later,
 #   3. loads the copy into a scratch database (restore_scratch_<random>, created from
-#      template0 in the same server, dropped again right after and on every exit path),
-#      in exactly the form step 6 uses; a dump that fails there is refused, and nothing
-#      was changed (the app still runs, no pre-restore dump was taken),
+#      template0 in the same server, dropped again right after and on every exit, unless
+#      the DROP itself fails: then it prints the command and why), in exactly the form
+#      step 6 uses; a dump that fails there is refused, and nothing was changed (the app
+#      still runs, no pre-restore dump was taken),
 #   4. stops the app service when it is running (the app holds connections that
 #      would block the DROPs and write rows while the schema is replaced),
 #   5. takes a dump of the CURRENT state with scripts/backup.sh into BACKUP_DIR
@@ -44,21 +46,27 @@
 #      app stays stopped on purpose: look at the error first.
 #
 # How a load (steps 3 and 6) keeps the dump inside its transaction, without reading the
-# SQL itself (psql does that): the dump runs in psql's restricted mode under a key this
-# script draws from /dev/urandom (`\restrict <key>` before the dump, `\unrestrict <key>`
-# after it), so every psql meta-command in the dump (\connect, \q, \!, \i, \o, \set ...,
-# also in the middle of a line) is an error and stops psql. Before the dump psql stores
-# txid_current() in a variable; after it, a check statement fails when txid_current() has
-# changed, i.e. when a COMMIT, END, ROLLBACK, ABORT (or the AND CHAIN forms) in the dump
-# ended the transaction and a new one began. In the real database such a COMMIT would
-# already have committed before the check fails, which is why the check runs in the
-# scratch database first. Last, psql echoes a random token after the COMMIT, and the load
-# counts only when psql exits 0 AND printed that token: psql that ends without running the
-# COMMIT (the input ended inside COPY data, a string or a comment) is a failure, not a
-# silent rollback reported as success. This protects against accidents (a hand-edited
-# or damaged dump); it is not a security boundary: SQL in a dump runs with the rights of
-# the database role and can do harm inside one transaction too, so do not restore a dump
-# from a source you do not trust.
+# SQL itself (psql does that): the load first sets standard_conforming_strings and
+# client_encoding, so psql reads the same bytes the same way in both databases whatever
+# their database-level settings are. The dump runs in psql's restricted mode under a key
+# this script draws from /dev/urandom (`\restrict <key>` before the dump, `\unrestrict
+# <key>` after it), so every psql meta-command in the dump (\connect, \q, \!, \i, \o,
+# \set ..., also in the middle of a line) is an error and stops psql. Before the dump psql
+# stores txid_current() in a variable; after it, a check statement fails when
+# txid_current() has changed, i.e. when a COMMIT, END, ROLLBACK, ABORT (or the AND CHAIN
+# forms) in the dump ended the transaction and a new one began. In the real database such
+# a COMMIT would already have committed before the check fails, which is why the check
+# runs in the scratch database first. A second check, also before the COMMIT, compares the
+# number of COPY commands psql ran (the "COPY <n>" lines it printed into a file in the db
+# service's /tmp) with the number of `COPY ... FROM stdin;` lines of the dump, see
+# COPY_COUNT_SQL. Last, psql echoes a random token after the COMMIT, and the load counts
+# only when psql exits 0 AND printed that token: psql that ends without running the COMMIT
+# (the input ended inside COPY data, a string or a comment) is a failure, not a silent
+# rollback reported as success. This protects against accidents (a hand-edited or damaged
+# dump); it is not a security boundary: SQL in a dump runs with the rights of the database
+# role and can do harm inside one transaction too, and in the scratch stage it runs before
+# the pre-restore dump and can reach the other databases of the server, so do not restore
+# a dump from a source you do not trust.
 #
 # A pre-restore dump of an (almost) empty database is below backup.sh's size floor and
 # fails validation: restore into a fresh database with --no-pre-backup.
@@ -76,17 +84,19 @@
 #                            script says so, and you apply the schema yourself)
 #   PG_USER / PG_DB          database user and name (default: depsight / depsight); the
 #                            user needs CREATEDB for the scratch database (the compose
-#                            superuser has it)
+#                            superuser has it), which is created and dropped from the
+#                            maintenance database `postgres`
 #
 # Exit codes:
 #   0  restored (migrated, app started)
 #   1  dump invalid or refused by the scratch load (nothing changed, the app untouched),
-#      the app could not be stopped (nothing changed), psql failed or the dump could not
+#      the scratch database could not be dropped (nothing changed; the message says how
+#      to drop it), the app could not be stopped (nothing changed), psql failed or the dump could not
 #      be read (nothing committed, database unchanged, app left stopped), or interrupted
 #      before psql confirmed the load (check the database: if only this script was
 #      stopped, psql may have committed)
 #   2  refused: no file, file missing, no --yes, compose file missing, db not running,
-#      psql in the db service too old
+#      psql in the db service not one restore.sh supports
 #   3  the pre-restore dump failed; nothing was changed (use --no-pre-backup to go on)
 #   4  the dump is restored, but the migrate step or the app start failed, or the
 #      script was interrupted after the restore committed; the app is stopped or not
@@ -115,8 +125,10 @@ GRANT USAGE ON SCHEMA public TO PUBLIC;'
 # The transaction check that follows the dump: it fails with this message when
 # txid_current() differs from the value psql stored right after BEGIN (restore_t0): n is
 # 1 then, and the text cast to an integer is the message instead of '1'. Every name is
-# schema-qualified, so a search_path or a function the dump set up cannot answer in its
-# place; repeat() with a count that is only known at run time keeps the planner from
+# schema-qualified, so a search_path or a function the dump created in the public schema
+# cannot answer in its place. That does not hold against a superuser dump that replaces
+# objects in pg_catalog itself: such a dump is out of scope (not a security boundary, see
+# above). repeat() with a count that is only known at run time keeps the planner from
 # evaluating the failing cast in advance.
 CHECK_SQL="SELECT pg_catalog.int4(pg_catalog.concat(pg_catalog.repeat('restore.sh: the dump ended the transaction itself (a COMMIT, END, ROLLBACK or the like in it), refusing it', n), pg_catalog.repeat('1', 1 OPERATOR(pg_catalog.-) n))) AS restore_transaction_check FROM (SELECT pg_catalog.int4(pg_catalog.txid_current() OPERATOR(pg_catalog.<>) :restore_t0) AS n) AS restore_check;"
 
@@ -127,22 +139,46 @@ stopped_app=0
 
 # The scratch database, once its CREATE was sent; dropped by drop_scratch (after the
 # scratch load and on every exit path, see cleanup). The name is random, so dropping it
-# when the CREATE itself failed cannot hit another database.
+# when the CREATE itself failed cannot hit another database. CREATE and DROP connect to
+# the maintenance database `postgres`, not to PG_DB, so a dump that dropped or renamed
+# PG_DB in the scratch stage cannot keep the scratch database from being dropped. A DROP
+# that fails prints psql's error and how to drop it by hand; a subscription the dump
+# created in it (pg_dump writes them with connect = false, so they load) is the one known
+# cause, and the hint then says how to drop the subscription first.
 scratch_db=""
 drop_scratch() {
   [ -n "$scratch_db" ] || return 0
-  local db="$scratch_db"
+  local db="$scratch_db" err drop_hint
   scratch_db=""
-  if "${DC[@]}" exec -T "$DB_SERVICE" psql -X -q -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" \
-    -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" < /dev/null > /dev/null; then
+  if err="$("${DC[@]}" exec -T "$DB_SERVICE" psql -X -q -v ON_ERROR_STOP=1 -U "$PG_USER" -d postgres \
+    -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" < /dev/null 2>&1 > /dev/null)"; then
     return 0
   fi
-  echo "restore: could not drop the scratch database '$db'; drop it by hand: docker compose -f $COMPOSE_FILE exec -T $DB_SERVICE psql -U $PG_USER -d $PG_DB -c 'DROP DATABASE \"$db\"'" >&2
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  drop_hint="docker compose -f $COMPOSE_FILE exec -T $DB_SERVICE psql -U $PG_USER -d postgres -c 'DROP DATABASE \"$db\" WITH (FORCE)'"
+  if grep -q 'logical replication subscription' <<< "$err"; then
+    echo "restore: could not drop the scratch database '$db': the dump created a subscription in it. Drop the subscription first, in that database, for each name of SELECT subname FROM pg_subscription: ALTER SUBSCRIPTION <name> DISABLE; ALTER SUBSCRIPTION <name> SET (slot_name = NONE); DROP SUBSCRIPTION <name>; (docker compose -f $COMPOSE_FILE exec -T $DB_SERVICE psql -U $PG_USER -d $db), then run: $drop_hint" >&2
+  else
+    echo "restore: could not drop the scratch database '$db' (see the error above); drop it by hand: $drop_hint" >&2
+  fi
+  return 1
+}
+
+# The file in the db service's /tmp that psql writes its command tags to during a load (see
+# load_into). The load removes it at its end; a load that did not get that far leaves it,
+# and cleanup removes it.
+tags_file=""
+tags_left=0
+remove_tags() {
+  [ "$tags_left" -eq 1 ] || return 0
+  tags_left=0
+  "${DC[@]}" exec -T "$DB_SERVICE" rm -f -- "$tags_file" < /dev/null > /dev/null 2>&1 && return 0
+  echo "restore: could not remove $tags_file in the $DB_SERVICE service (psql's command tags of the load); remove it by hand" >&2
   return 1
 }
 
 # Private files in BACKUP_DIR (the copy of the dump, a work file, psql's output),
-# removed on every exit path, and the scratch database.
+# removed on every exit path, the scratch database and the tags file.
 tmp=""
 work=""
 out=""
@@ -151,6 +187,7 @@ cleanup() {
   [ -z "$work" ] || rm -f "$work"
   [ -z "$out" ] || rm -f "$out"
   drop_scratch || true
+  remove_tags || true
 }
 trap cleanup EXIT
 
@@ -307,25 +344,57 @@ if [ -n "$rl_hits" ]; then
   work="$(private_file)"
 fi
 
+# psql 15 and 16 have a quirk: an empty statement (`;`, `/* c */ ;`, also `(SELECT 1);`)
+# right after a COPY FROM STDIN makes psql read on as if it were more COPY data and drop
+# everything up to the next line that ends COPY data (exactly `\.`, or `\.` and a carriage
+# return), then go on with exit 0. Without a check, the next table's COPY and its rows
+# would be gone and the restore would report success. Two checks catch it, without
+# reading the SQL. This one, before anything is touched: the dump must have as many lines
+# in pg_dump's form `COPY <table> [(<columns>)] FROM stdin;` (copy_lines) as lines that end
+# COPY data. pg_dump writes exactly one of each per table, and its COPY data never holds
+# such a line. Each COPY psql runs reads up to one of those end lines, and so does every
+# skip; so with equal counts a skip always takes one of the dump's COPY statements with
+# it. The second check, in the load (COPY_COUNT_SQL), then sees psql run fewer COPY
+# commands than copy_lines and refuses. A skip that reaches the end of the input takes the
+# check and the COMMIT with it: no sentinel. False refusals (fail closed): a line that is
+# exactly `\.` or in the COPY form inside a string, comment or function body, a COPY value
+# that is such a line, a COPY that pg_dump does not write (another spelling, more than one
+# line, a newline in a table or column name), and a COPY ... TO STDOUT.
+# pg_dump's form: a schema-qualified table, the column list (none for a table without
+# columns, then two spaces), each name plain or double-quoted; a carriage return at the end
+# is allowed, like psql allows it after `\.`.
+cl_id='("([^"]|"")*"|[^ "(),.]+)'
+cl_rc=0
+copy_lines="$(cgrep -c -x -E -- "COPY $cl_id\\.$cl_id( \\($cl_id(, $cl_id)*\\))? +FROM stdin;"$'\r''?' "$tmp")" || cl_rc=$?
+case "$cl_rc" in 0|1) ;; *) could_not_check "counting the COPY lines failed" ;; esac
+cl_rc=0
+copy_ends="$(cgrep -c -x -E -- '\\\.'$'\r''?' "$tmp")" || cl_rc=$?
+case "$cl_rc" in 0|1) ;; *) could_not_check "counting the ends of COPY data failed" ;; esac
+[[ "$copy_lines" =~ ^[0-9]+$ && "$copy_ends" =~ ^[0-9]+$ ]] || could_not_check "counting the COPY lines failed"
+if [ "$copy_lines" != "$copy_ends" ]; then
+  echo "restore: $file has $copy_lines lines of the form COPY ... FROM stdin; but $copy_ends lines that end COPY data (exactly \\.); refusing it (pg_dump writes one of each per table, and psql can skip statements silently where they differ)" >&2
+  exit 1
+fi
+
 running="$("${DC[@]}" ps --status running --services)" \
   || refuse "docker compose could not list the services of $COMPOSE_FILE"
 grep -qx "$DB_SERVICE" <<< "$running" \
   || refuse "service '$DB_SERVICE' is not running in $COMPOSE_FILE; start the db first"
 
-# psql learned \restrict in 16.10 and 17.6 (and has it in every 18 and later); an older
-# psql would stop at the first line with "invalid command", so it is refused up front.
+# restore.sh supports psql 16.10+, 17.6+ and 18+ (the load needs \restrict); any other
+# version is refused up front with the version named, instead of failing on a psql error.
 psql_version="$("${DC[@]}" exec -T "$DB_SERVICE" psql --version < /dev/null)" \
   || refuse "could not run psql --version in the $DB_SERVICE service"
 if [[ "$psql_version" =~ ^psql\ \(PostgreSQL\)\ ([0-9]+)\.([0-9]+) ]]; then
   pg_major="${BASH_REMATCH[1]}"
   pg_minor="${BASH_REMATCH[2]}"
 else
-  refuse "cannot read the psql version of the $DB_SERVICE service ('$psql_version'); restore.sh needs psql 16.10 or later"
+  refuse "cannot read the psql version of the $DB_SERVICE service ('$psql_version'); restore.sh supports psql 16.10+, 17.6+ and 18+"
 fi
 if ! { [ "$pg_major" -eq 16 ] && [ "$pg_minor" -ge 10 ]; } \
   && ! { [ "$pg_major" -eq 17 ] && [ "$pg_minor" -ge 6 ]; } \
   && ! [ "$pg_major" -ge 18 ]; then
-  refuse "psql in the $DB_SERVICE service is $pg_major.$pg_minor; restore.sh needs psql 16.10 or later (17.6 or later on 17), the versions with \\restrict: pull a newer image for the db service first"
+  refuse "psql in the $DB_SERVICE service is $pg_major.$pg_minor; restore.sh supports psql 16.10+, 17.6+ and 18+: pull a newer image for the db service first"
 fi
 
 echo "restore: compose file $COMPOSE_FILE, database '$PG_DB', dump $file"
@@ -336,9 +405,24 @@ rand_hex() { LC_ALL=C od -An -tx1 -N"$1" /dev/urandom | LC_ALL=C tr -d ' \n'; }
 key="$(rand_hex 16)"
 token="$(rand_hex 16)"
 scratch_name="restore_scratch_$(rand_hex 8)"
-[[ "$key" =~ ^[0-9a-f]{32}$ && "$token" =~ ^[0-9a-f]{32}$ && "$scratch_name" =~ ^restore_scratch_[0-9a-f]{16}$ ]] \
+tags_file="/tmp/restore-$(rand_hex 8).tags"
+[[ "$key" =~ ^[0-9a-f]{32}$ && "$token" =~ ^[0-9a-f]{32}$ && "$scratch_name" =~ ^restore_scratch_[0-9a-f]{16}$ \
+  && "$tags_file" =~ ^/tmp/restore-[0-9a-f]{16}\.tags$ ]] \
   || could_not_check "reading random bytes from /dev/urandom failed"
 sentinel="restore: committed $token"
+
+# The COPY count of a load (see the quirk above the copy_lines check). psql writes its
+# output during the dump (command tags such as "COPY 3", query results) into tags_file
+# in the db service (\o, set before \restrict, so the dump cannot change it), and after
+# \unrestrict counts the lines that are exactly "COPY <n>" and removes the file (a shell
+# command in the db service, the postgres image has sh and grep). Query results cannot
+# look like such a line: psql's aligned format starts every line of a result with a space
+# or a "-" or a "(". The check fails unless that count is copy_lines, before the COMMIT, so
+# in the real database too a mismatch rolls the load back. A dump made to fool it (a
+# COPY ... TO STDOUT that prints such a line, next to an empty statement after COPY data)
+# is out of scope: not a security boundary.
+COUNT_CMD="\\set restore_copies \`LC_ALL=C grep -c -x -E 'COPY [0-9]+' $tags_file; rm -f $tags_file\`"
+COPY_COUNT_SQL="SELECT pg_catalog.int4(pg_catalog.concat(pg_catalog.repeat(pg_catalog.concat('restore.sh: psql ran ', :'restore_copies', ' COPY commands, the dump has $copy_lines lines of the form COPY ... FROM stdin; (psql skipped part of the dump, for example after an empty statement that follows COPY data, or a COPY is in a form pg_dump does not write), refusing it'), n), pg_catalog.repeat('1', 1 OPERATOR(pg_catalog.-) n))) AS restore_copy_check FROM (SELECT pg_catalog.int4(:'restore_copies' OPERATOR(pg_catalog.<>) '$copy_lines') AS n) AS restore_check;"
 
 # The trailer must start a line: a dump whose last byte is not a newline could end in a
 # "--" comment, which would swallow it. A dump that ends in a newline gets nothing added.
@@ -353,26 +437,34 @@ body_nl=""
 # unterminated: ANALYZE is a reserved word, and no statement goes on validly with
 # `ANALYZE pg_catalog.pg_am` (EXPLAIN ANALYZE needs a statement after it, VACUUM cannot run
 # in a transaction), so a dangling statement is an error instead of swallowing the check;
-# alone it only refreshes the statistics of pg_am. It is not a bare ";": psql 16 reads the rest of its
-# input as COPY data after an empty statement that follows a COPY FROM STDIN. Returns 0
-# only when psql exited 0 and printed the sentinel; psql's other output goes to a private
-# file (umask 077 in case something removed it), so it never reaches the screen.
+# alone it only refreshes the statistics of pg_am. It is not a bare ";", which would be an
+# empty statement: right after COPY data that makes psql drop the rest of the input (the
+# quirk above the copy_lines check). The `\o` after the transaction check closes the tags
+# file, COUNT_CMD counts its COPY lines, and COPY_COUNT_SQL fails unless the count is
+# copy_lines. psql runs without -q, so it prints the command tags. Returns 0 only when
+# psql exited 0 and printed the sentinel; psql's other output goes to a private file
+# (umask 077 in case something removed it), so it never reaches the screen.
 load_into() {
   local old_umask load_rc=0
   old_umask="$(umask)"
   umask 077
-  { printf '%s\n' 'BEGIN;' 'SELECT pg_catalog.txid_current() AS restore_t0 \gset' "\\restrict $key" "$RESET_SQL"
-    cat "$tmp" && printf '%s\\unrestrict %s\nANALYZE pg_catalog.pg_am;\n%s\nCOMMIT;\n\\echo %s\n' "$body_nl" "$key" "$CHECK_SQL" "$sentinel"
-  } | "${DC[@]}" exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -q -U "$PG_USER" -d "$1" > "$out" \
+  tags_left=1
+  { printf '%s\n' 'SET standard_conforming_strings = on;' "SET client_encoding = 'UTF8';" 'BEGIN;' \
+      'SELECT pg_catalog.txid_current() AS restore_t0 \gset' "\\o $tags_file" "\\restrict $key" "$RESET_SQL"
+    cat "$tmp" && printf '%s\\unrestrict %s\nANALYZE pg_catalog.pg_am;\n%s\n\\o\n%s\n%s\nCOMMIT;\n\\echo %s\n' \
+      "$body_nl" "$key" "$CHECK_SQL" "$COUNT_CMD" "$COPY_COUNT_SQL" "$sentinel"
+  } | "${DC[@]}" exec -T "$DB_SERVICE" psql -X -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$1" > "$out" \
     || load_rc=1
   umask "$old_umask"
   [ "$load_rc" -eq 0 ] || return 1
   grep -qxF -- "$sentinel" "$out" || return 2
+  # the trailer ran, COUNT_CMD removed the tags file
+  tags_left=0
 }
 
 echo "restore: loading $file into a scratch database first ($scratch_name)"
 scratch_db="$scratch_name"
-if ! "${DC[@]}" exec -T "$DB_SERVICE" psql -X -q -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" \
+if ! "${DC[@]}" exec -T "$DB_SERVICE" psql -X -q -v ON_ERROR_STOP=1 -U "$PG_USER" -d postgres \
   -c "CREATE DATABASE \"$scratch_name\" TEMPLATE template0" < /dev/null > /dev/null; then
   echo "restore: could not create the scratch database $scratch_name (the role $PG_USER needs CREATEDB, and the volume room for a second copy of the data); nothing was changed" >&2
   exit 1
@@ -386,7 +478,7 @@ case "$scratch_rc" in
     exit 1
     ;;
   *)
-    echo "restore: psql ended without running the COMMIT after $file in the scratch database (the dump ends inside COPY data, or psql stopped reading early); refusing it, nothing was changed" >&2
+    echo "restore: psql ended without running the COMMIT after $file in the scratch database (the dump ends inside COPY data, psql dropped the rest of the input after an empty statement that follows COPY data, or psql stopped reading early); refusing it, nothing was changed" >&2
     exit 1
     ;;
 esac
