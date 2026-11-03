@@ -25,7 +25,9 @@ const dockerCompose = spawnSync('docker', ['compose', 'version'], { encoding: 'u
 const hasCompose = dockerCompose.status === 0;
 const describeIfCompose = hasCompose ? describe : describe.skip;
 if (!hasCompose) {
-  console.warn('check-compose-isolation tests skipped: the docker CLI with the compose plugin is not available');
+  console.warn(
+    'check-compose-isolation tests skipped: the docker CLI with the compose plugin is not available',
+  );
 }
 
 const tmpDirs: string[] = [];
@@ -59,11 +61,12 @@ function fixture(file: string | null, mutate?: Mutation): string {
 // The guard as a child with a hard timeout and stdin closed. It runs at a low priority
 // (nice): its many docker CLI launches would otherwise starve the timing-sensitive
 // process-spawning tests that run in parallel with this file.
-function runGuard(dir: string) {
-  // A list-form `- DATABASE_URL` passes the caller's value through; the null cases need it
-  // unset, whatever the machine running the tests exports.
-  const env = { ...process.env };
-  delete env.DATABASE_URL;
+// extraEnv is exported to the guard on top of the test process's environment.
+function runGuard(dir: string, extraEnv: Record<string, string> = {}) {
+  // The guard scrubs the environment of its `docker compose config` child, so what this
+  // machine exports (DATABASE_URL included) must not change a verdict: it is left in place
+  // here, and the scrub tests below export their own values.
+  const env = { ...process.env, ...extraEnv };
   const result = spawnSync('nice', ['-n', '15', 'node', GUARD, dir], {
     env,
     encoding: 'utf8',
@@ -79,7 +82,8 @@ const replaceFirst =
   (from: string, to: string): Mutation =>
   (text) => {
     if (!text.includes(from)) throw new Error(`mutation anchor not found: ${from}`);
-    return text.replace(from, to);
+    // A function replacer: a string `to` would read `$$` and `$&` as replacement patterns.
+    return text.replace(from, () => to);
   };
 
 describeIfCompose('check-compose-isolation guard', () => {
@@ -99,7 +103,10 @@ describeIfCompose('check-compose-isolation guard', () => {
       'several independent breakages at once',
       (text) =>
         [
-          replaceFirst('    mem_limit: 512m\n    logging: *default-logging\n', '    mem_limit: 512m\n'),
+          replaceFirst(
+            '    mem_limit: 512m\n    logging: *default-logging\n',
+            '    mem_limit: 512m\n',
+          ),
           replaceFirst('    mem_limit: 1536m\n', ''),
           replaceFirst('127.0.0.1:3000/api/health', '127.0.0.1:3000/'),
           replaceFirst('r.ok ? 0 : 1', 'r.status < 600 ? 0 : 1'),
@@ -481,6 +488,8 @@ describeIfCompose('check-compose-isolation guard', () => {
         'db is on the external network "hostnet"',
         'db is on the network "hostnet" named host (host networking)',
       ]);
+      // An external network is rejected as such, not also as an unscoped name.
+      expect(result.stderr).not.toContain('project-scoped');
     });
 
     it('fails on a dev file whose default network is declared external with the name host', () => {
@@ -575,6 +584,527 @@ describeIfCompose('check-compose-isolation guard', () => {
       expectFailure(result, 'Makefile', [
         'line 9 uses docker-compose.dev.yml without -p depsight-dev',
       ]);
+    });
+  });
+
+  // Ways around the db rules that stay inside the compose file: network options that remove
+  // Docker's direct-routing protection, a network name that joins another stack's network,
+  // database services other than the one named db, services in the db's network stack and
+  // values that a variable can change. Each rule has its own fixture, and every fixture
+  // breaks one rule only (the loopback publish of the shipped files stays where it is).
+  describe('the routes around the db isolation', () => {
+    const DEV_FILE = 'docker-compose.dev.yml';
+    const PLAIN_FILE = 'docker-compose.yml';
+    const HOSTED_FILE = 'docker-compose.traefik.yml';
+    const DEV_PORTS =
+      '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n';
+    const GATEWAY_V4 = 'com.docker.network.bridge.gateway_mode_ipv4';
+    // Appends top-level networks to a file that has none (dev) or to its volumes block.
+    const withNetworks = (block: string): Mutation =>
+      replaceFirst('\nvolumes:\n', `\nnetworks:\n${block}\nvolumes:\n`);
+    // Adds services before the top-level volumes block.
+    const withServices = (block: string): Mutation =>
+      replaceFirst('\nvolumes:\n', `${block}\nvolumes:\n`);
+
+    describe('network driver_opts', () => {
+      it('fails on gateway_mode_ipv4 routed on the dev default network, with the loopback publish', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withNetworks(`  default:\n    driver_opts:\n      ${GATEWAY_V4}: routed\n`),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          `db is on network "default" that sets driver_opts "${GATEWAY_V4}"`,
+        ]);
+        // Nothing else is wrong with the file: only the option is reported.
+        expect(result.stderr).not.toContain('publishes');
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on gateway_mode_ipv4 nat-unprotected in the plain file, with no published port', () => {
+        const result = runGuard(
+          fixture(PLAIN_FILE, (text) =>
+            withNetworks(
+              `  default:\n    driver: bridge\n    driver_opts:\n      ${GATEWAY_V4}: nat-unprotected\n`,
+            )(
+              text.replace(
+                /    ports:\n      # Loopback only: the schema-apply[^\n]*\n[^\n]*\n[^\n]*\n/,
+                '',
+              ),
+            ),
+          ),
+        );
+        expectFailure(result, PLAIN_FILE, [
+          `db is on network "default" that sets driver_opts "${GATEWAY_V4}"`,
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on trusted_host_interfaces and gateway_mode_ipv6 on the hosted internal network', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    driver_opts:\n      com.docker.network.bridge.trusted_host_interfaces: eth0\n      com.docker.network.bridge.gateway_mode_ipv6: routed',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on network "db-internal" that sets driver_opts "com.docker.network.bridge.trusted_host_interfaces"',
+          'db is on network "db-internal" that sets driver_opts "com.docker.network.bridge.gateway_mode_ipv6"',
+        ]);
+      });
+
+      it("fails on driver_opts in the db's own attachment to a network", () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '    # Only the private db network: not on traefik-public, no published port.\n    networks:\n      - db-internal\n',
+              '    networks:\n      db-internal:\n        driver_opts:\n          com.docker.network.endpoint.example: x\n',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          `db is on db's attachment to network "db-internal" that sets driver_opts "com.docker.network.endpoint.example"`,
+        ]);
+      });
+    });
+
+    describe('the network name', () => {
+      it('fails on a dev network named after the production stack network', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: depsight_db-internal\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "depsight_db-internal", expected the project-scoped name "<project>_default"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      // A literal name equal to this file's own <project>_<key> follows no -p and no
+      // COMPOSE_PROJECT_NAME: a second stack of the file would join the first one's network.
+      it('fails on a dev network whose literal name equals its own project-scoped name', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: depsight-dev_default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "depsight-dev_default", expected the project-scoped name "<project>_default"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on a hosted db network whose literal name equals its own project-scoped name', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    name: depsight_db-internal',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on the network "db-internal" named "depsight_db-internal", expected the project-scoped name "<project>_db-internal"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      // A `$$` is a literal dollar sign in compose: a name that holds one is a literal
+      // name (reported by the name rule), not a variable reference.
+      // The sentinel project name is no name to hide behind: a literal name equal to it
+      // passes the -p test and must fail the test against the file's own project name.
+      it('fails on a dev network named after the sentinel project of the check', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: guard-sentinel-project_default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "guard-sentinel-project_default", expected the project-scoped name "<project>_default"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on a hosted db network named after the sentinel project of the check', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    name: guard-sentinel-project_db-internal',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on the network "db-internal" named "guard-sentinel-project_db-internal", expected the project-scoped name "<project>_db-internal"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('reads $$ in a network name as a literal dollar sign, not as interpolation', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: depsight-dev_$$default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "depsight-dev_$$default"',
+        ]);
+        expect(result.stderr).toContain('expected the project-scoped name "<project>_default"');
+        expect(result.stderr).not.toContain('variable interpolation');
+      });
+
+      it('fails on a hosted db network that sets a name other than <project>_<key>', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    name: shared-db',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on the network "db-internal" named "shared-db", expected the project-scoped name "<project>_db-internal"',
+        ]);
+      });
+    });
+
+    describe('database services other than db', () => {
+      // One dev fixture with a service per image spelling. Every service sets
+      // network_mode bridge, which the db rules reject, so a service that is not taken for a
+      // database shows as a missing message; the busybox control must stay unreported.
+      it('holds every postgres image spelling to the db rules, and leaves other images alone', () => {
+        const digest = 'a'.repeat(64);
+        const images = [
+          'postgres',
+          'postgres:16-alpine',
+          'docker.io/library/postgres:16',
+          `ghcr.io/acme/postgres@sha256:${digest}`,
+          'registry.example:5000/team/postgres:16@sha256:' + digest,
+          'bitnami/postgresql:16',
+        ];
+        const services = images
+          .map((image, index) => `  pg${index}:\n    image: ${image}\n    network_mode: bridge\n`)
+          .join('');
+        const control = '  control:\n    image: busybox\n    network_mode: bridge\n';
+        const result = runGuard(fixture(DEV_FILE, withServices(`\n${services}${control}`)));
+        expectFailure(
+          result,
+          DEV_FILE,
+          images.map((_, index) => `pg${index} sets network_mode "bridge"`),
+        );
+        expect(result.stderr).not.toContain('control');
+      });
+
+      it('holds a service that publishes or exposes container port 5432 to the db rules', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withServices(
+              [
+                '',
+                '  published:',
+                '    image: busybox',
+                '    network_mode: bridge',
+                '    ports:',
+                '      - "127.0.0.1:6000:5432"',
+                '  exposed:',
+                '    image: busybox',
+                '    network_mode: bridge',
+                '    expose:',
+                '      - "5432"',
+                '  exposed-range:',
+                '    image: busybox',
+                '    network_mode: bridge',
+                '    expose:',
+                '      - "5400-5500/tcp"',
+                '  elsewhere:',
+                '    image: busybox',
+                '    network_mode: bridge',
+                '    expose:',
+                '      - "5000-5431"',
+                '    ports:',
+                '      - "127.0.0.1:7000:5433"',
+                '',
+              ].join('\n'),
+            ),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'published sets network_mode "bridge"',
+          'exposed sets network_mode "bridge"',
+          'exposed-range sets network_mode "bridge"',
+        ]);
+        expect(result.stderr).not.toContain('elsewhere');
+      });
+
+      it('applies the port, network and driver rules to such a service too', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, (text) =>
+            withNetworks('  lan:\n    driver: macvlan\n')(
+              withServices(
+                [
+                  '',
+                  '  pg-extra:',
+                  '    image: postgres:16-alpine',
+                  '    ports:',
+                  '      - "5433:5432"',
+                  '    networks:',
+                  '      - lan',
+                  '',
+                ].join('\n'),
+              )(text),
+            ),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'pg-extra publishes 5433->5432 on 0.0.0.0',
+          'pg-extra is on the network "lan" with driver macvlan, expected the bridge driver',
+        ]);
+        // The db service itself is not blamed for it.
+        expect(result.stderr).not.toContain('db publishes');
+      });
+    });
+
+    describe('services in the network stack of a database service', () => {
+      it('holds published ports of a service sharing the db stack to the loopback rule, at any depth', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withServices(
+              [
+                '',
+                '  side:',
+                '    image: busybox',
+                '    network_mode: "service:db"',
+                '    ports:',
+                '      - "8080:8080"',
+                '  a-deep:',
+                '    image: busybox',
+                '    network_mode: "service:side"',
+                '    ports:',
+                '      - "192.0.2.2:8085:8085"',
+                '  side-deep:',
+                '    image: busybox',
+                '    network_mode: "service:side"',
+                '    ports:',
+                '      - "192.0.2.1:8081:8081"',
+                '  side-loopback:',
+                '    image: busybox',
+                '    network_mode: "service:db"',
+                '    ports:',
+                '      - "127.0.0.1:8082:8082"',
+                '  joined:',
+                '    image: busybox',
+                '    network_mode: "container:some-database"',
+                '    ports:',
+                '      - "8083:8083"',
+                '  unrelated:',
+                '    image: busybox',
+                '    ports:',
+                '      - "8084:8084"',
+                '',
+              ].join('\n'),
+            ),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'side (in the network stack of service:db) publishes 8080->8080 on 0.0.0.0',
+          'side-deep (in the network stack of service:side) publishes 8081->8081 on 192.0.2.1',
+          // Sorts before the service it joins, so a single pass over the services misses it.
+          'a-deep (in the network stack of service:side) publishes 8085->8085 on 192.0.2.2',
+          'joined (in the network stack of container:some-database) publishes 8083->8083 on 0.0.0.0',
+        ]);
+        expect(result.stderr).not.toContain('side-loopback');
+        expect(result.stderr).not.toContain('unrelated');
+      });
+    });
+
+    describe('values a variable can change', () => {
+      it('fails on a sharer port address or network_mode target from interpolation', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withServices(
+              [
+                '',
+                '  side-port:',
+                '    image: busybox',
+                '    network_mode: "service:db"',
+                '    ports:',
+                '      - "${SIDE_BIND:-127.0.0.1}:8080:8080"',
+                '  side-mode:',
+                '    image: busybox',
+                '    network_mode: "service:${SIDE_TARGET:-db}"',
+                '',
+              ].join('\n'),
+            ),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'side-port sets ports through variable interpolation',
+          'side-mode sets network_mode through variable interpolation',
+        ]);
+      });
+
+      it("fails on a db's network_mode, networks list or expose list from interpolation", () => {
+        const result = runGuard(
+          fixture(DEV_FILE, (text) =>
+            replaceFirst(
+              DEV_PORTS,
+              `${DEV_PORTS}    network_mode: "\${DEV_NM:-}"\n    expose:\n      - "\${DEV_EXPOSE:-5432}"\n    networks:\n      - "\${DEV_NET:-default}"\n`,
+            )(text),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db sets network_mode through variable interpolation',
+          'db sets expose through variable interpolation',
+          'db sets networks through variable interpolation',
+        ]);
+      });
+
+      it('fails on a db port address that comes from interpolation, though the default is loopback', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            replaceFirst('"127.0.0.1:5432:5432"', '"${DEV_DB_BIND:-127.0.0.1}:5432:5432"'),
+          ),
+        );
+        expectFailure(result, DEV_FILE, ['db sets ports through variable interpolation']);
+        // The resolved port is on loopback: only the interpolation rule can fail this file.
+        expect(result.stderr).not.toContain('publishes');
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on the same in the plain file with the $VAR spelling', () => {
+        const result = runGuard(
+          fixture(PLAIN_FILE, replaceFirst('"127.0.0.1:5432:5432"', '"$DB_BIND:5432:5432"')),
+        );
+        expectFailure(result, PLAIN_FILE, ['db sets ports through variable interpolation']);
+      });
+
+      it('fails on a db network name or option from interpolation, though the default is scoped', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withNetworks('  default:\n    name: ${DEV_DB_NET:-depsight-dev_default}\n'),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'network "default" sets name through variable interpolation',
+        ]);
+      });
+
+      it('fails on a network driver or external flag from interpolation', () => {
+        const result = runGuard(
+          fixture(
+            DEV_FILE,
+            withNetworks(
+              '  default:\n    driver: ${DEV_DRIVER:-bridge}\n    external: ${DEV_EXTERNAL:-false}\n',
+            ),
+          ),
+        );
+        expectFailure(result, DEV_FILE, [
+          'network "default" sets driver through variable interpolation',
+          'network "default" sets external through variable interpolation',
+        ]);
+      });
+
+      it('fails on an internal flag from interpolation on the hosted db network', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: ${DB_INTERNAL:-true}',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'network "db-internal" sets internal through variable interpolation',
+        ]);
+      });
+    });
+
+    // `make prod` runs docker compose without -f: compose prefers a compose.yaml over
+    // docker-compose.yml and merges an override file over it, and the guard reads neither.
+    describe('compose files that docker compose reads without -f', () => {
+      const IMPLICIT = [
+        'compose.yaml',
+        'compose.yml',
+        'docker-compose.yaml',
+        'compose.override.yaml',
+        'compose.override.yml',
+        'docker-compose.override.yaml',
+        'docker-compose.override.yml',
+      ];
+
+      it.each(IMPLICIT)('fails on %s in the repo root and names it', (name) => {
+        const dir = fixture(null);
+        fs.writeFileSync(path.join(dir, name), 'services: {}\n');
+        const result = runGuard(dir);
+        expectFailure(result, name, [
+          'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+    });
+
+    describe('implicit compose files that a plain existence test misses', () => {
+      const message =
+        'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it';
+
+      it('fails on a dangling symlink named like an override file', () => {
+        const dir = fixture(null);
+        fs.symlinkSync(
+          '../deploy-only/override.yml',
+          path.join(dir, 'docker-compose.override.yml'),
+        );
+        const result = runGuard(dir);
+        expectFailure(result, 'docker-compose.override.yml', [message]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it.each(['Docker-Compose.Override.yml', 'COMPOSE.YAML'])(
+        'fails on the case variant %s and names it as found',
+        (name) => {
+          const dir = fixture(null);
+          fs.writeFileSync(path.join(dir, name), 'services: {}\n');
+          const result = runGuard(dir);
+          expectFailure(result, name, [message]);
+          expect(result.stderr).toContain('compose isolation check failed (1)');
+        },
+      );
+    });
+
+    describe("the caller's environment", () => {
+      it('ignores an exported DATABASE_URL that would turn a null app DATABASE_URL into a value', () => {
+        const fixtureDir = fixture(PLAIN_FILE, (text) =>
+          text.replace(/      - DATABASE_URL=postgresql[^\n]*\n/, '      - DATABASE_URL\n'),
+        );
+        const result = runGuard(fixtureDir, {
+          DATABASE_URL: 'postgresql://depsight:sentinel-pw-0f3a@db:5432/depsight',
+        });
+        expectFailure(result, PLAIN_FILE, ['app sets no DATABASE_URL']);
+      });
+
+      it('ignores an exported variable a compose file interpolates', () => {
+        const fixtureDir = fixture(
+          PLAIN_FILE,
+          replaceFirst('name: depsight\n', 'name: ${DEPSIGHT_GUARD_TEST_PROJECT:-wrong}\n'),
+        );
+        const result = runGuard(fixtureDir, { DEPSIGHT_GUARD_TEST_PROJECT: 'depsight' });
+        expectFailure(result, PLAIN_FILE, ['project name is "wrong", expected "depsight"']);
+      });
+
+      it('ignores an exported POSTGRES_PASSWORD and COMPOSE_PROJECT_NAME', () => {
+        const result = runGuard(fixture(null), {
+          POSTGRES_PASSWORD: 'caller-pw',
+          COMPOSE_PROJECT_NAME: 'other',
+        });
+        expect(result.stderr).toBe('');
+        expect(result.status).toBe(0);
+      });
     });
   });
 
