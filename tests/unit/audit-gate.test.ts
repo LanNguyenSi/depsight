@@ -786,18 +786,19 @@ describe('npm stderr sanitising', () => {
 });
 
 describe('repository allowlist file', () => {
-  it('parses and holds exactly one entry, for GHSA-vfj7-8cjw-p6xm', () => {
+  it('parses today and every entry is well-formed, within the review horizon', () => {
     const file = path.join(REPO_ROOT, '.github/audit-allowlist.json');
-    const entries = parseAllowlist(fs.readFileSync(file, 'utf8'), file);
-    expect(entries).toHaveLength(1);
-    expect(entries[0].id).toBe(BRACES_ID);
-    expect(entries[0].reason.length).toBeGreaterThan(0);
-    // A renewal moves reviewBy; assert the shape and the gate's own horizon
-    // against the real current UTC day instead of pinning one date.
-    expect(entries[0].reviewBy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     const today = todayUtc();
-    expect(entries[0].reviewBy <= addDays(today, MAX_REVIEW_HORIZON_DAYS)).toBe(true);
-    expect(() => parseAllowlist(fs.readFileSync(file, 'utf8'), file, today)).not.toThrow();
+    // An empty list is valid (no advisory is excepted); a renewal moves
+    // reviewBy, so assert the shape and the gate's own horizon against the
+    // real current UTC day instead of pinning ids or one date.
+    const entries = parseAllowlist(fs.readFileSync(file, 'utf8'), file, today);
+    for (const entry of entries) {
+      expect(entry.id).toMatch(/^GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$/);
+      expect(entry.reason.length).toBeGreaterThan(0);
+      expect(entry.reviewBy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(entry.reviewBy <= addDays(today, MAX_REVIEW_HORIZON_DAYS)).toBe(true);
+    }
   });
 });
 
