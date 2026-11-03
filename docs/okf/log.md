@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-11-03T11:35:44Z: `rescan-and-staleness.md` re-verified after the restore section of `docs/configuration.md` changed and after merging the compose-guard and self-host changes from master; it cites `docs/configuration.md` only for the `SCAN_INTERVAL_MINUTES` row, which is unchanged. Re-stamped.
 - 2026-11-03T10:52:03Z: the restore section of `docs/configuration.md` says that a `COPY ... TO STDOUT` prints no command tag and is not refused by the COPY count, while a server-side COPY from or to a file is. `rescan-and-staleness.md`: its `docs/configuration.md` claim (where `SCAN_INTERVAL_MINUTES` is documented, line 14) still holds; re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-11-03T09:58:35Z: the restore section of `docs/configuration.md` adds the COPY count (psql's skip after an empty statement that follows COPY data, the COPY line check, the check before the `COMMIT`), the `SET` lines of the load, the maintenance database and the `DROP` failure hints, and narrows what the checks cover. `rescan-and-staleness.md`: its `docs/configuration.md` claim (where `SCAN_INTERVAL_MINUTES` is documented, line 14) still holds; re-stamped. Checks: `npx okf-kit check docs/okf`.
 - 2026-11-03T08:30:08Z: the restore section of `docs/configuration.md` says how to drop a scratch database that a killed run left behind. `rescan-and-staleness.md`: its `docs/configuration.md` claim (where `SCAN_INTERVAL_MINUTES` is documented) still holds; re-stamped. Checks: `npx okf-kit check docs/okf`.
