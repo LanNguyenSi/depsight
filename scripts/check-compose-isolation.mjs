@@ -174,7 +174,7 @@ function checkOperations(file, cfg) {
   if (!cfg.services.db.healthcheck) fail(file, 'db has no healthcheck');
 }
 
-// The rules that keep the db service unreachable from outside its own stack. checkProd
+// The compose-level rules against exposing the db service beyond its own stack. checkProd
 // runs them for both production files and the dev block below runs them for the dev file,
 // so a rule added here holds for every shipped file. checkProd's other db rules are not
 // here because they do not decide who can reach the database.
@@ -216,6 +216,12 @@ function checkOperations(file, cfg) {
 // docker-compose.yml (no migrate service: the schema is applied from the host) and the dev
 // file (host-side Prisma and database tests, see CONTRIBUTING.md) publish the db port on
 // loopback, so their db stays on the default network, which is not internal.
+//
+// Not covered (known gaps, tracked separately): bridge driver_opts that turn off Docker's
+// direct-routing protection (gateway_mode_ipv4/ipv6 routed or nat-unprotected,
+// trusted_host_interfaces), a non-external network named after another stack's network
+// (compose joins it by name), services other than db, and daemon-level settings such as
+// allow-direct-routing or iptables false, which no compose file can show.
 function checkDbExposure(file, cfg, { requireInternalNetworks }) {
   const db = cfg.services.db;
   if (db.network_mode !== undefined) fail(file, `db sets network_mode "${db.network_mode}"`);
