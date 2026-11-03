@@ -116,6 +116,13 @@ drill_restore() {
     "$REPO_ROOT/scripts/restore.sh" --yes "$@" "$f" > "$WORK/last.out" 2> "$WORK/last.err" || rc=$?
 }
 
+# A restore.sh that was killed (or a broken one) leaves its scratch database behind; the
+# checks below count them, so a leftover from an earlier run would fail every one.
+for db in $(sql postgres "SELECT datname FROM pg_database WHERE datname ~ '^restore_scratch_[0-9a-f]+\$'"); do
+  echo "drill: dropping $db, left by an earlier run"
+  sql postgres "DROP DATABASE \"$db\" WITH (FORCE)" > /dev/null
+done
+
 echo "drill: applying the schema like the migrate service"
 cd "$REPO_ROOT"
 DATABASE_URL="$DRILL_DATABASE_URL" HOME="$WORK" npx prisma db execute \
