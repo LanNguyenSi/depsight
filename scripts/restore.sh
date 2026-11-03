@@ -358,8 +358,8 @@ fi
 # commands than copy_lines and refuses. A skip that reaches the end of the input takes the
 # check and the COMMIT with it: no sentinel. False refusals (fail closed): a line that is
 # exactly `\.` or in the COPY form inside a string, comment or function body, a COPY value
-# that is such a line, a COPY that pg_dump does not write (another spelling, more than one
-# line, a newline in a table or column name), and a COPY ... TO STDOUT.
+# that is such a line, a COPY pg_dump does not write (another spelling, no schema, a name
+# with a newline, a server-side COPY from or to a file); COPY ... TO STDOUT prints no tag.
 # pg_dump's form: a schema-qualified table, the column list (none for a table without
 # columns, then two spaces), each name plain or double-quoted; a carriage return at the end
 # is allowed, like psql allows it after `\.`.
