@@ -77,10 +77,11 @@ describe('migrate service uses the repo build', () => {
     ]);
   });
 
-  // The relay runs pre_update on the tree from BEFORE the pull, its own post-pull build is a plain
-  // `build` (a profile-scoped service is skipped), and `compose run` reuses an existing image.
-  // Only a build inside post_update sees the pulled schema.
-  const hookItems = (name: 'pre_update' | 'post_update') => {
+  // The relay's own post-pull build is a plain `build` (a profile-scoped service is skipped) and
+  // `compose run` reuses an existing image, so only a build inside post_update sees the pulled
+  // schema. A pre_update hook runs on the tree from BEFORE the pull, where a build only wastes
+  // time on a tree that is never shipped, so the file must not carry one.
+  const hookItems = (name: 'post_update') => {
     const hook = read('.relay.yml').match(new RegExp(`^${name}:\\s*\\n((?:\\s+-.*\\n?)+)`, 'm'));
     expect(hook, `.relay.yml has a ${name} list`).not.toBeNull();
     return (hook as RegExpMatchArray)[1]
@@ -102,15 +103,8 @@ describe('migrate service uses the repo build', () => {
     expect(migrateBlock()).toMatch(/^ {4}profiles: \["tools"\]$/m);
   });
 
-  it('pre_update does not build migrate: it runs on the pre-pull tree and would bake in the old schema', () => {
-    const items = hookItems('pre_update');
-    expect(items.length).toBeGreaterThan(0);
-    for (const item of items) {
-      expect(item, item).not.toMatch(/--profile\b/);
-      expect(item, item).not.toMatch(/\bmigrate\b/);
-      expect(item, item).not.toMatch(/--build\b/);
-    }
-    expect(items.some((item) => BUILDS_MIGRATE.test(item))).toBe(false);
+  it('ships no pre_update hook: it runs on the pre-pull tree, where a build cannot reach the shipped image', () => {
+    expect(read('.relay.yml')).not.toMatch(/^pre_update:/m);
   });
 });
 
