@@ -528,6 +528,9 @@ loads_check d.copy-last 'CREATE TABLE public.drill_copy_last (v text);\nCOPY pub
   'SELECT string_agg(v, $$,$$) FROM public.drill_copy_last' 'last row'
 
 # legitimate content the earlier line check refused: it loads now
+loads_same w4.2 'SAVEPOINT a;\nRELEASE a;\nSAVEPOINT b;\nSELECT 1;\nROLLBACK TO b;\nRELEASE SAVEPOINT b;'
+loads_check w4.6 'CREATE VIEW public.drill_case AS SELECT CASE WHEN true THEN 1 ELSE 2\nEND AS x, 1 AS endpoint;' \
+  'SELECT x::text || endpoint::text FROM public.drill_case' 11
 loads_same w4.8b '-- note: SELECT 1; COMMIT; here'
 loads_check w4.8c "CREATE TABLE public.drill_s1 (v text);\nINSERT INTO public.drill_s1 VALUES ('a\nEND;\nb');" \
   "SELECT replace(v, E'\\n', '|') FROM public.drill_s1" 'a|END;|b'
