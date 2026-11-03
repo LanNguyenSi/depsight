@@ -38,7 +38,8 @@ services:
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: depsight_dev
     ports:
-      - "5432:5432"
+      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

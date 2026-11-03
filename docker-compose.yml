@@ -1,9 +1,10 @@
 # Production stack for self-hosting WITHOUT a reverse proxy (`make prod`): the app is
 # published on port 3000 and the database on 127.0.0.1:5432. Before exposing the host,
 # follow docs/configuration.md (Self-hosting): set POSTGRES_PASSWORD, put a reverse proxy in
-# front and bind port 3000 to 127.0.0.1, set WEBHOOK_TRUSTED_PROXY_HOPS, and apply the
-# schema yourself (this file has no migrate service). docker-compose.traefik.yml is the
-# hosted instance's file, with its hostnames; see "Which compose file" in the same chapter.
+# front and bind port 3000 to 127.0.0.1, set WEBHOOK_TRUSTED_PROXY_HOPS (this file defaults it
+# to 0, no trusted proxy), and apply the schema yourself (this file has no migrate service).
+# docker-compose.traefik.yml is the hosted instance's file, with its hostnames; see
+# "Which compose file" in the same chapter.
 # Do not run the dev stack (docker-compose.dev.yml) from the same checkout: the dev file has
 # its own project name and database volume, and `make dev*` pins it with -p.
 name: depsight
@@ -27,6 +28,10 @@ services:
       - NODE_ENV=production
       # Explicit V8 heap ceiling: Node otherwise derives it from the memory cap.
       - NODE_OPTIONS=--max-old-space-size=1024
+      # This stack has no proxy in front of the app, so X-Forwarded-For is whatever the caller
+      # wrote: trust no hop by default. Behind a reverse proxy set WEBHOOK_TRUSTED_PROXY_HOPS in
+      # .env to the number of proxies you run (docs/configuration.md, Self-hosting).
+      - WEBHOOK_TRUSTED_PROXY_HOPS=${WEBHOOK_TRUSTED_PROXY_HOPS:-0}
       - DATABASE_URL=postgresql://depsight:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (an existing database keeps its current password, depsight if you never changed it)}@db:5432/depsight
     env_file:
       - path: .env

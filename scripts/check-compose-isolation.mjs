@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Guard for the shipped compose files: the production database must stay off the
 // edge network (and, in the hosted file, only on internal networks), its port must
-// not be published on every interface, one variable must carry its password, a routed
-// service on several networks must name the edge network for Traefik, and the dev
-// and production stacks must not share a project name or a database volume. It also
+// not be published on every interface (the dev file's database included), one variable
+// must carry its password, a routed service on several networks must name the edge
+// network for Traefik, and the dev and production stacks must not share a project name
+// or a database volume. It also
 // holds the operational invariants of the same files: every service rotates its logs and
 // has a memory limit, and the app has a healthcheck on /api/health that waits for the
 // database to be healthy.
@@ -279,6 +280,17 @@ for (const unset of [null, '']) {
 const prod = PROD_FILES.map((file) => [file, checkProd(file)]);
 
 const dev = resolveCompose(DEV_FILE);
+// The dev database has fixed credentials (dev/dev): publishing it on every interface would
+// hand them to the network, so it follows the loopback rule of the production files.
+if (!dev.services?.db) fail(DEV_FILE, 'needs a db service');
+for (const port of dev.services?.db?.ports ?? []) {
+  if (!LOOPBACK.has(port.host_ip ?? '')) {
+    fail(
+      DEV_FILE,
+      `db publishes ${port.published}->${port.target} on ${port.host_ip || '0.0.0.0'}`,
+    );
+  }
+}
 if (dev.name !== DEV_PROJECT) {
   fail(DEV_FILE, `project name is "${dev.name}", expected "${DEV_PROJECT}"`);
 }

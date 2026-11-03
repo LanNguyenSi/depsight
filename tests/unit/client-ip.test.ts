@@ -64,6 +64,21 @@ describe('trustedProxyHops', () => {
     expect(trustedProxyHops()).toBe(DEFAULT_TRUSTED_PROXY_HOPS);
   });
 
+  // The value wins whenever it is a whole number from 0 to 8; unset and empty (not only
+  // blank) fall to the default of one hop. docker-compose.yml passes its own default of 0
+  // into the container, so this default only applies where nothing sets the variable.
+  it.each([
+    ['unset', undefined, DEFAULT_TRUSTED_PROXY_HOPS],
+    ['empty', '', DEFAULT_TRUSTED_PROXY_HOPS],
+    ['0', '0', 0],
+    ['1', '1', 1],
+    ['2', '2', 2],
+  ])('value %s: the environment wins over the default only when set', (_label, value, expected) => {
+    if (value === undefined) delete process.env.WEBHOOK_TRUSTED_PROXY_HOPS;
+    else process.env.WEBHOOK_TRUSTED_PROXY_HOPS = value;
+    expect(trustedProxyHops()).toBe(expected);
+  });
+
   it('reads a whole number from 0 to 8', () => {
     process.env.WEBHOOK_TRUSTED_PROXY_HOPS = '0';
     expect(trustedProxyHops()).toBe(0);

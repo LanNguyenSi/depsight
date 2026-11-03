@@ -368,6 +368,36 @@ describeIfCompose('check-compose-isolation guard', () => {
       expect(result.stderr).not.toContain('project name');
     });
 
+    it('fails on a dev db published on every interface or on a non-loopback address', () => {
+      const result = runGuard(
+        fixture(
+          DEV,
+          replaceFirst(
+            '      - "127.0.0.1:5432:5432"\n',
+            '      - "5432:5432"\n      - "0.0.0.0:5433:5432"\n      - "192.0.2.1:5434:5432"\n      - "[::1]:5435:5432"\n',
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db publishes 5432->5432 on 0.0.0.0',
+        'db publishes 5433->5432 on 0.0.0.0',
+        'db publishes 5434->5432 on 192.0.2.1',
+      ]);
+      // The loopback spelling ::1 is accepted.
+      expect(result.stderr).not.toContain('db publishes 5435->5432');
+    });
+
+    it('fails on a dev file without a db service', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          text
+            .replace(/\n  db:\n[\s\S]*?\n(?=volumes:)/, '\n')
+            .replace('    depends_on:\n      db:\n        condition: service_healthy\n', ''),
+        ),
+      );
+      expectFailure(result, DEV, ['needs a db service']);
+    });
+
     it('fails on a .relay.yml that names the edge network or holds credentials, and on an unpinned Makefile use', () => {
       const result = runGuard(
         fixtureMany([
