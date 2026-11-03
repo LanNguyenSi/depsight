@@ -280,6 +280,44 @@ describeIfCompose('check-compose-isolation guard', () => {
       expect(result.stderr).not.toContain('db publishes 5434->5432');
     });
 
+    it('fails on a db on a network named host that is not declared external', () => {
+      const result = runGuard(
+        fixture(PLAIN, (text) =>
+          replaceFirst(
+            '      - "127.0.0.1:5432:5432"\n',
+            '      - "127.0.0.1:5432:5432"\n    networks:\n      - default\n      - hostnet\n',
+          )(
+            replaceFirst(
+              '\nvolumes:\n',
+              '\nnetworks:\n  hostnet:\n    name: host\n\nvolumes:\n',
+            )(text),
+          ),
+        ),
+      );
+      expectFailure(result, PLAIN, ['db is on the network "hostnet" named host (host networking)']);
+      expect(result.stderr).not.toContain('external network');
+    });
+
+    it('fails on a db on an ipvlan network, while an explicit bridge driver passes', () => {
+      const result = runGuard(
+        fixture(PLAIN, (text) =>
+          replaceFirst(
+            '      - "127.0.0.1:5432:5432"\n',
+            '      - "127.0.0.1:5432:5432"\n    networks:\n      - default\n      - lan\n',
+          )(
+            replaceFirst(
+              '\nvolumes:\n',
+              '\nnetworks:\n  default:\n    driver: bridge\n  lan:\n    driver: ipvlan\n    driver_opts:\n      parent: eth0\n\nvolumes:\n',
+            )(text),
+          ),
+        ),
+      );
+      expectFailure(result, PLAIN, [
+        'db is on the network "lan" with driver ipvlan, expected the bridge driver',
+      ]);
+      expect(result.stderr).not.toContain('"default" with driver');
+    });
+
     it('fails on a hosted file whose fallback is not the live password', () => {
       const result = runGuard(
         fixture(HOSTED, (text) =>
@@ -366,6 +404,149 @@ describeIfCompose('check-compose-isolation guard', () => {
       );
       expectFailure(result, DEV, ['volume "depsight_postgres_data" is also a production volume']);
       expect(result.stderr).not.toContain('project name');
+    });
+
+    it('fails on a dev db published on every interface or on a non-loopback address', () => {
+      const result = runGuard(
+        fixture(
+          DEV,
+          replaceFirst(
+            '      - "127.0.0.1:5432:5432"\n',
+            '      - "5432:5432"\n      - "0.0.0.0:5433:5432"\n      - "192.0.2.1:5434:5432"\n      - "[::1]:5435:5432"\n',
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db publishes 5432->5432 on 0.0.0.0',
+        'db publishes 5433->5432 on 0.0.0.0',
+        'db publishes 5434->5432 on 192.0.2.1',
+      ]);
+      // The loopback spelling ::1 is accepted.
+      expect(result.stderr).not.toContain('db publishes 5435->5432');
+    });
+
+    it('fails on a dev db with network_mode host, which publishes nothing the port check can see', () => {
+      const result = runGuard(
+        fixture(
+          DEV,
+          replaceFirst(
+            '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n',
+            '    network_mode: host\n',
+          ),
+        ),
+      );
+      expectFailure(result, DEV, ['db sets network_mode "host"']);
+    });
+
+    it('fails on a dev db that shares the app network stack while the app publishes 5432', () => {
+      const result = runGuard(
+        fixtureMany([
+          [
+            DEV,
+            replaceFirst(
+              '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n',
+              '    network_mode: "service:app"\n',
+            ),
+          ],
+          [
+            DEV,
+            // The app publishes 5432 and drops its wait on db: compose rejects the cycle
+            // that network_mode "service:app" would otherwise make with depends_on.
+            (text) =>
+              text
+                .replace('      - "3000:3000"\n', '      - "3000:3000"\n      - "5432:5432"\n')
+                .replace('    depends_on:\n      db:\n        condition: service_healthy\n', ''),
+          ],
+        ]),
+      );
+      expectFailure(result, DEV, ['db sets network_mode "service:app"']);
+    });
+
+    // The dev db goes through the same exposure rules as the production files' db. A
+    // network named host is host networking whether or not it is declared external.
+    const DEV_PORTS =
+      '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n';
+    const devNetworks = (block: string): Mutation =>
+      replaceFirst('volumes:\n  postgres_data:', `networks:\n${block}\nvolumes:\n  postgres_data:`);
+
+    it('fails on a dev db on an external network named host', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  hostnet:\n    external: true\n    name: host\n')(
+            replaceFirst(DEV_PORTS, '    networks:\n      - hostnet\n')(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db is on the external network "hostnet"',
+        'db is on the network "hostnet" named host (host networking)',
+      ]);
+    });
+
+    it('fails on a dev file whose default network is declared external with the name host', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  default:\n    external: true\n    name: host\n')(
+            replaceFirst(DEV_PORTS, '')(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db is on the external network "default"',
+        'db is on the network "default" named host (host networking)',
+      ]);
+    });
+
+    it('fails on a dev db on a network named host that is not declared external', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  hostnet:\n    name: host\n')(
+            replaceFirst(DEV_PORTS, '    networks:\n      - hostnet\n')(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, ['db is on the network "hostnet" named host (host networking)']);
+      expect(result.stderr).not.toContain('external network');
+    });
+
+    it('fails on a dev db on the edge network, declared without external', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  edge:\n    name: traefik-public\n')(
+            replaceFirst(
+              DEV_PORTS,
+              `${DEV_PORTS}    networks:\n      - default\n      - edge\n`,
+            )(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, ['db is on the edge network traefik-public']);
+      expect(result.stderr).not.toContain('external network');
+    });
+
+    it('fails on a dev db on a macvlan network, which needs no published port', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          devNetworks('  lan:\n    driver: macvlan\n    driver_opts:\n      parent: eth0\n')(
+            replaceFirst(DEV_PORTS, '    networks:\n      - lan\n')(text),
+          ),
+        ),
+      );
+      expectFailure(result, DEV, [
+        'db is on the network "lan" with driver macvlan, expected the bridge driver',
+      ]);
+      expect(result.stderr).not.toContain('external network');
+    });
+
+    it('fails on a dev file without a db service', () => {
+      const result = runGuard(
+        fixture(DEV, (text) =>
+          text
+            .replace(/\n  db:\n[\s\S]*?\n(?=volumes:)/, '\n')
+            .replace('    depends_on:\n      db:\n        condition: service_healthy\n', ''),
+        ),
+      );
+      expectFailure(result, DEV, ['needs a db service']);
     });
 
     it('fails on a .relay.yml that names the edge network or holds credentials, and on an unpinned Makefile use', () => {
