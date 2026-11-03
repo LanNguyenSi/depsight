@@ -27,7 +27,7 @@ Full feature list, including known limitations, in [docs/features.md](docs/featu
 
 ## Quick start
 
-Prerequisites: Docker Engine 25 or later and Docker Compose 2.24 or later. The minimums come from the shipped compose files: the healthcheck `start_interval` needs Engine 25, the `env_file` entry with `required: false` needs Compose 2.24, and building the schema-migrate image needs BuildKit (the Docker buildx plugin, Docker Engine 23 or later). See [docs/configuration.md](docs/configuration.md#health-check-resource-limits-and-log-rotation) for the detail.
+Prerequisites: Docker Engine 25 or later and Docker Compose 2.24 or later. The minimums come from the shipped compose files: the healthcheck `start_interval` needs Engine 25, the `env_file` entry with `required: false` needs Compose 2.24, and building the schema-migrate image needs BuildKit (the Docker buildx plugin, Docker Engine 23 or later). [docs/configuration.md](docs/configuration.md) covers the healthcheck (Health check, resource limits and log rotation) and the migrate image build (Production).
 
 ```bash
 git clone https://github.com/LanNguyenSi/depsight.git
