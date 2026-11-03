@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-11-03T07:47:32Z: `rescan-and-staleness.md` re-verified after the `docs/configuration.md` compose isolation guard paragraph gained the network driver rule. The doc cites `docs/configuration.md` only as the place `SCAN_INTERVAL_MINUTES` is documented (the cron interval row); that row is unchanged. Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-11-03T07:37:55Z: `rescan-and-staleness.md` re-verified after `docs/configuration.md` changed the compose isolation guard paragraph (the db exposure rules now cover the dev file and a network named `host`). The doc cites `docs/configuration.md` only as the place `SCAN_INTERVAL_MINUTES` is documented (the cron interval row); that row is unchanged. Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-11-03T07:24:08Z: `rescan-and-staleness.md` re-verified after `docs/configuration.md` changed the `WEBHOOK_TRUSTED_PROXY_HOPS` table row again (shell value beats `.env`, availability cost of the `0` default). The doc cites `docs/configuration.md` only as the place `SCAN_INTERVAL_MINUTES` is documented (the cron interval row); that row is unchanged. Checked with `okf-kit check docs/okf`. Re-stamped.
 - 2026-11-03T07:10:27Z, mcp-vs-web-api re-verified and re-stamped after `docs/api.md` gained the
