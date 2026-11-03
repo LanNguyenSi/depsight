@@ -346,5 +346,30 @@ done
   fi
 }
 
+# (o) BACKUP_COMPOSE_FILE precedence, with the variable truly absent (run_backup always
+# sets it): unset and empty use the hosted docker-compose.traefik.yml of the checkout, a
+# non-empty value (the self-hosting docker-compose.yml) wins
+{
+  repo="$(cd "$SCRIPT_DIR/.." && pwd)"
+  SELF_COMPOSE="$WORKDIR/docker-compose.yml"; : > "$SELF_COMPOSE"
+  used_files() { grep -o -- 'compose -f [^ ]*' "$FAKE_DOCKER_LOG" | sort -u | tr '\n' ' '; }
+  : > "$FAKE_DOCKER_LOG"; r1=0
+  env -u BACKUP_COMPOSE_FILE PATH="$FAKE_BIN:$PATH" BACKUP_DIR="$WORKDIR/o1" "$BACKUP_SCRIPT" > /dev/null 2>&1 || r1=$?
+  f1="$(used_files)"
+  : > "$FAKE_DOCKER_LOG"; r2=0
+  env BACKUP_COMPOSE_FILE= PATH="$FAKE_BIN:$PATH" BACKUP_DIR="$WORKDIR/o2" "$BACKUP_SCRIPT" > /dev/null 2>&1 || r2=$?
+  f2="$(used_files)"
+  run_backup "$WORKDIR/o3" BACKUP_COMPOSE_FILE="$SELF_COMPOSE"; r3=$rc
+  f3="$(used_files)"
+  if [ "$r1$r2$r3" = 000 ] \
+    && [ "$f1" = "compose -f $repo/docker-compose.traefik.yml " ] \
+    && [ "$f2" = "compose -f $repo/docker-compose.traefik.yml " ] \
+    && [ "$f3" = "compose -f $SELF_COMPOSE " ]; then
+    pass "(o) BACKUP_COMPOSE_FILE: unset and empty use the hosted file, a set value wins"
+  else
+    fail "(o) compose file precedence: rc=$r1/$r2/$r3 used=[$f1] [$f2] [$f3]"
+  fi
+}
+
 echo "backup tests: $pass_count passed, $fail_count failed"
 [ "$fail_count" -eq 0 ]

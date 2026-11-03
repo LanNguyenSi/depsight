@@ -1,4 +1,4 @@
-.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps prod prod-down backup restore build test lint format ci clean help
+.PHONY: install hooks dev dev-up dev-down dev-logs dev-ps dev-clean prod prod-down backup restore backup-selfhost restore-selfhost build test lint format format-check ci clean help
 
 .DEFAULT_GOAL := help
 
@@ -42,13 +42,19 @@ prod: ## Build and start production containers
 prod-down: ## Stop production containers
 	docker compose down
 
-# ── Backup and restore (hosted stack, docker-compose.traefik.yml) ───
+# ── Backup and restore (hosted stack, docker-compose.traefik.yml; *-selfhost: docker-compose.yml) ───
 
 backup: ## Dump the hosted Postgres into backups/ (see docs/configuration.md, Backup and restore)
 	scripts/backup.sh
 
 restore: ## Restore a dump: make restore FILE=backups/depsight-<ts>.sql CONFIRM=yes [NO_PRE_BACKUP=yes] (destructive)
 	scripts/restore.sh $(if $(filter yes,$(CONFIRM)),--yes) $(if $(filter yes,$(NO_PRE_BACKUP)),--no-pre-backup) $(FILE)
+
+backup-selfhost: ## Dump the self-hosting Postgres (docker-compose.yml) into backups/
+	BACKUP_COMPOSE_FILE=docker-compose.yml scripts/backup.sh
+
+restore-selfhost: ## Restore on the self-hosting stack: make restore-selfhost FILE=... CONFIRM=yes [NO_PRE_BACKUP=yes]; no schema step, apply it after (destructive)
+	BACKUP_COMPOSE_FILE=docker-compose.yml RESTORE_MIGRATE_SERVICE= scripts/restore.sh $(if $(filter yes,$(CONFIRM)),--yes) $(if $(filter yes,$(NO_PRE_BACKUP)),--no-pre-backup) $(FILE)
 
 # ── Run commands inside dev container ───────────────────────────────
 

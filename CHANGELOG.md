@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Backup and restore on the self-hosting stack:** `scripts/backup.sh` and `scripts/restore.sh` defaulted to the hosted `docker-compose.traefik.yml` and a `migrate` service that `docker-compose.yml` does not have. New `make backup-selfhost` and `make restore-selfhost` run them against `docker-compose.yml` with the migrate step skipped; `restore.sh` now says when `RESTORE_MIGRATE_SERVICE` is empty and the schema step was skipped. `docs/configuration.md` documents the self-hosting commands and the schema step to run after restoring an older dump. The hosted targets and defaults are unchanged.
+
 ### Changed
 
 - The root `postcss` override now references the direct dependency (`"$postcss"`), so a dependency update of `postcss` no longer fails with `EOVERRIDE`; the security floor stays in the direct dependency range.
 - Dependency updates: `renovate.json` extends the shared `github>LanNguyenSi/renovate-config` preset (weekly grouped patch/minor pull requests, 7-day minimum release age, no automerge, majors only through the Dependency Dashboard).
 - **Runtime and CI move from Node 20 (EOL) to Node 24 LTS; `@types/node` ^24:** the `Dockerfile` (all four stages) and `Dockerfile.dev` use `node:24-slim`, every CI job and the audit workflow run on Node 24, and the root `@types/node` is `^24` (lockfile: `@types/node` 24.19.2 and its dependency `undici-types` 7.24.6 only). The published MCP package keeps `engines` `>=20` and `@types/node` `^20.0.0`, and its CI job now runs on Node 22 and 24. No source changes were needed. The `migrate` and `runner` images build and the runner reaches "Ready" on Node 24.22.2 with npm 11.19.1.
+- **The deploy relay no longer runs a redundant pre-update build:** the `.relay.yml` `pre_update` hook ran `docker compose -f docker-compose.traefik.yml build --no-cache`, but the relay runs `pre_update` before it pulls and runs its own `docker compose build` and `up -d` after the pull, so the hook was a full no-cache build of the previous tree on every deploy (wasted time, timeout risk, no effect on the shipped image; the post-pull build now reuses cached layers instead of following a forced no-cache rebuild of the old tree). The next production deploy builds once, after the pull, instead of twice; no manual step is needed. The `migrate` image stays built by `post_update` (`run --build`, the relay's own build skips the profile-scoped service); `docs/configuration.md`, the `docker-compose.traefik.yml` comment and `tests/unit/migrate-image.test.ts` are updated to match.
+- Removed the `GHSA-vfj7-8cjw-p6xm` (braces) entry from `.github/audit-allowlist.json`: GitHub withdrew the advisory on 2026-10-23, and `npm audit` no longer reports it in this repo's lockfile tree(s), so the gate stays CLEAN with an empty `entries` list. `scripts/audit-gate.mjs` is unchanged.
+
+### Fixed
+
+- **Makefile `.PHONY` and the README Docker prerequisites:** `dev-clean` and `format-check` were missing from the `.PHONY` list. The Quick start prerequisites now name the real minimums the shipped compose files use (Docker Engine 25 for the healthcheck `start_interval`, Docker Compose 2.24 for the `env_file` entry with `required: false`, BuildKit/buildx on Docker Engine 23 or later to build the migrate image), with a pointer to `docs/configuration.md` for the detail.
 
 ### Security
 
