@@ -387,6 +387,43 @@ describeIfCompose('check-compose-isolation guard', () => {
       expect(result.stderr).not.toContain('db publishes 5435->5432');
     });
 
+    it('fails on a dev db with network_mode host, which publishes nothing the port check can see', () => {
+      const result = runGuard(
+        fixture(
+          DEV,
+          replaceFirst(
+            '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n',
+            '    network_mode: host\n',
+          ),
+        ),
+      );
+      expectFailure(result, DEV, ['db sets network_mode "host"']);
+    });
+
+    it('fails on a dev db that shares the app network stack while the app publishes 5432', () => {
+      const result = runGuard(
+        fixtureMany([
+          [
+            DEV,
+            replaceFirst(
+              '    ports:\n      # Loopback only: the dev credentials (dev/dev) must not be reachable from the network.\n      - "127.0.0.1:5432:5432"\n',
+              '    network_mode: "service:app"\n',
+            ),
+          ],
+          [
+            DEV,
+            // The app publishes 5432 and drops its wait on db: compose rejects the cycle
+            // that network_mode "service:app" would otherwise make with depends_on.
+            (text) =>
+              text
+                .replace('      - "3000:3000"\n', '      - "3000:3000"\n      - "5432:5432"\n')
+                .replace('    depends_on:\n      db:\n        condition: service_healthy\n', ''),
+          ],
+        ]),
+      );
+      expectFailure(result, DEV, ['db sets network_mode "service:app"']);
+    });
+
     it('fails on a dev file without a db service', () => {
       const result = runGuard(
         fixture(DEV, (text) =>

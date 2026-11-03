@@ -24,13 +24,16 @@ afterEach(() => {
 });
 
 // The app service's resolved WEBHOOK_TRUSTED_PROXY_HOPS in `file`, with the variable set to
-// `value` in the caller's environment (undefined = unset) or, with `dotenv`, in the project's
-// .env file (compose reads that file for interpolation, which is where an operator sets it).
+// `value` in the caller's environment (undefined = unset) or, with `dotenv` true, in the
+// project's .env file instead (compose reads that file for interpolation, which is where an
+// operator sets it). `dotenv` as a string puts that value in .env and `value` in the shell.
 function resolvedHops(
   file: string,
   value: string | undefined,
-  dotenv = false,
+  dotenv: boolean | string = false,
 ): string | null | undefined {
+  const dotenvValue = typeof dotenv === 'string' ? dotenv : dotenv ? value : undefined;
+  const shellValue = typeof dotenv === 'boolean' && dotenv ? undefined : value;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'depsight-compose-hops-'));
   tmpDirs.push(dir);
   fs.copyFileSync(path.join(ROOT, file), path.join(dir, file));
@@ -40,10 +43,10 @@ function resolvedHops(
     ),
   );
   env.POSTGRES_PASSWORD = 'test-password';
-  if (value !== undefined && !dotenv) env.WEBHOOK_TRUSTED_PROXY_HOPS = value;
+  if (shellValue !== undefined) env.WEBHOOK_TRUSTED_PROXY_HOPS = shellValue;
   fs.writeFileSync(
     path.join(dir, '.env'),
-    value !== undefined && dotenv ? `WEBHOOK_TRUSTED_PROXY_HOPS=${value}\n` : '',
+    dotenvValue !== undefined ? `WEBHOOK_TRUSTED_PROXY_HOPS=${dotenvValue}\n` : '',
   );
   const result = spawnSync(
     'docker',
@@ -85,6 +88,15 @@ describeIfCompose('docker-compose.yml WEBHOOK_TRUSTED_PROXY_HOPS', () => {
     ['2', '2', '2'],
   ])('reads the operator value from .env too: %s', (_label, value, expected) => {
     expect(resolvedHops(FILE, value, true)).toBe(expected);
+  });
+
+  // Shell and .env both set: the shell wins, an empty shell value included (it is set, so
+  // compose falls to the default 0 and never reads .env).
+  it.each([
+    ['shell 2 over .env 1', '2', '1', '2'],
+    ['empty shell over .env 1', '', '1', '0'],
+  ])('lets the shell beat .env: %s', (_label, shell, dotenv, expected) => {
+    expect(resolvedHops(FILE, shell, dotenv)).toBe(expected);
   });
 
   // The hosted file sits behind one Traefik and sets nothing: the app's own default of one

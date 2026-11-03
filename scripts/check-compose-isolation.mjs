@@ -283,6 +283,11 @@ const dev = resolveCompose(DEV_FILE);
 // The dev database has fixed credentials (dev/dev): publishing it on every interface would
 // hand them to the network, so it follows the loopback rule of the production files.
 if (!dev.services?.db) fail(DEV_FILE, 'needs a db service');
+// A network_mode would move the database onto the host's (or another service's) network
+// stack, where the published-port check below never sees it; checkProd rejects it too.
+if (dev.services?.db?.network_mode !== undefined) {
+  fail(DEV_FILE, `db sets network_mode "${dev.services.db.network_mode}"`);
+}
 for (const port of dev.services?.db?.ports ?? []) {
   if (!LOOPBACK.has(port.host_ip ?? '')) {
     fail(
