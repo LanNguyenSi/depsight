@@ -314,6 +314,20 @@ done
 # is left. loads_same: exit 0 and DST_DB dumps like the source. loads_check: exit 0 and a
 # query gives the expected value. The case ids of the stub tests that the earlier line
 # check refused are kept (w*), so every input it refused is here with its outcome.
+echo "drill: a dump with a COMMIT in it leaves a database that holds more than the dump unchanged"
+drill_restore "$DST_DB" "$WORK/first.sql" --no-pre-backup
+[ "$rc" -eq 0 ] || fail "reset before the newer-state case: exit $rc"
+add_newer_state
+newer_fp="$(fingerprint "$DST_DB")"
+awk '/^-- PostgreSQL database dump complete/ { print "COMMIT;" } { print }' "$WORK/first.sql" > "$WORK/commit.sql"
+drill_restore "$DST_DB" "$WORK/commit.sql" --no-pre-backup
+[ "$rc" -ne 0 ] || fail "a dump with a COMMIT in it was accepted"
+grep -q 'the dump ended the transaction itself' "$WORK/last.err" || fail "COMMIT dump refused for another reason: $(cat "$WORK/last.err")"
+expect "COMMIT dump: the newer table and the row written after the dump are still there" \
+  "$(sql "$DST_DB" "SELECT count(*) FROM drill_extra")|$(sql "$DST_DB" "SELECT count(*) FROM \"User\" WHERE id = 'drill-post'")" "1|1"
+expect "COMMIT dump: database unchanged" "$(fingerprint "$DST_DB")" "$newer_fp"
+expect "COMMIT dump: scratch databases left" "$(scratch_count)" 0
+
 echo "drill: the corpus"
 "$REAL_DOCKER" exec "$DRILL_PG_CONTAINER" rm -f "$SIDE_EFFECT"
 corpus_base="$WORK/first.sql"
@@ -449,7 +463,8 @@ refused k.scs-off-concat "SELECT set_config('standard_' || 'conforming_strings',
 loads_same k.encoding-concat "SELECT set_config('client_' || 'encoding', 'SJIS', false);\nSELECT 1;"
 loads_check k.paren-in-copy-where "CREATE TABLE public.cq(a text);\nCOPY public.cq FROM STDIN WHERE a <> ')(' ;\nx\n\\\\." 'SELECT a FROM public.cq' x
 loads_same k.clean 'SELECT 1;'
-refused d.search-path-hijack 'SET search_path = public, pg_catalog;\nCREATE FUNCTION public.txid_current() RETURNS bigint LANGUAGE sql AS $$ SELECT 1::bigint $$;\nCOMMIT;'
+refused d.commit-after-delete 'DELETE FROM public."Repo";\nCOMMIT;'
+refused d.search-path-hijack 'CREATE TABLE public.drill_t0 AS SELECT pg_catalog.txid_current() AS t;\nCREATE FUNCTION public.txid_current() RETURNS bigint LANGUAGE sql AS $$ SELECT t FROM public.drill_t0 $$;\nSET search_path = public, pg_catalog;\nCOMMIT;'
 refused d.commit-escaped-semicolon 'COMMIT\\;'
 refused d.escaped-semicolon-commit 'SELECT 1\\; COMMIT;'
 refused d.procedure-commit 'CREATE PROCEDURE public.drill_p() LANGUAGE plpgsql AS $$ BEGIN COMMIT; END $$;\nCALL public.drill_p();'
@@ -540,6 +555,8 @@ run_refused e.crlf "$WORK/case.sql"
 run_refused e.unpaired-restrict "$WORK/case.sql"
 { cat "$corpus_base"; printf 'CREATE TABLE public.fin(a int);\n-- trailing comment'; } > "$WORK/case.sql"
 run_refused e.after-unrestrict "$WORK/case.sql"
+{ printf 'SELECT 1;\n'; cat "$corpus_base"; } > "$WORK/case.sql"
+run_refused e.statement-before-restrict "$WORK/case.sql"
 # the same without the \restrict pair (a pg_dump before 16.10): they load
 grep -v -E '^\\(un)?restrict ' "$corpus_base" > "$WORK/norestrict.sql"
 { cat "$WORK/norestrict.sql"; printf 'CREATE TABLE public.fin(a int);\nCOPY public.fin FROM stdin;\n42\n\\.'; } > "$WORK/case.sql"
