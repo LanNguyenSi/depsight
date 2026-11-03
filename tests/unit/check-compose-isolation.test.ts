@@ -25,7 +25,9 @@ const dockerCompose = spawnSync('docker', ['compose', 'version'], { encoding: 'u
 const hasCompose = dockerCompose.status === 0;
 const describeIfCompose = hasCompose ? describe : describe.skip;
 if (!hasCompose) {
-  console.warn('check-compose-isolation tests skipped: the docker CLI with the compose plugin is not available');
+  console.warn(
+    'check-compose-isolation tests skipped: the docker CLI with the compose plugin is not available',
+  );
 }
 
 const tmpDirs: string[] = [];
@@ -80,7 +82,8 @@ const replaceFirst =
   (from: string, to: string): Mutation =>
   (text) => {
     if (!text.includes(from)) throw new Error(`mutation anchor not found: ${from}`);
-    return text.replace(from, to);
+    // A function replacer: a string `to` would read `$$` and `$&` as replacement patterns.
+    return text.replace(from, () => to);
   };
 
 describeIfCompose('check-compose-isolation guard', () => {
@@ -100,7 +103,10 @@ describeIfCompose('check-compose-isolation guard', () => {
       'several independent breakages at once',
       (text) =>
         [
-          replaceFirst('    mem_limit: 512m\n    logging: *default-logging\n', '    mem_limit: 512m\n'),
+          replaceFirst(
+            '    mem_limit: 512m\n    logging: *default-logging\n',
+            '    mem_limit: 512m\n',
+          ),
           replaceFirst('    mem_limit: 1536m\n', ''),
           replaceFirst('127.0.0.1:3000/api/health', '127.0.0.1:3000/'),
           replaceFirst('r.ok ? 0 : 1', 'r.status < 600 ? 0 : 1'),
@@ -673,9 +679,50 @@ describeIfCompose('check-compose-isolation guard', () => {
           fixture(DEV_FILE, withNetworks('  default:\n    name: depsight_db-internal\n')),
         );
         expectFailure(result, DEV_FILE, [
-          'db is on the network "default" named "depsight_db-internal", expected the project-scoped name "depsight-dev_default"',
+          'db is on the network "default" named "depsight_db-internal", expected the project-scoped name "<project>_default"',
         ]);
         expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      // A literal name equal to this file's own <project>_<key> follows no -p and no
+      // COMPOSE_PROJECT_NAME: a second stack of the file would join the first one's network.
+      it('fails on a dev network whose literal name equals its own project-scoped name', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: depsight-dev_default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "depsight-dev_default", expected the project-scoped name "<project>_default"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      it('fails on a hosted db network whose literal name equals its own project-scoped name', () => {
+        const result = runGuard(
+          fixture(
+            HOSTED_FILE,
+            replaceFirst(
+              '  db-internal:\n    internal: true',
+              '  db-internal:\n    internal: true\n    name: depsight_db-internal',
+            ),
+          ),
+        );
+        expectFailure(result, HOSTED_FILE, [
+          'db is on the network "db-internal" named "depsight_db-internal", expected the project-scoped name "<project>_db-internal"',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
+      });
+
+      // A `$$` is a literal dollar sign in compose: a name that holds one is a literal
+      // name (reported by the name rule), not a variable reference.
+      it('reads $$ in a network name as a literal dollar sign, not as interpolation', () => {
+        const result = runGuard(
+          fixture(DEV_FILE, withNetworks('  default:\n    name: depsight-dev_$$default\n')),
+        );
+        expectFailure(result, DEV_FILE, [
+          'db is on the network "default" named "depsight-dev_$$default"',
+        ]);
+        expect(result.stderr).toContain('expected the project-scoped name "<project>_default"');
+        expect(result.stderr).not.toContain('variable interpolation');
       });
 
       it('fails on a hosted db network that sets a name other than <project>_<key>', () => {
@@ -689,7 +736,7 @@ describeIfCompose('check-compose-isolation guard', () => {
           ),
         );
         expectFailure(result, HOSTED_FILE, [
-          'db is on the network "db-internal" named "shared-db", expected the project-scoped name "depsight_db-internal"',
+          'db is on the network "db-internal" named "shared-db", expected the project-scoped name "<project>_db-internal"',
         ]);
       });
     });
@@ -804,6 +851,11 @@ describeIfCompose('check-compose-isolation guard', () => {
                 '    network_mode: "service:db"',
                 '    ports:',
                 '      - "8080:8080"',
+                '  a-deep:',
+                '    image: busybox',
+                '    network_mode: "service:side"',
+                '    ports:',
+                '      - "192.0.2.2:8085:8085"',
                 '  side-deep:',
                 '    image: busybox',
                 '    network_mode: "service:side"',
@@ -831,6 +883,8 @@ describeIfCompose('check-compose-isolation guard', () => {
         expectFailure(result, DEV_FILE, [
           'side (in the network stack of service:db) publishes 8080->8080 on 0.0.0.0',
           'side-deep (in the network stack of service:side) publishes 8081->8081 on 192.0.2.1',
+          // Sorts before the service it joins, so a single pass over the services misses it.
+          'a-deep (in the network stack of service:side) publishes 8085->8085 on 192.0.2.2',
           'joined (in the network stack of container:some-database) publishes 8083->8083 on 0.0.0.0',
         ]);
         expect(result.stderr).not.toContain('side-loopback');
@@ -911,14 +965,15 @@ describeIfCompose('check-compose-isolation guard', () => {
         expectFailure(result, DEV_FILE, [
           'network "default" sets name through variable interpolation',
         ]);
-        expect(result.stderr).toContain('compose isolation check failed (1)');
       });
 
       it('fails on a network driver or external flag from interpolation', () => {
         const result = runGuard(
           fixture(
             DEV_FILE,
-            withNetworks('  default:\n    driver: ${DEV_DRIVER:-bridge}\n    external: ${DEV_EXTERNAL:-false}\n'),
+            withNetworks(
+              '  default:\n    driver: ${DEV_DRIVER:-bridge}\n    external: ${DEV_EXTERNAL:-false}\n',
+            ),
           ),
         );
         expectFailure(result, DEV_FILE, [
@@ -940,6 +995,30 @@ describeIfCompose('check-compose-isolation guard', () => {
         expectFailure(result, HOSTED_FILE, [
           'network "db-internal" sets internal through variable interpolation',
         ]);
+      });
+    });
+
+    // `make prod` runs docker compose without -f: compose prefers a compose.yaml over
+    // docker-compose.yml and merges an override file over it, and the guard reads neither.
+    describe('compose files that docker compose reads without -f', () => {
+      const IMPLICIT = [
+        'compose.yaml',
+        'compose.yml',
+        'docker-compose.yaml',
+        'compose.override.yaml',
+        'compose.override.yml',
+        'docker-compose.override.yaml',
+        'docker-compose.override.yml',
+      ];
+
+      it.each(IMPLICIT)('fails on %s in the repo root and names it', (name) => {
+        const dir = fixture(null);
+        fs.writeFileSync(path.join(dir, name), 'services: {}\n');
+        const result = runGuard(dir);
+        expectFailure(result, name, [
+          'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
+        ]);
+        expect(result.stderr).toContain('compose isolation check failed (1)');
       });
     });
 

@@ -12,6 +12,9 @@
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
 //
+// It also fails when a compose.y(a)ml, docker-compose.yaml or an override file sits in the
+// repo root, because docker compose without -f (make prod) prefers or merges them.
+//
 // It resolves each file with `docker compose config --format json`, so it judges the
 // same document Docker would run, interpolation included, and a second time with
 // `--no-interpolate` to see which exposure fields take a value from a variable (an
@@ -21,7 +24,7 @@
 // plugin and no running daemon. Exit 0 = all checks pass, 1 = a check failed, 2 = a file
 // could not be resolved.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -42,6 +45,22 @@ const BRIDGE_DRIVER = 'bridge';
 const LOOPBACK = new Set(['127.0.0.1', '::1']);
 // Value fed through ${POSTGRES_PASSWORD} to see where it lands.
 const SENTINEL = 'sentinel-pw-0f3a';
+// Project name passed with -p for the one resolve that shows which network names follow
+// the project (-p beats a top-level name:, as COMPOSE_PROJECT_NAME and a second checkout
+// of a file do at run time).
+const SENTINEL_PROJECT = 'guard-sentinel-project';
+// What `docker compose` without -f reads from the working directory, in the order
+// it looks (compose.yaml before docker-compose.yml, and an override merged over the
+// result). `make prod` runs it that way, so none of them may exist next to the shipped files.
+const IMPLICIT_COMPOSE_FILES = [
+  'compose.yaml',
+  'compose.yml',
+  'docker-compose.yaml',
+  'compose.override.yaml',
+  'compose.override.yml',
+  'docker-compose.override.yaml',
+  'docker-compose.override.yml',
+];
 
 // Bridge-network driver_opts the shipped files may set. None: every option of the bridge
 // driver either changes who can reach a published port or is not needed here, and
@@ -78,7 +97,8 @@ process.on('exit', () => rmSync(emptyEnvDir, { recursive: true, force: true }));
 // password: the POSTGRES_PASSWORD to set; null leaves it unset.
 // interpolate: false keeps `${VAR:-default}` as written (docker compose config
 // --no-interpolate), to see which fields an environment could change.
-function resolveCompose(file, password = SENTINEL, { interpolate = true } = {}) {
+// project: a project name passed with -p (null leaves it to the file's name:).
+function resolveCompose(file, password = SENTINEL, { interpolate = true, project = null } = {}) {
   const env = Object.fromEntries(
     CHILD_ENV_KEEP.filter((key) => process.env[key] !== undefined).map((key) => [
       key,
@@ -93,6 +113,7 @@ function resolveCompose(file, password = SENTINEL, { interpolate = true } = {}) 
         'compose',
         '--env-file',
         emptyEnvFile,
+        ...(project === null ? [] : ['-p', project]),
         '-f',
         file,
         '--profile',
@@ -228,12 +249,16 @@ function checkOperations(file, cfg) {
 //   not on a network named host           yes   yes  compose reuses an existing network by
 //                                                    name without external: true as well, so
 //                                                    name: host is the same request
-//   network named <project>_<key>         yes   yes  compose joins an existing network of the
-//     (the project-scoped name)                      resolved name, so name: depsight_db-internal
-//                                                    on a non-external network puts this
-//                                                    stack's db on the network of another
-//                                                    stack (measured: a second project's db
-//                                                    reached the first one's db on 5432)
+//   network named <project>_<key>        yes   yes  compose joins an existing network of the
+//     for any project name (a second                 resolved name, so a name that does not
+//     resolve with -p must follow it)                follow the project is shared with every
+//                                                    other stack that resolves to it:
+//                                                    name: depsight_db-internal in another
+//                                                    stack's file, or a literal name equal to
+//                                                    this file's own <project>_<key>, which
+//                                                    ignores -p and COMPOSE_PROJECT_NAME
+//                                                    (measured: a second project's db reached
+//                                                    the first one's db on 5432)
 //   only on bridge-driver networks        yes   yes  macvlan or ipvlan give the container its
 //     (driver absent or bridge)                      own address on the host's LAN, overlay
 //                                                    and third-party drivers reach other
@@ -250,9 +275,11 @@ function checkOperations(file, cfg) {
 //                                         only
 //   ports published on loopback only      yes   yes  any other address hands the database
 //                                                    and its credentials to the network
-//   same port rule for a service that     yes   yes  network_mode service:<database service>
-//     shares a database service's                    (any depth) or container:<name> gives its
-//     network stack                                  published ports to the database's sockets
+//   same port rule for a service that     yes   yes  defence in depth: Docker refuses port
+//     shares a database service's                    publishing together with network_mode
+//     network stack                                  container: (and service:), so no such route
+//                                                    exists today; the rule keeps it closed
+//                                                    if that changes
 //   no interpolation in the exposure      yes   yes  a ${VAR:-127.0.0.1} host address, a
 //     fields: ports, expose, network_mode,           ${NET:-name} network name and the like
 //     networks and the network definition            are judged with the default, and an
@@ -267,6 +294,9 @@ function checkOperations(file, cfg) {
 //     ${POSTGRES_PASSWORD}                           fixed dev/dev credentials on purpose
 //   (checkOperations) db logging, memory  yes   no   operational limits of the production
 //     limit, healthcheck                             files, not about who reaches the db
+//   (top level) no compose.y(a)ml,        yes   yes  docker compose without -f (make prod)
+//     docker-compose.yaml or override                prefers or merges them, and this check
+//     file in the repo root                          reads only the three shipped files
 //
 // requireInternalNetworks differs per file: the hosted file's db publishes nothing and is
 // reached only by app and migrate over db-internal, so all its networks must be internal.
@@ -274,13 +304,17 @@ function checkOperations(file, cfg) {
 // file (host-side Prisma and database tests, see CONTRIBUTING.md) publish the db port on
 // loopback, so their db stays on the default network, which is not internal.
 //
-// Not covered (known gaps): a forwarding sidecar (socat, haproxy, an ssh tunnel) whose
-// image is not postgres and which neither publishes nor exposes 5432 itself, a database
-// image that is not named postgres(ql) and declares no 5432 (for example a build: with
-// FROM postgres), an image or port that a variable turns into postgres or 5432 only in
-// the operator's environment (the exposure fields above are checked for interpolation
-// only on services already recognised as database services), and daemon-level settings
-// such as allow-direct-routing or iptables false, which no compose file can show.
+// Not covered (known gaps; docs/configuration.md and CHANGELOG.md carry the same list):
+//   - a forwarding sidecar (socat, haproxy, an ssh tunnel) whose image is not postgres and
+//     which neither publishes nor exposes 5432 itself
+//   - a database image that is not named postgres(ql) and declares no 5432 (for example a
+//     build: with FROM postgres)
+//   - an image, port or network_mode that a variable turns into a database service or into a
+//     stack sharer only in the operator's environment (interpolation is checked only on
+//     services already recognised as database services or sharers)
+//   - compose files an operator selects with -f or COMPOSE_FILE other than the three shipped
+//   - daemon-level settings such as allow-direct-routing or iptables false, which no compose
+//     file can show
 
 // The service's image without registry, tag or digest: registry:5000/library/postgres:16@sha256:...
 // gives postgres.
@@ -352,11 +386,14 @@ const usesInterpolation = (value) =>
 // driver_opts is not here: any option fails the driver_opts rule, interpolated or not.
 const NETWORK_FIELDS = ['name', 'driver', 'external', 'internal'];
 
-// raw: the same file resolved with --no-interpolate.
-function checkDbExposure(file, cfg, raw, { requireInternalNetworks }) {
+// cfg: the file as resolved by checkProd or the dev block. It is resolved twice more here:
+// raw with --no-interpolate, renamed with -p SENTINEL_PROJECT.
+function checkDbExposure(file, cfg, { requireInternalNetworks }) {
+  const raw = resolveCompose(file, SENTINEL, { interpolate: false });
+  const renamed = resolveCompose(file, SENTINEL, { project: SENTINEL_PROJECT });
   const databases = dbServices(cfg);
   for (const [name, service] of databases) {
-    checkDbService(file, cfg, raw, name, service, { requireInternalNetworks });
+    checkDbService(file, cfg, raw, renamed, name, service, { requireInternalNetworks });
   }
   for (const [name, sharedWith] of stackSharers(cfg, databases)) {
     const service = cfg.services[name];
@@ -365,7 +402,7 @@ function checkDbExposure(file, cfg, raw, { requireInternalNetworks }) {
   }
 }
 
-function checkDbService(file, cfg, raw, name, service, { requireInternalNetworks }) {
+function checkDbService(file, cfg, raw, renamed, name, service, { requireInternalNetworks }) {
   if (service.network_mode !== undefined) {
     fail(file, `${name} sets network_mode "${service.network_mode}"`);
   }
@@ -385,13 +422,17 @@ function checkDbService(file, cfg, raw, name, service, { requireInternalNetworks
       fail(file, `${name} is on the network "${key}" named ${HOST_NETWORK} (host networking)`);
     }
     // Compose joins a network of the resolved name that already exists, whoever created
-    // it. External networks are rejected above, so a name that is not this project's own
-    // `<project>_<key>` is a way into the network of another stack.
-    const scoped = `${cfg.name}_${key}`;
-    if (!network?.external && (network?.name ?? key) !== scoped) {
+    // it. External networks are rejected above. Any other network must be named
+    // `<project>_<key>` for whatever project the stack runs under: resolved with a
+    // sentinel -p, the name must follow it. A literal name:, even one equal to
+    // `<this file's project>_<key>`, stays the same under -p or COMPOSE_PROJECT_NAME and so
+    // is shared with every other stack that resolves to it.
+    const followed = renamed.networks?.[key];
+    const expected = `${SENTINEL_PROJECT}_${key}`;
+    if (!network?.external && (followed?.name ?? key) !== expected) {
       fail(
         file,
-        `${name} is on the network "${key}" named "${network?.name ?? key}", expected the project-scoped name "${scoped}" (a network of another name may already exist and belong to another stack)`,
+        `${name} is on the network "${key}" named "${network?.name ?? key}", expected the project-scoped name "<project>_${key}" (a name that does not follow the project name -p or COMPOSE_PROJECT_NAME sets is shared with any other stack that resolves to it)`,
       );
     }
     if (network?.driver && network.driver !== BRIDGE_DRIVER) {
@@ -462,9 +503,7 @@ function checkProd(file) {
   }
 
   // The hosted file keeps db on networks with no route out.
-  checkDbExposure(file, cfg, resolveCompose(file, SENTINEL, { interpolate: false }), {
-    requireInternalNetworks: file === HOSTED_FILE,
-  });
+  checkDbExposure(file, cfg, { requireInternalNetworks: file === HOSTED_FILE });
   if (!networkNames(cfg, db).some((name) => networkNames(cfg, app).includes(name))) {
     fail(file, 'app and db share no network');
   }
@@ -544,9 +583,7 @@ const dev = resolveCompose(DEV_FILE);
 // rules as the production files' db (the table above checkDbExposure).
 if (!dev.services?.db) fail(DEV_FILE, 'needs a db service');
 else {
-  checkDbExposure(DEV_FILE, dev, resolveCompose(DEV_FILE, SENTINEL, { interpolate: false }), {
-    requireInternalNetworks: false,
-  });
+  checkDbExposure(DEV_FILE, dev, { requireInternalNetworks: false });
 }
 if (dev.name !== DEV_PROJECT) {
   fail(DEV_FILE, `project name is "${dev.name}", expected "${DEV_PROJECT}"`);
@@ -577,6 +614,19 @@ makefile.split('\n').forEach((line, index) => {
     fail('Makefile', `line ${index + 1} uses ${DEV_FILE} without -p ${DEV_PROJECT}`);
   }
 });
+
+// `make prod` runs docker compose without -f: a compose.yaml (preferred over
+// docker-compose.yml) or an override file (merged over it) in the repo root decides what
+// runs and is never read by this check. Failing on their presence is the choice over
+// checking them: no shipped target needs one.
+for (const name of IMPLICIT_COMPOSE_FILES) {
+  if (existsSync(join(dir, name))) {
+    fail(
+      name,
+      'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
+    );
+  }
+}
 
 if (failures.length > 0) {
   console.error(`compose isolation check failed (${failures.length}):`);
