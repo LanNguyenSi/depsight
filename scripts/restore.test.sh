@@ -607,6 +607,7 @@ cc_refused "(cc.1) a COPY line without its end of data -> refused before any doc
 cc_refused "(cc.2) a line \\. that ends no COPY -> refused before any docker call" 'SELECT 1;\n\\.\n' 0 1
 cc_refused "(cc.3) a COPY that pg_dump does not write, with its end -> refused" 'COPY public.t FROM STDIN WHERE a > 0;\n1\n\\.\n' 0 1
 cc_refused "(cc.4) a COPY line inside COPY data -> refused (false refusal, fail closed)" 'COPY public.t (a) FROM stdin;\nCOPY public.u (b) FROM stdin;\n\\.\n' 2 1
+cc_refused "(cc.6) a server-side COPY whose line ends in FROM stdin; is not counted as a COPY of the dump" "COPY public.t FROM PROGRAM 'x' WHERE a IS DISTINCT FROM stdin;\\n1\\n\\\\.\\n" 0 1
 {
   cc_dump "$WORKDIR/cc.sql" 'COPY public.t (a) FROM stdin;\n1\n\\.\nCOPY public."U v" (b, "c d") FROM stdin;\r\n2\r\n\\.\r\nCOPY public.w  FROM stdin;\n\\.\n'
   run_restore -- --yes --no-pre-backup "$WORKDIR/cc.sql"
