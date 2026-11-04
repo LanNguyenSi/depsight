@@ -4,6 +4,11 @@ import { registerCiTools } from "../tools/ci.js";
 import { registerCveTools } from "../tools/cves.js";
 import { registerDepsTools } from "../tools/deps.js";
 import { registerRescanTools } from "../tools/rescan.js";
+import { registerHistoryTools } from "../tools/history.js";
+import { registerLicenseTools } from "../tools/license.js";
+import { registerSbomTools } from "../tools/sbom.js";
+import { registerPolicyTools } from "../tools/policy.js";
+import { registerRepoTools } from "../tools/repos.js";
 import type { DepsightClient } from "../client.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -14,6 +19,26 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 // value is the raw ZodRawShape the SDK wraps into an object schema, so it is
 // validated the same way (unknown keys stripped, non-optional fields required).
 type Shape = Record<string, z.ZodType>;
+
+type RegisterFn = (server: McpServer, client: DepsightClient) => void;
+
+// Every tool-name whose argument schema this file pins, recorded by
+// inputShape() while the describes below are collected, and every register
+// function those tools come from. The guard describe at the bottom compares
+// both against the tool list server.test.ts asserts, so a newly registered
+// tool without argument tests here fails the suite.
+const coveredToolNames = new Set<string>();
+const ALL_REGISTRARS: RegisterFn[] = [
+  registerCiTools,
+  registerCveTools,
+  registerDepsTools,
+  registerHistoryTools,
+  registerLicenseTools,
+  registerPolicyTools,
+  registerRepoTools,
+  registerRescanTools,
+  registerSbomTools,
+];
 
 function inputShape(
   register: (server: McpServer, client: DepsightClient) => void,
@@ -27,10 +52,11 @@ function inputShape(
   } as unknown as McpServer;
   register(fakeServer, {} as DepsightClient);
   if (!shape) throw new Error(`no input shape registered for ${toolName}`);
+  coveredToolNames.add(toolName);
   return z.object(shape);
 }
 
-describe("depsight_ci_analytics argument schema (literal-union period)", () => {
+describe("depsight_ci_analytics argument schema (multi-value literal period)", () => {
   const schema = inputShape(registerCiTools, "depsight_ci_analytics");
 
   it("accepts period 1 and produces 1", () => {
@@ -59,6 +85,12 @@ describe("depsight_ci_analytics argument schema (literal-union period)", () => {
     expect("period" in parsed).toBe(false);
   });
 
+  it("omits repoId entirely (optional; the handler answers cross-repo summaries)", () => {
+    const parsed = schema.parse({ period: 30 });
+    expect(parsed.repoId).toBeUndefined();
+    expect("repoId" in parsed).toBe(false);
+  });
+
   it("rejects a non-allowlisted analytics type", () => {
     expect(() => schema.parse({ repoId: "r", type: "nope" })).toThrow();
   });
@@ -69,6 +101,13 @@ describe("depsight_ci_analytics argument schema (literal-union period)", () => {
     };
     expect(json.properties.period.type).toBe("number");
     expect(json.properties.period.enum).toEqual([1, 7, 30]);
+  });
+
+  it("publishes repoId as optional (not in required)", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      required?: string[];
+    };
+    expect(json.required ?? []).not.toContain("repoId");
   });
 });
 
@@ -207,5 +246,306 @@ describe("object argument schema keeps stripping unknown keys (v3 parity)", () =
     const result = schema.safeParse({ repoId: "r", unexpected: 1 });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data).toEqual({ repoId: "r" });
+  });
+});
+
+describe("depsight_get_history argument schema (bounded integer limit)", () => {
+  const schema = inputShape(registerHistoryTools, "depsight_get_history");
+
+  it("accepts a non-empty repoId and produces it unchanged", () => {
+    expect(schema.parse({ repoId: "repo-abc" }).repoId).toBe("repo-abc");
+  });
+
+  it("rejects an empty repoId (.min(1))", () => {
+    expect(() => schema.parse({ repoId: "" })).toThrow();
+  });
+
+  it("rejects a missing repoId (required)", () => {
+    expect(() => schema.parse({})).toThrow();
+  });
+
+  it("accepts limit 1 (the minimum)", () => {
+    expect(schema.parse({ repoId: "r", limit: 1 }).limit).toBe(1);
+  });
+
+  it("accepts limit 100 (the maximum)", () => {
+    expect(schema.parse({ repoId: "r", limit: 100 }).limit).toBe(100);
+  });
+
+  it("rejects limit 0 (below the minimum)", () => {
+    expect(() => schema.parse({ repoId: "r", limit: 0 })).toThrow();
+  });
+
+  it("rejects limit 101 (above the maximum)", () => {
+    expect(() => schema.parse({ repoId: "r", limit: 101 })).toThrow();
+  });
+
+  it("rejects limit 1.5 (not an integer)", () => {
+    expect(() => schema.parse({ repoId: "r", limit: 1.5 })).toThrow();
+  });
+
+  it("rejects limit NaN (a number value, but not a usable count)", () => {
+    expect(() => schema.parse({ repoId: "r", limit: Number.NaN })).toThrow();
+  });
+
+  it('rejects limit "5" (string, not the number)', () => {
+    expect(() => schema.parse({ repoId: "r", limit: "5" })).toThrow();
+  });
+
+  it("omits limit entirely (optional; the backend applies its own default)", () => {
+    const parsed = schema.parse({ repoId: "r" });
+    expect(parsed.limit).toBeUndefined();
+    expect("limit" in parsed).toBe(false);
+  });
+
+  it("publishes limit as an optional integer in [1, 100] and repoId as required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: {
+        repoId: { type?: string; minLength?: number };
+        limit: { type?: string; minimum?: number; maximum?: number };
+      };
+      required?: string[];
+    };
+    expect(json.properties.repoId.type).toBe("string");
+    expect(json.properties.repoId.minLength).toBe(1);
+    expect(json.properties.limit.type).toBe("integer");
+    expect(json.properties.limit.minimum).toBe(1);
+    expect(json.properties.limit.maximum).toBe(100);
+    expect(json.required).toContain("repoId");
+    expect(json.required ?? []).not.toContain("limit");
+  });
+});
+
+describe("depsight_get_license_report argument schema (required non-empty string)", () => {
+  const schema = inputShape(registerLicenseTools, "depsight_get_license_report");
+
+  it("accepts a non-empty repoId and produces it unchanged", () => {
+    expect(schema.parse({ repoId: "repo-abc" }).repoId).toBe("repo-abc");
+  });
+
+  it("rejects an empty repoId (.min(1))", () => {
+    expect(() => schema.parse({ repoId: "" })).toThrow();
+  });
+
+  it("rejects a missing repoId (required)", () => {
+    expect(() => schema.parse({})).toThrow();
+  });
+
+  it("rejects a non-string repoId", () => {
+    expect(() => schema.parse({ repoId: 42 })).toThrow();
+  });
+
+  it("publishes repoId as a string with minLength 1 and required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: { repoId: { type?: string; minLength?: number } };
+      required?: string[];
+    };
+    expect(json.properties.repoId.type).toBe("string");
+    expect(json.properties.repoId.minLength).toBe(1);
+    expect(json.required).toContain("repoId");
+  });
+});
+
+describe("depsight_get_sbom argument schema (required non-empty string)", () => {
+  const schema = inputShape(registerSbomTools, "depsight_get_sbom");
+
+  it("accepts a non-empty repoId and produces it unchanged", () => {
+    expect(schema.parse({ repoId: "repo-abc" }).repoId).toBe("repo-abc");
+  });
+
+  it("rejects an empty repoId (.min(1))", () => {
+    expect(() => schema.parse({ repoId: "" })).toThrow();
+  });
+
+  it("rejects a missing repoId (required)", () => {
+    expect(() => schema.parse({})).toThrow();
+  });
+
+  it("rejects a non-string repoId", () => {
+    expect(() => schema.parse({ repoId: 42 })).toThrow();
+  });
+
+  it("publishes repoId as a string with minLength 1 and required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: { repoId: { type?: string; minLength?: number } };
+      required?: string[];
+    };
+    expect(json.properties.repoId.type).toBe("string");
+    expect(json.properties.repoId.minLength).toBe(1);
+    expect(json.required).toContain("repoId");
+  });
+});
+
+describe("depsight_evaluate_policy argument schema (required non-empty scanId)", () => {
+  const schema = inputShape(registerPolicyTools, "depsight_evaluate_policy");
+
+  it("accepts a non-empty scanId and produces it unchanged", () => {
+    expect(schema.parse({ scanId: "scan-abc" }).scanId).toBe("scan-abc");
+  });
+
+  it("rejects an empty scanId (.min(1))", () => {
+    expect(() => schema.parse({ scanId: "" })).toThrow();
+  });
+
+  it("rejects a missing scanId (required)", () => {
+    expect(() => schema.parse({})).toThrow();
+  });
+
+  it("rejects a non-string scanId", () => {
+    expect(() => schema.parse({ scanId: 42 })).toThrow();
+  });
+
+  it("publishes scanId as a string with minLength 1 and required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: { scanId: { type?: string; minLength?: number } };
+      required?: string[];
+    };
+    expect(json.properties.scanId.type).toBe("string");
+    expect(json.properties.scanId.minLength).toBe(1);
+    expect(json.required).toContain("scanId");
+  });
+});
+
+describe("depsight_list_policies argument schema (no arguments)", () => {
+  const schema = inputShape(registerPolicyTools, "depsight_list_policies");
+
+  it("accepts an empty argument object", () => {
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.parse({})).toEqual({});
+  });
+
+  it("accepts and strips an unrecognised extra property instead of rejecting", () => {
+    const result = schema.safeParse({ repoId: "r" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({});
+  });
+
+  it("publishes no properties and nothing required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(json.properties ?? {}).toEqual({});
+    expect(json.required ?? []).toEqual([]);
+  });
+});
+
+describe("depsight_list_repos argument schema (no arguments)", () => {
+  const schema = inputShape(registerRepoTools, "depsight_list_repos");
+
+  it("accepts an empty argument object", () => {
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.parse({})).toEqual({});
+  });
+
+  it("accepts and strips an unrecognised extra property instead of rejecting", () => {
+    const result = schema.safeParse({ repoId: "r" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({});
+  });
+
+  it("publishes no properties and nothing required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(json.properties ?? {}).toEqual({});
+    expect(json.required ?? []).toEqual([]);
+  });
+});
+
+describe("depsight_get_overview argument schema (no arguments)", () => {
+  const schema = inputShape(registerRepoTools, "depsight_get_overview");
+
+  it("accepts an empty argument object", () => {
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.parse({})).toEqual({});
+  });
+
+  it("accepts and strips an unrecognised extra property instead of rejecting", () => {
+    const result = schema.safeParse({ repoId: "r" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual({});
+  });
+
+  it("publishes no properties and nothing required", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(json.properties ?? {}).toEqual({});
+    expect(json.required ?? []).toEqual([]);
+  });
+});
+
+describe("depsight_get_cves argument schema (publishedAfter has no datetime validation)", () => {
+  const schema = inputShape(registerCveTools, "depsight_get_cves");
+
+  it.each([
+    ["2026-10-01", "a plain date"],
+    ["2026-10-01T12:00:00.000Z", "a full timestamp"],
+    ["not-a-date", "a string no Date accepts"],
+    ["", "the empty string"],
+  ])("accepts %s (%s) and passes it through unchanged", (value) => {
+    expect(schema.parse({ repoId: "r", publishedAfter: value }).publishedAfter).toBe(
+      value,
+    );
+  });
+
+  it("omits publishedAfter entirely (optional; no cutoff applied)", () => {
+    const parsed = schema.parse({ repoId: "r" });
+    expect(parsed.publishedAfter).toBeUndefined();
+    expect("publishedAfter" in parsed).toBe(false);
+  });
+
+  it("rejects a non-string publishedAfter", () => {
+    expect(() => schema.parse({ repoId: "r", publishedAfter: 0 })).toThrow();
+  });
+
+  it("publishes publishedAfter as an optional string with no format", () => {
+    const json = z.toJSONSchema(schema, { io: "input" }) as {
+      properties: { publishedAfter: { type?: string; format?: string } };
+      required?: string[];
+    };
+    expect(json.properties.publishedAfter.type).toBe("string");
+    expect(json.properties.publishedAfter.format).toBeUndefined();
+    expect(json.required ?? []).not.toContain("publishedAfter");
+  });
+});
+
+describe("every registered tool has argument tests here (coverage guard)", () => {
+  // The list server.test.ts asserts (duplicated: that file keeps it local).
+  const EXPECTED_TOOL_NAMES = [
+    "depsight_list_repos",
+    "depsight_get_overview",
+    "depsight_get_cves",
+    "depsight_get_deps",
+    "depsight_get_license_report",
+    "depsight_get_history",
+    "depsight_list_policies",
+    "depsight_evaluate_policy",
+    "depsight_ci_analytics",
+    "depsight_get_sbom",
+    "depsight_rescan",
+  ];
+
+  it("registers exactly the expected tools through these register functions", () => {
+    const registered: string[] = [];
+    const fakeServer = {
+      tool: (name: string) => {
+        registered.push(name);
+      },
+    } as unknown as McpServer;
+    for (const register of ALL_REGISTRARS) {
+      register(fakeServer, {} as DepsightClient);
+    }
+    expect([...registered].sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
+    expect(registered).toHaveLength(EXPECTED_TOOL_NAMES.length);
+  });
+
+  it("pins the argument schema of every registered tool (no untested tool)", () => {
+    expect([...coveredToolNames].sort()).toEqual(
+      [...EXPECTED_TOOL_NAMES].sort(),
+    );
   });
 });

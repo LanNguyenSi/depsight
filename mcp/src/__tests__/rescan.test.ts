@@ -425,6 +425,30 @@ describe("depsight_rescan target dispatch", () => {
     expect(String(body.message)).toContain("depsight_get_deps");
   });
 
+  it('target "all" still runs the dependency-age scan when the CVE scan is already running, CVE message first', async () => {
+    const { handler, calls } = captureRescanHandler({
+      rescan: async () => ({ scanId: "cve-scan-1", status: "running", dependabotDisabled: false }),
+    });
+
+    const result = await handler({ repoId: "repo-abc", target: "all" });
+
+    expect(result.isError).toBeUndefined();
+    expect(calls).toEqual(["rescan", "rescanDeps"]);
+    const body = parseToolText(result);
+    expect(body.target).toBe("all");
+    expect(body.status).toBe("running");
+    expect(body.scanId).toBe("cve-scan-1");
+    expect(body.depsScanId).toBe("deps-scan-1");
+    expect(body.depsSummary).toMatchObject({ total: 2 });
+    const message = String(body.message);
+    expect(message).toContain("already in progress");
+    expect(message).toContain("Dependency-age scan completed");
+    expect(message).not.toContain("Scan completed");
+    expect(message).toBe(
+      "A scan is already in progress for this repository. Call depsight_get_cves with this repoId once it completes to read updated CVE results. Dependency-age scan completed. Call depsight_get_deps with this repoId to read the fresh dependency-age results.",
+    );
+  });
+
   it('target "deps" defaults depsSummary to null when the backend omits it', async () => {
     const { handler } = captureRescanHandler({ rescanDeps: async () => ({ scanId: "d-1" }) });
 
@@ -517,6 +541,32 @@ describe("depsight_rescan target all, partial failure", () => {
     expect(body.scanId).toBe("cve-scan-1");
     expect(body.retryAfterSeconds).toBe(120);
     expect(String(body.error)).toContain("retryAfterSeconds: 120");
+  });
+
+  it("keeps the rate-limit fields and the running CVE status on a deps 429 with a running CVE scan", async () => {
+    const { handler, calls } = captureRescanHandler({
+      rescan: async () => ({ scanId: "cve-scan-1", status: "running", dependabotDisabled: false }),
+      rescanDeps: failingDeps(
+        new RateLimitError("/api/deps", { error: "Rate limit exceeded", retryAfterSeconds: 120 }, 120),
+      ),
+    });
+
+    const result = await handler({ repoId: "repo-abc", target: "all" });
+
+    expect(result.isError).toBe(true);
+    expect(calls).toEqual(["rescan", "rescanDeps"]);
+    const body = parseToolText(result);
+    expect(body.success).toBe(false);
+    expect(body.target).toBe("all");
+    expect(body.scanId).toBe("cve-scan-1");
+    expect(body.status).toBe("running");
+    expect(body.depsScanId).toBeUndefined();
+    expect(body.retryAfterSeconds).toBe(120);
+    const error = String(body.error);
+    expect(error).toContain("retryAfterSeconds: 120");
+    expect(error).toContain("dependency-age scan failed");
+    expect(error).toContain("was not refreshed");
+    expect(error).not.toContain("Dependency-age scan completed");
   });
 
   it("stringifies a non-Error deps failure cause", async () => {
