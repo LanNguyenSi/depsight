@@ -103,11 +103,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck scripts/*.sh docker/entrypoint.dev.sh
       - name: backup.sh against a stubbed docker
         run: bash scripts/backup.test.sh
       - name: restore.sh against a stubbed docker
         run: bash scripts/restore.test.sh
+      - name: docker/entrypoint.dev.sh against stubbed npm and npx
+        run: bash scripts/entrypoint.dev.test.sh
 
   restore-drill:
     name: Restore drill (Postgres)
