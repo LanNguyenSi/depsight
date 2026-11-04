@@ -86,6 +86,8 @@ make hooks         # Set up the Husky pre-commit hook (lint-staged)
 make clean         # Remove node_modules, .next, dist, build and coverage
 ```
 
+The container-side targets run `docker compose run --rm app <command>`, and the dev entrypoint (`docker/entrypoint.dev.sh`) runs the command it is given after its setup steps (`npm install`, `npx prisma generate`, `npm run db:push`); with no command it starts `npm run dev`. That is what makes `make test`, `make lint`, `make format`, `make format-check` and `make build` run their check in the container instead of starting the dev server.
+
 ## Self-hosting
 
 ### Which compose file
