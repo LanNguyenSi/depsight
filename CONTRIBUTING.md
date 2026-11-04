@@ -52,8 +52,11 @@ command after the same setup steps and does not start the dev server. A host-sid
 needed if you run Prisma commands directly against Postgres from the host
 (outside the `app` container); in that case set `DATABASE_URL` in `.env` to
 match the `db` service's credentials (`postgresql://dev:dev@localhost:5432/depsight_dev`).
-The `.env.example` default is a production-style placeholder and matches
-neither the dev compose credentials nor the other compose files.
+The `.env.example` default already holds those credentials (its comment says
+it matches `docker-compose.dev.yml`), so copying it to `.env` is all this step
+needs; its URL differs from the one `docker-compose.dev.yml` gives the `app`
+container only in the host: `localhost` for a client on the host, `db` inside
+the compose network.
 
 ## Style
 
