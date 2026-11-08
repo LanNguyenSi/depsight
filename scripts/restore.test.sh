@@ -952,7 +952,7 @@ REAL_LOAD='*ON_ERROR_STOP=1 -U depsight -d depsight'
   run_restore 'FAKE_KILL_ON=* run *' -- --yes "$DUMP"; r1=$rc
   k1=0; grep -q "committed" <<< "$out_text" && k1=1
   run_restore 'FAKE_KILL_ON=* start *' -- --yes "$DUMP"; r2=$rc
-  k2=0; grep -q "committed" <<< "$out_text"; k2=$?
+  k2=1; grep -q "committed" <<< "$out_text" && k2=0
   if [ "$r1" = 4 ] && [ "$k1" = 1 ] && [ "$r2" = 4 ] && [ "$k2" = 0 ] && grep -q "start app" <<< "$out_text" && no_tmp_left; then
     pass "(z2) signal after the COMMIT -> exit 4 saying the restore is committed (migrate and start)"
   else

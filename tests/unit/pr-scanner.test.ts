@@ -169,6 +169,8 @@ describe('scanPRAndComment — success path', () => {
     const body = createCommentMock.mock.calls[0][0].body as string;
     expect(body).toContain('GHSA-new-new-new');
     expect(body).not.toContain('GHSA-aaaa-bbbb-cccc');
+    // A previous CVE scan exists here, so the baseline wording stays.
+    expect(body).toContain('gegenüber dem letzten CVE-Scan');
   });
 });
 
@@ -209,6 +211,9 @@ describe('scanPRAndComment — baseline selection', () => {
     const body = createCommentMock.mock.calls[0][0].body as string;
     expect(body).toContain('GHSA-new-new-new');
     expect(body).not.toContain('GHSA-aaaa-bbbb-cccc');
+    // The CVE scan row won over the newer license/dependency row, so the
+    // comment still compares with the last CVE scan.
+    expect(body).toContain('gegenüber dem letzten CVE-Scan');
   });
 });
 
@@ -262,5 +267,31 @@ describe('scanPRAndComment — failure/edge branches', () => {
 
     expect(scanFindFirst).not.toHaveBeenCalled();
     expect(result.newCVECount).toBe(1);
+    // No tracked repo row means no baseline: the comment must not claim a
+    // comparison with the last CVE scan.
+    const body = createCommentMock.mock.calls[0][0].body as string;
+    expect(body).toContain('**1 offene CVE(s)** gefunden (noch kein früherer CVE-Scan zum Vergleich).');
+    expect(body).not.toContain('gegenüber dem letzten CVE-Scan');
+  });
+
+  it('when the repo is tracked but has no completed CVE scan, queries the baseline and uses the no-comparison wording', async () => {
+    repoFindFirst.mockResolvedValue({ id: 'db-repo-1' });
+    scanFindFirst.mockResolvedValue(null);
+    fetchRepoAdvisoriesMock.mockResolvedValue({
+      advisories: [],
+      counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, total: 0 },
+      riskScore: 0,
+    });
+    createCommentMock.mockResolvedValue({ data: { html_url: 'https://x/comment' } });
+
+    const result = await scanPRAndComment('tok-123', 'acme', 'api', 1, 'user-1');
+
+    // The repo row exists, so the scan lookup runs; it finds nothing, so the
+    // zero branch must say "offen" (no scan to be "new" against).
+    expect(scanFindFirst).toHaveBeenCalled();
+    expect(result.newCVECount).toBe(0);
+    const body = createCommentMock.mock.calls[0][0].body as string;
+    expect(body).toContain('**Keine offenen CVEs** gefunden (noch kein früherer CVE-Scan zum Vergleich).');
+    expect(body).not.toContain('gegenüber dem letzten CVE-Scan');
   });
 });
