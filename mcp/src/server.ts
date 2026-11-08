@@ -12,6 +12,22 @@ import { registerCiTools } from "./tools/ci.js";
 import { registerSbomTools } from "./tools/sbom.js";
 import { registerRescanTools } from "./tools/rescan.js";
 
+// Single source of truth for the tool surface: createServer registers exactly
+// these modules, and the argument-schema guard in
+// src/__tests__/tool-arg-validation.test.ts derives the expected tool names
+// from this list, so a new tool or registrar module cannot slip past it.
+export const TOOL_REGISTRARS = [
+  registerRepoTools,
+  registerCveTools,
+  registerDepsTools,
+  registerLicenseTools,
+  registerHistoryTools,
+  registerPolicyTools,
+  registerCiTools,
+  registerSbomTools,
+  registerRescanTools,
+] as const;
+
 export function createServer(config: Config): McpServer {
   const server = new McpServer({
     name: "depsight",
@@ -20,15 +36,9 @@ export function createServer(config: Config): McpServer {
 
   const client = new DepsightClient(config);
 
-  registerRepoTools(server, client);
-  registerCveTools(server, client);
-  registerDepsTools(server, client);
-  registerLicenseTools(server, client);
-  registerHistoryTools(server, client);
-  registerPolicyTools(server, client);
-  registerCiTools(server, client);
-  registerSbomTools(server, client);
-  registerRescanTools(server, client);
+  for (const register of TOOL_REGISTRARS) {
+    register(server, client);
+  }
 
   return server;
 }

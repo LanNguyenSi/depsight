@@ -22,7 +22,7 @@ function makeAdvisory(overrides: Partial<Advisory> = {}): Advisory {
 
 describe('PR Comment Formatter', () => {
   it('shows clean message when no new CVEs', () => {
-    const comment = formatCVEComment('owner/repo', [], 5, 30);
+    const comment = formatCVEComment('owner/repo', [], 5, 30, true);
     expect(comment).toContain('Keine neuen CVEs');
     expect(comment).toContain('Risk Score: 30/100');
     expect(comment).toContain('Gesamt: 5 CVEs');
@@ -30,7 +30,7 @@ describe('PR Comment Formatter', () => {
 
   it('includes CVE count in header for new advisories', () => {
     const advisories = [makeAdvisory(), makeAdvisory({ id: 'adv-2', severity: 'CRITICAL' })];
-    const comment = formatCVEComment('owner/repo', advisories, 10, 70);
+    const comment = formatCVEComment('owner/repo', advisories, 10, 70, true);
     expect(comment).toContain('2 neue CVE(s)');
     expect(comment).toContain('Risk Score');
   });
@@ -40,49 +40,80 @@ describe('PR Comment Formatter', () => {
       makeAdvisory({ severity: 'CRITICAL' }),
       makeAdvisory({ id: 'adv-2', severity: 'HIGH' }),
     ];
-    const comment = formatCVEComment('owner/repo', advisories, 5, 80);
+    const comment = formatCVEComment('owner/repo', advisories, 5, 80, true);
     expect(comment).toContain('Kritisch');
     expect(comment).toContain('Hoch');
   });
 
   it('includes GHSA ID for each advisory', () => {
-    const comment = formatCVEComment('owner/repo', [makeAdvisory()], 1, 40);
+    const comment = formatCVEComment('owner/repo', [makeAdvisory()], 1, 40, true);
     expect(comment).toContain('GHSA-test-1234-5678');
   });
 
   it('includes package name and ecosystem', () => {
-    const comment = formatCVEComment('owner/repo', [makeAdvisory()], 1, 40);
+    const comment = formatCVEComment('owner/repo', [makeAdvisory()], 1, 40, true);
     expect(comment).toContain('test-pkg');
     expect(comment).toContain('npm');
   });
 
   it('shows fix version when available', () => {
-    const comment = formatCVEComment('owner/repo', [makeAdvisory({ fixedVersion: '2.0.0' })], 1, 40);
+    const comment = formatCVEComment('owner/repo', [makeAdvisory({ fixedVersion: '2.0.0' })], 1, 40, true);
     expect(comment).toContain('2.0.0');
   });
 
   it('shows CVE ID when available', () => {
-    const comment = formatCVEComment('owner/repo', [makeAdvisory({ cveId: 'CVE-2024-99999' })], 1, 40);
+    const comment = formatCVEComment('owner/repo', [makeAdvisory({ cveId: 'CVE-2024-99999' })], 1, 40, true);
     expect(comment).toContain('CVE-2024-99999');
   });
 
   it('does not attribute alerts to the pull request and has no placeholder link', () => {
-    const none = formatCVEComment('owner/repo', [], 5, 30);
+    const none = formatCVEComment('owner/repo', [], 5, 30, true);
     const advisories = Array.from({ length: 15 }, (_, i) =>
       makeAdvisory({ id: `adv-${i}`, ghsaId: `GHSA-test-${i.toString().padStart(4, '0')}-0000` })
     );
-    const many = formatCVEComment('owner/repo', advisories, 15, 75);
+    const many = formatCVEComment('owner/repo', advisories, 15, 75, true);
     for (const text of [none, many]) {
       expect(text).not.toMatch(/diesen PR|diesem PR/);
       expect(text).not.toContain('](#)');
     }
   });
 
+  describe('baseline-dependent wording', () => {
+    it('with a baseline the zero case compares with the last CVE scan', () => {
+      const comment = formatCVEComment('owner/repo', [], 5, 30, true);
+      expect(comment).toContain('Keine neuen CVEs');
+      expect(comment).toContain('gegenüber dem letzten CVE-Scan');
+      expect(comment).not.toContain('noch kein früherer CVE-Scan');
+    });
+
+    it('without a baseline the zero case says there is no earlier CVE scan', () => {
+      const comment = formatCVEComment('owner/repo', [], 5, 30, false);
+      expect(comment).toContain('Keine offenen CVEs');
+      expect(comment).toContain('gefunden (noch kein früherer CVE-Scan zum Vergleich).');
+      expect(comment).not.toContain('gegenüber dem letzten CVE-Scan');
+    });
+
+    it('with a baseline the count case reports new CVEs against the last scan', () => {
+      const advisories = [makeAdvisory(), makeAdvisory({ id: 'adv-2' })];
+      const comment = formatCVEComment('owner/repo', advisories, 2, 70, true);
+      expect(comment).toContain('**2 neue CVE(s)** gegenüber dem letzten CVE-Scan erkannt!');
+      expect(comment).not.toContain('noch kein früherer CVE-Scan');
+    });
+
+    it('without a baseline the count case says offene CVE(s) and names the missing scan', () => {
+      const advisories = [makeAdvisory(), makeAdvisory({ id: 'adv-2' })];
+      const comment = formatCVEComment('owner/repo', advisories, 2, 70, false);
+      expect(comment).toContain('**2 offene CVE(s)** gefunden (noch kein früherer CVE-Scan zum Vergleich).');
+      expect(comment).not.toContain('neue CVE(s)');
+      expect(comment).not.toContain('gegenüber dem letzten CVE-Scan');
+    });
+  });
+
   it('truncates list at 10 CVEs with overflow notice', () => {
     const advisories = Array.from({ length: 15 }, (_, i) =>
       makeAdvisory({ id: `adv-${i}`, ghsaId: `GHSA-test-${i.toString().padStart(4, '0')}-0000` })
     );
-    const comment = formatCVEComment('owner/repo', advisories, 15, 75);
+    const comment = formatCVEComment('owner/repo', advisories, 15, 75, true);
     expect(comment).toContain('weitere CVEs');
   });
 
@@ -90,7 +121,7 @@ describe('PR Comment Formatter', () => {
     const advisories = Array.from({ length: 3 }, (_, i) =>
       makeAdvisory({ id: `adv-${i}` })
     );
-    const comment = formatCVEComment('owner/repo', advisories, 3, 30);
+    const comment = formatCVEComment('owner/repo', advisories, 3, 30, true);
     expect(comment).not.toContain('weitere CVEs');
   });
 });

@@ -5,9 +5,13 @@ export function formatCVEComment(
   newAdvisories: Advisory[],
   totalCount: number,
   riskScore: number,
+  hasBaseline: boolean,
 ): string {
   if (newAdvisories.length === 0) {
-    return `## 🔍 depsight Security Scan\n\n✅ **Keine neuen CVEs** gegenüber dem letzten CVE-Scan.\n\n_Risk Score: ${riskScore}/100 | Gesamt: ${totalCount} CVEs_`;
+    const headline = hasBaseline
+      ? '✅ **Keine neuen CVEs** gegenüber dem letzten CVE-Scan.'
+      : '✅ **Keine offenen CVEs** gefunden (noch kein früherer CVE-Scan zum Vergleich).';
+    return `## 🔍 depsight Security Scan\n\n${headline}\n\n_Risk Score: ${riskScore}/100 | Gesamt: ${totalCount} CVEs_`;
   }
 
   const critical = newAdvisories.filter((a) => a.severity === 'CRITICAL');
@@ -33,7 +37,9 @@ export function formatCVEComment(
   ].filter(Boolean).join(' · ');
 
   let comment = `## 🔍 depsight Security Scan\n\n`;
-  comment += `⚠️ **${newAdvisories.length} neue CVE(s)** gegenüber dem letzten CVE-Scan erkannt!\n\n`;
+  comment += hasBaseline
+    ? `⚠️ **${newAdvisories.length} neue CVE(s)** gegenüber dem letzten CVE-Scan erkannt!\n\n`
+    : `⚠️ **${newAdvisories.length} offene CVE(s)** gefunden (noch kein früherer CVE-Scan zum Vergleich).\n\n`;
   comment += `**${summaryLine}** | Risk Score: \`${riskScore}/100\`\n\n`;
   comment += `---\n\n`;
 

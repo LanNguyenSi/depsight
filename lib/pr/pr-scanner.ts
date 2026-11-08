@@ -25,6 +25,9 @@ export async function scanPRAndComment(
 
   // Find previous scan to detect *new* CVEs
   let previousGhsaIds = new Set<string>();
+  // A baseline exists only when this caller tracks the repo AND a completed CVE
+  // scan exists; the comment says so when it does not (no comparison possible).
+  let hasBaseline = false;
   if (dbRepo) {
     const prevScan = await prisma.scan.findFirst({
       // CVE scans only: license and dependency scans also write COMPLETED rows, but
@@ -38,6 +41,7 @@ export async function scanPRAndComment(
       include: { advisories: { select: { ghsaId: true } } },
     });
     if (prevScan) {
+      hasBaseline = true;
       previousGhsaIds = new Set(prevScan.advisories.map((a) => a.ghsaId));
     }
   }
@@ -81,6 +85,7 @@ export async function scanPRAndComment(
     })) as Parameters<typeof formatCVEComment>[1],
     scanResult.counts.total,
     scanResult.riskScore,
+    hasBaseline,
   );
 
   let commentUrl: string | null = null;

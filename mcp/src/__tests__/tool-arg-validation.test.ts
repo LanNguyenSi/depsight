@@ -9,6 +9,7 @@ import { registerLicenseTools } from "../tools/license.js";
 import { registerSbomTools } from "../tools/sbom.js";
 import { registerPolicyTools } from "../tools/policy.js";
 import { registerRepoTools } from "../tools/repos.js";
+import { TOOL_REGISTRARS } from "../server.js";
 import type { DepsightClient } from "../client.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -20,25 +21,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 // validated the same way (unknown keys stripped, non-optional fields required).
 type Shape = Record<string, z.ZodType>;
 
-type RegisterFn = (server: McpServer, client: DepsightClient) => void;
-
 // Every tool-name whose argument schema this file pins, recorded by
-// inputShape() while the describes below are collected, and every register
-// function those tools come from. The guard describe at the bottom compares
-// both against the tool list server.test.ts asserts, so a newly registered
-// tool without argument tests here fails the suite.
+// inputShape() while the describes below are collected. The guard describe at
+// the bottom compares this set against the names TOOL_REGISTRARS (server.ts,
+// the list createServer iterates) registers against a recording fake server,
+// so a newly registered tool without argument tests here fails the suite.
 const coveredToolNames = new Set<string>();
-const ALL_REGISTRARS: RegisterFn[] = [
-  registerCiTools,
-  registerCveTools,
-  registerDepsTools,
-  registerHistoryTools,
-  registerLicenseTools,
-  registerPolicyTools,
-  registerRepoTools,
-  registerRescanTools,
-  registerSbomTools,
-];
 
 function inputShape(
   register: (server: McpServer, client: DepsightClient) => void,
@@ -514,38 +502,31 @@ describe("depsight_get_cves argument schema (publishedAfter has no datetime vali
 });
 
 describe("every registered tool has argument tests here (coverage guard)", () => {
-  // The list server.test.ts asserts (duplicated: that file keeps it local).
-  const EXPECTED_TOOL_NAMES = [
-    "depsight_list_repos",
-    "depsight_get_overview",
-    "depsight_get_cves",
-    "depsight_get_deps",
-    "depsight_get_license_report",
-    "depsight_get_history",
-    "depsight_list_policies",
-    "depsight_evaluate_policy",
-    "depsight_ci_analytics",
-    "depsight_get_sbom",
-    "depsight_rescan",
-  ];
-
-  it("registers exactly the expected tools through these register functions", () => {
+  // The expected names are not hand-copied: createServer registers exactly
+  // TOOL_REGISTRARS, so calling every registrar against a recording fake
+  // server yields the tool list the product would publish in tools/list.
+  function registeredToolNames(): string[] {
     const registered: string[] = [];
-    const fakeServer = {
+    const recordingServer = {
       tool: (name: string) => {
         registered.push(name);
       },
     } as unknown as McpServer;
-    for (const register of ALL_REGISTRARS) {
-      register(fakeServer, {} as DepsightClient);
+    for (const register of TOOL_REGISTRARS) {
+      register(recordingServer, {} as DepsightClient);
     }
-    expect([...registered].sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
-    expect(registered).toHaveLength(EXPECTED_TOOL_NAMES.length);
+    return registered;
+  }
+
+  it("registers a non-empty set of distinct tool names through TOOL_REGISTRARS", () => {
+    const registered = registeredToolNames();
+    expect(registered.length).toBeGreaterThan(0);
+    expect(new Set(registered).size).toBe(registered.length);
   });
 
   it("pins the argument schema of every registered tool (no untested tool)", () => {
     expect([...coveredToolNames].sort()).toEqual(
-      [...EXPECTED_TOOL_NAMES].sort(),
+      [...registeredToolNames()].sort(),
     );
   });
 });

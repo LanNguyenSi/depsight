@@ -1308,8 +1308,8 @@ export async function fetchNpmManifests(
 //
 // What a removal guarantees: no under-reporting for an install that honours the
 // lockfiles, that is `npm ci`, or `npm install` on a lockfile that has no
-// missing or invalid edge. Under `npm ci` npm refuses a lockfile that differs
-// from the ideal tree, so the lockfile is the install. Out of that guarantee,
+// missing or invalid edge. `npm ci` installs from the lockfile instead of
+// re-resolving it, so that install honours the lockfile. Out of that guarantee,
 // and so residuals that can still install a removed floor: `npm install` on a
 // lockfile whose transitive edges are inconsistent (npm re-resolves them from
 // the registry; this scan notices an edge to a name without any entry, not an
