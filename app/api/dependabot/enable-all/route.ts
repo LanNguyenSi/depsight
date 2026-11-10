@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { enableDependabotAlerts } from '@/lib/cve/github-advisories';
+import { getSessionGitHubToken } from '@/lib/auth-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,11 +25,12 @@ export async function POST(req: NextRequest) {
     select: { id: true, owner: true, name: true },
   });
 
+  const githubToken = await getSessionGitHubToken(session.user.id);
   let enabled = 0;
   let failed = 0;
 
   for (const repo of repos) {
-    const ok = await enableDependabotAlerts(session.user.githubToken, repo.owner, repo.name);
+    const ok = await enableDependabotAlerts(githubToken, repo.owner, repo.name);
     if (ok) enabled++;
     else failed++;
   }

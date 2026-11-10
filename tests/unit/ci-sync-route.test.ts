@@ -14,6 +14,7 @@ const {
   headersMock,
   apiTokenFindUnique,
   apiTokenUpdate,
+  userFindUnique,
   repoFindFirst,
   syncRepoByIdMock,
   syncAllUserReposMock,
@@ -22,6 +23,7 @@ const {
   headersMock: vi.fn(),
   apiTokenFindUnique: vi.fn(),
   apiTokenUpdate: vi.fn(),
+  userFindUnique: vi.fn(),
   repoFindFirst: vi.fn(),
   syncRepoByIdMock: vi.fn(),
   syncAllUserReposMock: vi.fn(),
@@ -34,6 +36,8 @@ vi.mock('@/lib/auth', () => ({ auth: authMock }));
 vi.mock('next/headers', () => ({ headers: headersMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    // A session caller's GitHub token is read from the User row (getSessionGitHubToken).
+    user: { findUnique: userFindUnique },
     apiToken: {
       findUnique: apiTokenFindUnique,
       update: apiTokenUpdate,
@@ -63,7 +67,7 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const SESSION = { user: { id: 'user-1', githubToken: 'tok-123' } };
+const SESSION = { user: { id: 'user-1' } };
 
 function buildHeaders(map: Record<string, string>) {
   return { get: (k: string) => map[k.toLowerCase()] ?? null };
@@ -100,6 +104,8 @@ describe('POST /api/ci/sync', () => {
     headersMock.mockReset();
     apiTokenFindUnique.mockReset();
     apiTokenUpdate.mockReset();
+    userFindUnique.mockReset();
+    userFindUnique.mockResolvedValue({ githubToken: 'gh_tok' });
     repoFindFirst.mockReset();
     syncRepoByIdMock.mockReset();
     syncAllUserReposMock.mockReset();
@@ -286,6 +292,8 @@ describe('POST /api/ci/sync: per-user rate limit', () => {
     headersMock.mockReset();
     apiTokenFindUnique.mockReset();
     apiTokenUpdate.mockReset();
+    userFindUnique.mockReset();
+    userFindUnique.mockResolvedValue({ githubToken: 'gh_tok' });
     repoFindFirst.mockReset();
     syncRepoByIdMock.mockReset();
     syncAllUserReposMock.mockReset();

@@ -5,8 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // three at the module boundary so we can cover each branch of
 // `resolveRequestUser` without spinning up Next.js or the DB.
 
-const { authMock, headersMock, apiTokenFindUnique, apiTokenUpdate } =
+const { authMock, headersMock, apiTokenFindUnique, apiTokenUpdate, userFindUnique } =
   vi.hoisted(() => ({
+    userFindUnique: vi.fn(),
     authMock: vi.fn(),
     headersMock: vi.fn(),
     apiTokenFindUnique: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('@/lib/auth', () => ({ auth: authMock }));
 vi.mock('next/headers', () => ({ headers: headersMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    user: { findUnique: userFindUnique },
     apiToken: {
       findUnique: apiTokenFindUnique,
       update: apiTokenUpdate,
@@ -24,7 +26,12 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { resolveRequestUser, hasWriteScope, type ResolvedUser } from '@/lib/auth-api';
+import {
+  resolveRequestUser,
+  getSessionGitHubToken,
+  hasWriteScope,
+  type ResolvedUser,
+} from '@/lib/auth-api';
 
 function buildHeaders(map: Record<string, string>) {
   return {
@@ -39,16 +46,17 @@ describe('resolveRequestUser', () => {
     apiTokenFindUnique.mockReset();
     apiTokenUpdate.mockReset();
     apiTokenUpdate.mockResolvedValue({});
+    userFindUnique.mockReset();
   });
 
-  it('returns the user when an active NextAuth session exists (session wins)', async () => {
+  it('returns the user when an active NextAuth session exists (session wins), with the GitHub token read from the User row', async () => {
     authMock.mockResolvedValue({
       user: {
         id: 'user-1',
         githubLogin: 'octocat',
-        githubToken: 'gh_session_token',
       },
     });
+    userFindUnique.mockResolvedValue({ githubToken: 'gh_session_token' });
     headersMock.mockResolvedValue(buildHeaders({}));
 
     const result = await resolveRequestUser();
@@ -60,7 +68,23 @@ describe('resolveRequestUser', () => {
       // ApiToken.scope (which only applies to Bearer dsat_ tokens).
       scope: 'WRITE',
     });
+    expect(userFindUnique).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      select: { githubToken: true },
+    });
     expect(apiTokenFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('ignores a token field on the session object and resolves an empty token for a session user without a stored token', async () => {
+    authMock.mockResolvedValue({
+      user: { id: 'user-1', githubLogin: 'octocat', githubToken: 'from-session' },
+    });
+    userFindUnique.mockResolvedValue({ githubToken: '' });
+    headersMock.mockResolvedValue(buildHeaders({}));
+
+    const result = await resolveRequestUser();
+
+    expect(result?.githubToken).toBe('');
   });
 
   it('falls back to the Bearer dsat_ token when no session is present, and carries its READ scope', async () => {
@@ -247,6 +271,30 @@ describe('resolveRequestUser', () => {
     const result = await resolveRequestUser();
     expect(result).toBeNull();
     expect(apiTokenUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('getSessionGitHubToken', () => {
+  beforeEach(() => {
+    userFindUnique.mockReset();
+  });
+
+  it('reads the token of the given user id from the User row', async () => {
+    userFindUnique.mockResolvedValue({ githubToken: 'gh_stored' });
+
+    await expect(getSessionGitHubToken('user-7')).resolves.toBe('gh_stored');
+    expect(userFindUnique).toHaveBeenCalledWith({
+      where: { id: 'user-7' },
+      select: { githubToken: true },
+    });
+  });
+
+  it('returns an empty string for a missing row and for an empty stored token', async () => {
+    userFindUnique.mockResolvedValueOnce(null);
+    await expect(getSessionGitHubToken('gone')).resolves.toBe('');
+
+    userFindUnique.mockResolvedValueOnce({ githubToken: '' });
+    await expect(getSessionGitHubToken('no-token')).resolves.toBe('');
   });
 });
 

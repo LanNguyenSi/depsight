@@ -29,16 +29,16 @@ The "Security model" section of `docs/architecture.md` lists the credentials and
 
 ## Who a request acts as
 
-GitHub sign-in requests the scopes `repo user:email read:org` (`lib/auth.ts:16-18#"scope: 'repo user:email read:org',"`) and writes the returned access token onto the `User` row at every sign-in (`lib/auth.ts:79-84#"githubToken: account.access_token ?? '',"`). The session callback reads the row again for each session and puts its id, login and GitHub token into the session (`lib/auth.ts:102-112#"session.user.githubToken = dbUser.githubToken;"`).
+GitHub sign-in requests the scopes `repo user:email read:org` (`lib/auth.ts:16-18#"scope: 'repo user:email read:org',"`) and writes the returned access token onto the `User` row at every sign-in (`lib/auth.ts:79-84#"githubToken: account.access_token ?? '',"`). The session callback reads the row again for each session and puts only its id and login into the session (`lib/auth.ts:107-117#"session.user.githubLogin = dbUser.githubLogin;"`); the GitHub token is deliberately not part of it, because with JWT sessions that object is what `GET /api/auth/session` returns to the browser. Server code reads the token from the `User` row with `getSessionGitHubToken` (`lib/auth-api.ts:29-34#"return row?.githubToken ?? '';"`).
 
 `resolveRequestUser` decides the caller of every route that accepts a Bearer token:
 
-- A session user resolves first and always gets `WRITE` (`lib/auth-api.ts:33-44#"scope: 'WRITE',"`).
-- Otherwise an `Authorization: Bearer dsat_...` header is looked up by its exact value in `ApiToken`, and a revoked token resolves to nobody (`lib/auth-api.ts:48-62#"if (!record || record.revokedAt) return null;"`). The token resolves to its owner, the owner's GitHub token and the token's own scope (`lib/auth-api.ts:73-77#"scope: record.scope,"`).
+- A session user resolves first and always gets `WRITE` (`lib/auth-api.ts:49-60#"scope: 'WRITE',"`), with the token read from its `User` row by `getSessionGitHubToken`.
+- Otherwise an `Authorization: Bearer dsat_...` header is looked up by its exact value in `ApiToken`, and a revoked token resolves to nobody (`lib/auth-api.ts:69-77#"if (!record || record.revokedAt) return null;"`). The token resolves to its owner, the owner's GitHub token and the token's own scope (`lib/auth-api.ts:88-93#"scope: record.scope,"`).
 
 A write route checks `hasWriteScope` (`lib/auth-api.ts:17-18#"return user.scope === 'WRITE';"`) and answers a `READ` token with `403`, for example `POST /api/scan` (`app/api/scan/route.ts:20-21#"return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });"`). Whatever the scope, the token caller's GitHub requests use the owner's stored OAuth token; `GET /api/repos`, open to `READ` tokens, lists repositories from GitHub with it (`app/api/repos/route.ts:18-23#"const allRepos = await getUserRepos(user.githubToken);"`).
 
-Routes that call `auth()` instead of `resolveRequestUser` are session-only. Token management is one of them on purpose, so a `dsat_` token cannot mint, list or revoke tokens (`app/api/tokens/route.ts:9-11#"revoke tokens, otherwise a leaked token could escalate into more tokens."`).
+Routes that call `auth()` instead of `resolveRequestUser` are session-only; those that need GitHub (`/api/export` when it runs scans, `/api/pr-scan`, `/api/repos/sync`, `/api/dependabot` and its `check` and `enable-all` siblings) call `getSessionGitHubToken` with the session's user id. Token management is one of them on purpose, so a `dsat_` token cannot mint, list or revoke tokens (`app/api/tokens/route.ts:9-11#"revoke tokens, otherwise a leaked token could escalate into more tokens."`).
 
 ## API tokens
 
@@ -58,7 +58,7 @@ Only sign-in writes the column: the GitHub sign-in callback, and Dev Login when 
 
 | Value | Column | At rest | Read by |
 | --- | --- | --- | --- |
-| GitHub OAuth token | `User.githubToken` (`prisma/schema.prisma:18#"stored in plaintext"`) | plaintext | the session callback, `resolveRequestUser` and the three uses above |
+| GitHub OAuth token | `User.githubToken` (`prisma/schema.prisma:18#"stored in plaintext"`) | plaintext | `resolveRequestUser`, `getSessionGitHubToken` (session-only routes) and the three uses above; never the session object |
 | `dsat_` API token | `ApiToken.token` (`prisma/schema.prisma:231#"@unique"`) | plaintext, unique, matched by value | `resolveRequestUser`; no endpoint returns it after minting |
 | Outgoing webhook signing secret | `WebhookConfig.secret` (`prisma/schema.prisma:290#"// HMAC signing secret"`) | plaintext | the webhook delivery; also returned by `POST /api/webhooks` and `PATCH /api/webhooks/[id]` |
 | Slack incoming webhook URL | `SlackConfig.webhookUrl` (`prisma/schema.prisma:304#"// Slack incoming webhook URL"`) | plaintext | the Slack delivery; also returned by `GET /api/slack` and `POST /api/slack` |

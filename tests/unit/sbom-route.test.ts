@@ -11,8 +11,9 @@ import { NextRequest } from 'next/server';
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, headersMock, apiTokenFindUnique, apiTokenUpdate, scanFindFirst, generateSBOMMock } =
+const { authMock, headersMock, apiTokenFindUnique, apiTokenUpdate, userFindUnique, scanFindFirst, generateSBOMMock } =
   vi.hoisted(() => ({
+    userFindUnique: vi.fn(),
     authMock: vi.fn(),
     headersMock: vi.fn(),
     apiTokenFindUnique: vi.fn(),
@@ -28,6 +29,8 @@ vi.mock('@/lib/auth', () => ({ auth: authMock }));
 vi.mock('next/headers', () => ({ headers: headersMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
+    // A session caller's GitHub token is read from the User row (getSessionGitHubToken).
+    user: { findUnique: userFindUnique },
     apiToken: {
       findUnique: apiTokenFindUnique,
       update: apiTokenUpdate,
@@ -81,6 +84,8 @@ describe('GET /api/sbom', () => {
     headersMock.mockReset();
     apiTokenFindUnique.mockReset();
     apiTokenUpdate.mockReset();
+    userFindUnique.mockReset();
+    userFindUnique.mockResolvedValue({ githubToken: 'gh_tok' });
     scanFindFirst.mockReset();
     generateSBOMMock.mockReset();
     apiTokenUpdate.mockResolvedValue({});
