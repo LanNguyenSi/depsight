@@ -320,6 +320,9 @@ describe('resolveRequestUser - dsat_ tokens are matched by hash', () => {
 
     expect(await resolveRequestUser()).toMatchObject({ id: 'user-legacy', scope: 'READ' });
     expect(apiTokenFindUnique.mock.calls.map((c) => c[0].where.token)).toEqual([STORED, RAW]);
+    expect(apiTokenUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'tok-legacy' } }),
+    );
   });
 
   it('does not resolve a revoked raw-token row through the fallback', async () => {
