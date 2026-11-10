@@ -41,7 +41,7 @@ The table lists every route handler except the NextAuth handlers under `/api/aut
 | `GET` | `/api/ci/analytics/[repoId]` | CI analytics of one repository (`?type=fail-rate\|build-times\|flaky\|bottleneck`, default `fail-rate`; `&period=1\|7\|30` days, default and fallback 30): `{ type, period, data }`. 400 for an unknown type, 404 for a repository the caller does not own |
 | `GET` | `/api/ci/analytics/cross-repo` | CI health summary across the caller's repositories (`?period=1\|7\|30`, default and fallback 30): `{ period, summaries }` |
 | `GET` | `/api/tokens` | The caller's API tokens, metadata only (`id`, `name`, `scope`, `createdAt`, `lastUsedAt`, `revokedAt`), never the token value |
-| `POST` | `/api/tokens` | Create a token (body: `{ name, scope? }`, `name` up to 100 characters, `scope` `READ` or `WRITE`, default `WRITE`). Answers 201 `{ token, record }`; no other endpoint returns the `dsat_` value again. 400 for a missing or too long name or an unknown scope |
+| `POST` | `/api/tokens` | Create a token (body: `{ name, scope? }`, `name` up to 100 characters, `scope` `READ` or `WRITE`, default `WRITE`). Answers 201 `{ token, record }`; no other endpoint returns the `dsat_` value again, and the database holds only its SHA-256 hash. 400 for a missing or too long name or an unknown scope |
 | `DELETE` | `/api/tokens/[id]` | Revoke a token (sets `revokedAt`); answers `{ ok: true }`, or 404 when the token is unknown, not the caller's or already revoked |
 | `GET` | `/api/webhooks` | The caller's outgoing webhooks (`id`, `name`, `url`, `events`, `enabled`, `createdAt`), without the secret |
 | `POST` | `/api/webhooks` | Create an outgoing webhook (body: `{ name, url, secret?, events }`, `events` from `cve.critical`, `cve.high`, `scan.completed`; `url` must be a public `http(s)` target). Answers 201 `{ webhook }` with the full row, secret included; 400 for a missing field, a non-public URL or an unknown event. See [Outgoing webhooks](#outgoing-webhooks) |
@@ -53,7 +53,7 @@ The table lists every route handler except the NextAuth handlers under `/api/aut
 | `POST` | `/api/pr-scan` | Run the PR scan for one pull request and post or update its comment (body: `{ owner, repo, prNumber }`); answers `{ success, commented, newCVECount, commentUrl }`. The scan lists the open Dependabot alerts that were not in the caller's newest completed CVE scan of the repository (license and dependency scans are skipped), see [PR scan webhook](configuration.md#pr-scan-webhook-optional). 400 for a missing field or a PR number that is not a positive integer; rate limited, see [Rate limits](#rate-limits) |
 | `GET` | `/api/me` | The signed-in user, `{ githubLogin, avatarUrl }` |
 | `POST` | `/api/webhooks/github` | GitHub `pull_request` webhook: runs the PR scan (open Dependabot alerts not in the newest completed CVE scan, see [configuration.md](configuration.md#pr-scan-webhook-optional)) and posts or updates its comment. No session or token; authenticated by the `X-Hub-Signature-256` HMAC under the secret of the tracked repository it names, see [GitHub pull-request webhook](#github-pull-request-webhook) |
-| `GET` | `/api/health` | Health check (returns service status). Public, no auth required |
+| `GET` | `/api/health` | Health check (returns service status). Public, no auth required. Answers `{ status, db, timestamp }`: 200 with `ok`/`ok`, or 503 with `degraded`/`unreachable` when the database check fails; the database error text is logged on the server and never in the body |
 
 ## Rate limits
 

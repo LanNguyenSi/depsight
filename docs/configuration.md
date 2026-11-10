@@ -318,6 +318,15 @@ forward deploy. For an intentional downgrade, run
 (a rollback never reverts the schema), which schema changes survive one and a
 recovery runbook are in [Rollback and the database schema](rollback.md).
 
+The same SQL file also hashes the API tokens: `ApiToken.token` holds the SHA-256 of
+each `dsat_` token, and the step replaces every row that still holds a raw
+`dsat_` value with its digest, in place and once (a digest never starts with
+`dsat_`, so a repeat selects nothing). Existing tokens keep working without
+being re-issued, and a database dump or backup taken after the deploy contains no
+usable token. It needs PostgreSQL 11 or later. A rollback to a release from
+before the hashing cannot match the hashed rows, so tokens must be re-issued
+([Rollback](rollback.md#worked-example-hashed-api-tokens)).
+
 ## CI Health (GitHub Actions sync)
 
 The **CI Health** tab in the dashboard surfaces GitHub Actions analytics (fail rates, build times, flaky jobs). depsight ingests the data itself: it reads workflow runs and jobs from the GitHub API with the repository owner's stored GitHub token (`lib/ci/ingest.ts`) and stores them in its own database. No separate service is involved and nothing extra needs to be deployed.

@@ -2,6 +2,7 @@ import { headers } from 'next/headers';
 import { auth } from './auth';
 import { prisma } from './prisma';
 import type { ApiTokenScope } from '@prisma/client';
+import { API_TOKEN_PREFIX, hashApiToken } from './api-token';
 
 export interface ResolvedUser {
   id: string;
@@ -40,8 +41,8 @@ export async function getSessionGitHubToken(userId: string): Promise<string> {
  * server.
  *
  * `dsat_` stands for "Depsight API Token". Tokens live in the
- * `ApiToken` Prisma model; a revoked token (revokedAt set) will not
- * resolve to a user.
+ * `ApiToken` Prisma model, stored as a SHA-256 hash (lib/api-token.ts); a
+ * revoked token (revokedAt set) will not resolve to a user.
  *
  * Returns null if neither path yields an active user.
  */
@@ -64,10 +65,12 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
   const authHeader = headerList.get('authorization') ?? '';
   if (!authHeader.startsWith('Bearer ')) return null;
   const rawToken = authHeader.slice('Bearer '.length).trim();
-  if (!rawToken || !rawToken.startsWith('dsat_')) return null;
+  if (!rawToken || !rawToken.startsWith(API_TOKEN_PREFIX)) return null;
 
+  // `ApiToken.token` holds the SHA-256 of the token, never the token itself,
+  // so the presented value is hashed before the lookup.
   const record = await prisma.apiToken.findUnique({
-    where: { token: rawToken },
+    where: { token: hashApiToken(rawToken) },
     include: {
       user: {
         select: { id: true, githubLogin: true, githubToken: true },

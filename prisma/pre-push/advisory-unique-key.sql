@@ -8,6 +8,12 @@
 -- warn about. The deploy hook (.relay.yml post_update) and `npm run db:push`
 -- both run it first, via `prisma db execute`.
 --
+-- The file also carries a second, independent step at the end: it replaces
+-- every plaintext "ApiToken"."token" with its SHA-256 (see the comment there).
+-- It lives in this file because every place that applies the schema (the
+-- hosted migrate service, `npm run db:push`, the dev entrypoint, the restore
+-- drill) already runs exactly this one file before `prisma db push`.
+--
 -- Safe to run any number of times and on any database state:
 --   * no "Advisory" table yet (fresh database): nothing happens, the push
 --     creates the table and the key;
@@ -70,5 +76,27 @@ BEGIN
 
   CREATE UNIQUE INDEX IF NOT EXISTS "Advisory_scanId_ghsaId_packageName_key"
     ON "Advisory"("scanId", "ghsaId", "packageName");
+END
+$$;
+
+-- API tokens at rest: "ApiToken"."token" holds the lowercase hex SHA-256 of the
+-- raw `dsat_...` token (lib/api-token.ts), not the token. Rows written before
+-- that change still hold the raw value; hash them in place so the tokens keep
+-- working (the app hashes the presented token before the lookup) and a dump of
+-- the table no longer contains usable tokens. A digest is 64 hex characters and
+-- never starts with `dsat_`, so the WHERE clause selects exactly the rows not
+-- yet migrated and a second run changes nothing. sha256(bytea) needs
+-- PostgreSQL 11 or later (the compose files use postgres:16). No "ApiToken"
+-- table yet (fresh database): nothing happens. The column keeps its unique
+-- index; two distinct 256-bit tokens do not collide.
+DO $$
+BEGIN
+  IF to_regclass('"ApiToken"') IS NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE "ApiToken"
+  SET "token" = encode(sha256(convert_to("token", 'UTF8')), 'hex')
+  WHERE left("token", 5) = 'dsat_';
 END
 $$;

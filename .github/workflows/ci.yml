@@ -95,7 +95,7 @@ jobs:
           cache: 'npm'
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npm ci --no-audit --no-fund
       - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx prisma generate
-      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx vitest run tests/unit/advisory-dedupe-db.test.ts
+      - run: bash "$GITHUB_WORKSPACE/scripts/ci/stop-commands-run.sh" npx vitest run tests/unit/advisory-dedupe-db.test.ts tests/unit/api-token-hash-db.test.ts
 
   backup-scripts:
     name: Backup scripts (shellcheck, stub tests)

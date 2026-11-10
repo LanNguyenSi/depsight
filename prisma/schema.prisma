@@ -228,6 +228,9 @@ model ApiToken {
   userId      String
   user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Lowercase hex SHA-256 of the raw dsat_ token, never the token itself
+  // (lib/api-token.ts). prisma/pre-push/advisory-unique-key.sql hashes rows
+  // written before that change.
   token       String        @unique
   name        String
   // Default WRITE preserves today's behaviour for every token that existed

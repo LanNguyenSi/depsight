@@ -44,27 +44,43 @@ describe('GET /api/health', () => {
     expect(body.timestamp).toBeTruthy();
   });
 
-  it('(2) returns 503 with status:degraded and db:unreachable when $queryRaw throws', async () => {
-    queryRawMock.mockRejectedValue(new Error('Connection refused'));
+  it('(2) returns 503 with status:degraded and db:unreachable when $queryRaw throws, without the error text', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    queryRawMock.mockRejectedValue(
+      new Error("Can't reach database server at `db.internal:5432`"),
+    );
 
     const res = await GET();
 
     expect(res.status).toBe(503);
-    const body = await res.json() as { status: string; db: string; error: string; timestamp: string };
+    const text = await res.text();
+    const body = JSON.parse(text) as Record<string, unknown>;
     expect(body.status).toBe('degraded');
     expect(body.db).toBe('unreachable');
-    expect(body.error).toBe('Connection refused');
+    expect(Object.keys(body).sort()).toEqual(['db', 'status', 'timestamp']);
+    expect(body).not.toHaveProperty('error');
     expect(typeof body.timestamp).toBe('string');
     expect(body.timestamp).toBeTruthy();
+    // No part of the driver message (host, port) reaches the unauthenticated body.
+    expect(text).not.toContain('db.internal');
+    expect(text).not.toContain('5432');
+    // It is logged server side instead.
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog.mock.calls[0].join(' ')).toContain('db.internal:5432');
+    errorLog.mockRestore();
   });
 
-  it('(3) includes non-Error rejection message as Unknown database error', async () => {
+  it('(3) answers a non-Error rejection the same way and logs a generic message', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     queryRawMock.mockRejectedValue('raw string error');
 
     const res = await GET();
 
     expect(res.status).toBe(503);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('Unknown database error');
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).not.toHaveProperty('error');
+    expect(body.db).toBe('unreachable');
+    expect(errorLog.mock.calls[0].join(' ')).toContain('Unknown database error');
+    errorLog.mockRestore();
   });
 });
