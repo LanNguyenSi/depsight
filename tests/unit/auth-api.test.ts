@@ -311,6 +311,27 @@ describe('resolveRequestUser - dsat_ tokens are matched by hash', () => {
     expect(apiTokenFindUnique.mock.calls[0][0].where).toEqual({ token: STORED });
   });
 
+  it('still resolves a row that holds the raw token (not yet migrated), after the hash lookup missed', async () => {
+    const legacy = { ...row, id: 'tok-legacy', user: { ...row.user, id: 'user-legacy' } };
+    apiTokenFindUnique.mockImplementation(async (args: { where: { token: string } }) =>
+      args.where.token === RAW ? legacy : null,
+    );
+    headersMock.mockResolvedValue(buildHeaders({ authorization: `Bearer ${RAW}` }));
+
+    expect(await resolveRequestUser()).toMatchObject({ id: 'user-legacy', scope: 'READ' });
+    expect(apiTokenFindUnique.mock.calls.map((c) => c[0].where.token)).toEqual([STORED, RAW]);
+  });
+
+  it('does not resolve a revoked raw-token row through the fallback', async () => {
+    const legacy = { ...row, revokedAt: new Date('2026-01-01T00:00:00Z') };
+    apiTokenFindUnique.mockImplementation(async (args: { where: { token: string } }) =>
+      args.where.token === RAW ? legacy : null,
+    );
+    headersMock.mockResolvedValue(buildHeaders({ authorization: `Bearer ${RAW}` }));
+
+    expect(await resolveRequestUser()).toBeNull();
+  });
+
   it('does not resolve when the stored hash itself is presented as the bearer token', async () => {
     headersMock.mockResolvedValue(buildHeaders({ authorization: `Bearer ${STORED}` }));
 
@@ -324,6 +345,8 @@ describe('resolveRequestUser - dsat_ tokens are matched by hash', () => {
 
     expect(await resolveRequestUser()).toBeNull();
     expect(apiTokenFindUnique.mock.calls[0][0].where.token).toBe(sha256Hex(`dsat_${STORED}`));
+    // The raw-value fallback looks up `dsat_<hash>`, which no hashed row holds.
+    expect(apiTokenFindUnique.mock.calls[1][0].where.token).toBe(`dsat_${STORED}`);
   });
 
   it('does not resolve a revoked token and does not stamp lastUsedAt', async () => {

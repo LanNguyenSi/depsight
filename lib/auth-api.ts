@@ -69,14 +69,23 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
 
   // `ApiToken.token` holds the SHA-256 of the token, never the token itself,
   // so the presented value is hashed before the lookup.
-  const record = await prisma.apiToken.findUnique({
-    where: { token: hashApiToken(rawToken) },
-    include: {
-      user: {
-        select: { id: true, githubLogin: true, githubToken: true },
-      },
+  const include = {
+    user: {
+      select: { id: true, githubLogin: true, githubToken: true },
     },
+  } as const;
+  let record = await prisma.apiToken.findUnique({
+    where: { token: hashApiToken(rawToken) },
+    include,
   });
+  // A row that still holds the raw value: during the deploy that introduces
+  // hashing the new code serves before the pre-push step has hashed the old
+  // rows, and an old release minting during a rollback stores raw values too.
+  // Hashed rows never start with the dsat_ prefix, so this lookup cannot match
+  // a hash, and it stops matching anything once the pre-push step has run.
+  if (!record) {
+    record = await prisma.apiToken.findUnique({ where: { token: rawToken }, include });
+  }
   if (!record || record.revokedAt) return null;
 
   // Fire-and-forget: stamp lastUsedAt so operators can see which

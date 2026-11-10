@@ -322,10 +322,15 @@ The same SQL file also hashes the API tokens: `ApiToken.token` holds the SHA-256
 each `dsat_` token, and the step replaces every row that still holds a raw
 `dsat_` value with its digest, in place and once (a digest never starts with
 `dsat_`, so a repeat selects nothing). Existing tokens keep working without
-being re-issued, and a database dump or backup taken after the deploy contains no
-usable token. It needs PostgreSQL 11 or later. A rollback to a release from
-before the hashing cannot match the hashed rows, so tokens must be re-issued
-([Rollback](rollback.md#worked-example-hashed-api-tokens)).
+being re-issued: until the step has run, the new code also finds a row that still
+holds the raw value, so a deploy has no window in which old tokens fail. A
+database dump or backup taken after the deploy contains no usable token; dumps and
+off-host copies taken before it still do, so re-issue tokens (revoke and mint) if
+such a dump may have left the host. It needs PostgreSQL 11 or later. A release
+from before the hashing cannot match the hashed rows: after an intentional
+downgrade, or an automatic relay rollback after the migrate step, tokens answer
+401 until the next forward deploy, and only an intentional downgrade needs
+re-issued tokens ([Rollback](rollback.md#worked-example-hashed-api-tokens)).
 
 ## CI Health (GitHub Actions sync)
 
