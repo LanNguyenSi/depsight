@@ -6,11 +6,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, repoFindMany, octokitRequestMock, createGitHubClientMock } = vi.hoisted(() => {
+const { authMock, getTokenMock, repoFindMany, octokitRequestMock, createGitHubClientMock } = vi.hoisted(() => {
   const octokitRequestMock = vi.fn();
   const createGitHubClientMock = vi.fn(() => ({ request: octokitRequestMock }));
   return {
     authMock: vi.fn(),
+    getTokenMock: vi.fn(),
     repoFindMany: vi.fn(),
     octokitRequestMock,
     createGitHubClientMock,
@@ -21,6 +22,7 @@ const { authMock, repoFindMany, octokitRequestMock, createGitHubClientMock } = v
 // Module mocks
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('@/lib/auth-api', () => ({ getSessionGitHubToken: getTokenMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     repo: {
@@ -40,7 +42,7 @@ import { GET } from '@/app/api/dependabot/check/route';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const SESSION = { user: { id: 'user-1', githubToken: 'tok-123' } };
+const SESSION = { user: { id: 'user-1' } };
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -48,6 +50,9 @@ const SESSION = { user: { id: 'user-1', githubToken: 'tok-123' } };
 describe('GET /api/dependabot/check', () => {
   beforeEach(() => {
     authMock.mockReset();
+    // The session carries no GitHub token; the route reads it server side by user id.
+    getTokenMock.mockReset();
+    getTokenMock.mockImplementation(async (userId: string) => ({ 'user-1': 'tok-123' } as Record<string, string>)[userId] ?? '');
     repoFindMany.mockReset();
     octokitRequestMock.mockReset();
     createGitHubClientMock.mockReset();
@@ -67,7 +72,7 @@ describe('GET /api/dependabot/check', () => {
   });
 
   it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
-    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+    authMock.mockResolvedValue({ user: {} });
 
     const res = await GET();
 

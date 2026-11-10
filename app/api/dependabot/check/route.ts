@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { createGitHubClient } from '@/lib/github';
+import { getSessionGitHubToken } from '@/lib/auth-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ export async function GET() {
     select: { id: true, owner: true, name: true, fullName: true },
   });
 
-  const octokit = createGitHubClient(session.user.githubToken);
+  const octokit = createGitHubClient(await getSessionGitHubToken(session.user.id));
   const disabled: Array<{ repoId: string; fullName: string }> = [];
 
   // Check in parallel (batches of 10 to respect rate limits)

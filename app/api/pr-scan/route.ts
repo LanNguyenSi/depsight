@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { scanPRAndComment } from '@/lib/pr/pr-scanner';
+import { getSessionGitHubToken } from '@/lib/auth-api';
+import { prScanRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +19,11 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const limit = prScanRateLimiter.check(session.user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
   }
 
   const body = await req.json() as {
@@ -40,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await scanPRAndComment(
-      session.user.githubToken,
+      await getSessionGitHubToken(session.user.id),
       owner,
       repo,
       prNumber,

@@ -9,6 +9,13 @@ import {
   loadRepoExportData,
   type RepoExportScanOverrides,
 } from '@/lib/export/repo-bundle';
+import { getSessionGitHubToken } from '@/lib/auth-api';
+import {
+  scanRateLimiter,
+  licenseRateLimiter,
+  depsRateLimiter,
+  rateLimitedResponse,
+} from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,10 +48,27 @@ export async function POST(req: NextRequest) {
     }
 
     if (missingScans.length > 0) {
+      // Only an export that actually starts scans spends GitHub/OSV quota, so
+      // only then do the scan limiters apply; each missing scan draws on the
+      // budget of the endpoint that runs the same scan (POST /api/scan,
+      // /api/license, /api/deps). An export of data that already exists never
+      // reaches this block.
+      const scanLimiters = [
+        ['cve', scanRateLimiter],
+        ['license', licenseRateLimiter],
+        ['deps', depsRateLimiter],
+      ] as const;
+      for (const [kind, limiter] of scanLimiters) {
+        if (!missingScans.includes(kind)) continue;
+        const limit = limiter.check(session.user.id);
+        if (!limit.allowed) return rateLimitedResponse(limit);
+      }
+
+      const githubToken = await getSessionGitHubToken(session.user.id);
       const overrides: RepoExportScanOverrides = {};
 
       if (missingScans.includes('cve')) {
-        const result = await scanRepository(session.user.id, repoId, session.user.githubToken);
+        const result = await scanRepository(session.user.id, repoId, githubToken);
         // The scanner may hand back an in-flight RUNNING scan instead of a
         // freshly-completed one. Surface that clearly instead of letting it
         // fall through to the generic "not all scans could be prepared" 409
@@ -64,11 +88,11 @@ export async function POST(req: NextRequest) {
         overrides.cveScanId = result.scanId;
       }
       if (missingScans.includes('license')) {
-        const result = await scanLicenses(session.user.id, repoId, session.user.githubToken);
+        const result = await scanLicenses(session.user.id, repoId, githubToken);
         overrides.licenseScanId = result.scanId;
       }
       if (missingScans.includes('deps')) {
-        const result = await scanDependencies(session.user.id, repoId, session.user.githubToken);
+        const result = await scanDependencies(session.user.id, repoId, githubToken);
         overrides.depsScanId = result.scanId;
       }
 

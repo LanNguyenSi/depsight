@@ -113,6 +113,9 @@ export const DEPS_LIMIT_PER_HOUR = 300;
 // GET /api/repos lists the owner's live GitHub repos (ceil(N/100) GitHub
 // requests per call), so it gets the same ceiling.
 export const REPOS_LIMIT_PER_HOUR = 300;
+// POST /api/pr-scan runs one PR scan per call, the same work a verified PR
+// webhook delivery starts, so it gets the per-user budget of those deliveries.
+export const PR_SCAN_LIMIT_PER_HOUR = 120;
 
 /** POST /api/scan, keyed by user id. */
 export const scanRateLimiter = createRateLimiter({ limit: SCAN_LIMIT_PER_HOUR, windowMs: HOUR_MS });
@@ -126,9 +129,17 @@ export const depsRateLimiter = createRateLimiter({
   limit: DEPS_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
 });
-/** GET /api/repos, keyed by user id. */
+/**
+ * GET /api/repos and POST /api/repos/sync, keyed by user id. Both list the
+ * owner's live GitHub repositories, so they draw on one shared budget.
+ */
 export const reposRateLimiter = createRateLimiter({
   limit: REPOS_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/pr-scan, keyed by user id. */
+export const prScanRateLimiter = createRateLimiter({
+  limit: PR_SCAN_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
 });
 /** POST /api/ci/sync with a repoId, keyed by user id. */

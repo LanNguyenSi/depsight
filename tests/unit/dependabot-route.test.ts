@@ -5,8 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, repoFindFirst, enableDependabotAlertsMock } = vi.hoisted(() => ({
+const { authMock, getTokenMock, repoFindFirst, enableDependabotAlertsMock } = vi.hoisted(() => ({
   authMock: vi.fn(),
+  getTokenMock: vi.fn(),
   repoFindFirst: vi.fn(),
   enableDependabotAlertsMock: vi.fn(),
 }));
@@ -15,6 +16,7 @@ const { authMock, repoFindFirst, enableDependabotAlertsMock } = vi.hoisted(() =>
 // Module mocks — declared BEFORE any imports that resolve the real modules
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('@/lib/auth-api', () => ({ getSessionGitHubToken: getTokenMock }));
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     repo: {
@@ -35,7 +37,7 @@ import { NextRequest } from 'next/server';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const SESSION = { user: { id: 'user-1', githubToken: 'tok-123' } };
+const SESSION = { user: { id: 'user-1' } };
 
 function makePostRequest(body: Record<string, unknown>): NextRequest {
   return new NextRequest('http://localhost/api/dependabot', {
@@ -51,6 +53,9 @@ function makePostRequest(body: Record<string, unknown>): NextRequest {
 describe('POST /api/dependabot', () => {
   beforeEach(() => {
     authMock.mockReset();
+    // The session carries no GitHub token; the route reads it server side by user id.
+    getTokenMock.mockReset();
+    getTokenMock.mockImplementation(async (userId: string) => ({ 'user-1': 'tok-123' } as Record<string, string>)[userId] ?? '');
     repoFindFirst.mockReset();
     enableDependabotAlertsMock.mockReset();
   });
@@ -67,7 +72,7 @@ describe('POST /api/dependabot', () => {
   });
 
   it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
-    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+    authMock.mockResolvedValue({ user: {} });
 
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
 

@@ -3,6 +3,8 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { getUserRepos } from '@/lib/github';
 import { syncUserRepos } from '@/lib/repos/sync';
+import { getSessionGitHubToken } from '@/lib/auth-api';
+import { reposRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,8 +15,13 @@ export async function POST() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const limit = reposRateLimiter.check(session.user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
+  }
+
   try {
-    const githubRepos = await getUserRepos(session.user.githubToken);
+    const githubRepos = await getUserRepos(await getSessionGitHubToken(session.user.id));
     const result = await syncUserRepos(prisma, session.user.id, githubRepos);
     return NextResponse.json({
       synced: result.syncedCount,

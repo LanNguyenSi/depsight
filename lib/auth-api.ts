@@ -19,6 +19,21 @@ export function hasWriteScope(user: ResolvedUser): boolean {
 }
 
 /**
+ * The GitHub OAuth access token of a session user, read from the `User` row
+ * (written at every GitHub sign-in in lib/auth.ts). It is deliberately not part
+ * of the session object, which the browser receives from /api/auth/session.
+ * Returns '' when the user row is gone or holds no token; callers treat that
+ * like any other empty token. Server-side only.
+ */
+export async function getSessionGitHubToken(userId: string): Promise<string> {
+  const row = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { githubToken: true },
+  });
+  return row?.githubToken ?? '';
+}
+
+/**
  * Resolve the acting user for an API route. Tries the NextAuth session
  * first (browser users), then falls back to a Bearer `dsat_` API token
  * (`Authorization: Bearer dsat_...`) for headless agents like the MCP
@@ -38,7 +53,7 @@ export async function resolveRequestUser(): Promise<ResolvedUser | null> {
       githubLogin: session.user.githubLogin ?? null,
       // Dev Login users carry the placeholder token "dev-token" (lib/auth.ts),
       // which GitHub rejects; callers that need GitHub access must handle that.
-      githubToken: session.user.githubToken ?? '',
+      githubToken: await getSessionGitHubToken(session.user.id),
       // A logged-in browser user always has full access, same as before
       // ApiToken.scope existed.
       scope: 'WRITE',

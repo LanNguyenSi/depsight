@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { enableDependabotAlerts } from '@/lib/cve/github-advisories';
+import { getSessionGitHubToken } from '@/lib/auth-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   }
 
   const success = await enableDependabotAlerts(
-    session.user.githubToken,
+    await getSessionGitHubToken(session.user.id),
     repo.owner,
     repo.name,
   );

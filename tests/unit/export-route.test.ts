@@ -1,7 +1,7 @@
 // Route-level tests for POST /api/export.
 // PATTERN B: vi.hoisted() handles, vi.mock() before imports, import route last.
 // Covers: 401, 400, 409 (no-run), 409 (auto-run but still missing), 200 zip, 500.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 // ---------------------------------------------------------------------------
@@ -9,6 +9,7 @@ import { NextRequest } from 'next/server';
 // ---------------------------------------------------------------------------
 const {
   authMock,
+  getTokenMock,
   loadRepoExportDataMock,
   getMissingExportScansMock,
   buildRepoExportArchiveMock,
@@ -17,6 +18,7 @@ const {
   scanDependenciesMock,
 } = vi.hoisted(() => ({
   authMock: vi.fn(),
+  getTokenMock: vi.fn(),
   loadRepoExportDataMock: vi.fn(),
   getMissingExportScansMock: vi.fn(),
   buildRepoExportArchiveMock: vi.fn(),
@@ -29,6 +31,7 @@ const {
 // Module mocks
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('@/lib/auth-api', () => ({ getSessionGitHubToken: getTokenMock }));
 vi.mock('@/lib/export/repo-bundle', () => ({
   loadRepoExportData: loadRepoExportDataMock,
   getMissingExportScans: getMissingExportScansMock,
@@ -42,6 +45,14 @@ vi.mock('@/lib/deps/scanner', () => ({ scanDependencies: scanDependenciesMock })
 // Imports AFTER mocks
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/export/route';
+import {
+  scanRateLimiter,
+  licenseRateLimiter,
+  depsRateLimiter,
+  SCAN_LIMIT_PER_HOUR,
+  LICENSE_LIMIT_PER_HOUR,
+  DEPS_LIMIT_PER_HOUR,
+} from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,7 +86,13 @@ const fakeExportData = {
 // ---------------------------------------------------------------------------
 describe('POST /api/export', () => {
   beforeEach(() => {
+    scanRateLimiter.reset();
+    licenseRateLimiter.reset();
+    depsRateLimiter.reset();
     authMock.mockReset();
+    // The session carries no GitHub token; the route reads it server side by user id.
+    getTokenMock.mockReset();
+    getTokenMock.mockImplementation(async (userId: string) => ({ 'user-1': 'tok-abc', 'user-5': 'tok-xyz' } as Record<string, string>)[userId] ?? '');
     loadRepoExportDataMock.mockReset();
     getMissingExportScansMock.mockReset();
     buildRepoExportArchiveMock.mockReset();
@@ -96,7 +113,7 @@ describe('POST /api/export', () => {
   });
 
   it('returns 401 and makes no database or downstream call when the session has a user but no id', async () => {
-    authMock.mockResolvedValue({ user: { githubToken: 'tok-123' } });
+    authMock.mockResolvedValue({ user: {} });
 
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
 
@@ -139,7 +156,7 @@ describe('POST /api/export', () => {
   });
 
   it('(4) returns 409 with message when scans still missing after auto-run (runMissingScans=true)', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1', githubToken: 'tok-abc' } });
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
     loadRepoExportDataMock.mockResolvedValue(fakeExportData);
     // First getMissingExportScans call triggers auto-run; second call still missing
     getMissingExportScansMock
@@ -174,7 +191,7 @@ describe('POST /api/export', () => {
   });
 
   it('(4b) returns a clear 409 scan_in_progress signal (not the generic missing_scans one) when the cve scan is already running, without reloading export data', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-1', githubToken: 'tok-abc' } });
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
     loadRepoExportDataMock.mockResolvedValue(fakeExportData);
     getMissingExportScansMock.mockReturnValueOnce(['cve']); // triggers auto-run
     scanRepositoryMock.mockResolvedValue({ scanId: 'scan-cve-running', alreadyRunning: true });
@@ -245,7 +262,7 @@ describe('POST /api/export', () => {
   });
 
   it('(8) invokes all three scanners when all scan types are missing on auto-run', async () => {
-    authMock.mockResolvedValue({ user: { id: 'user-5', githubToken: 'tok-xyz' } });
+    authMock.mockResolvedValue({ user: { id: 'user-5' } });
     loadRepoExportDataMock.mockResolvedValue(fakeExportData);
     getMissingExportScansMock
       .mockReturnValueOnce(['cve', 'license', 'deps']) // initial — all missing
@@ -268,5 +285,181 @@ describe('POST /api/export', () => {
       'repo-5',
       { cveScanId: 'cve-new', licenseScanId: 'lic-new', depsScanId: 'dep-new' },
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The GitHub token is read server side, never from the session
+// ---------------------------------------------------------------------------
+describe('POST /api/export: GitHub token source', () => {
+  beforeEach(() => {
+    scanRateLimiter.reset();
+    licenseRateLimiter.reset();
+    depsRateLimiter.reset();
+    authMock.mockReset();
+    getTokenMock.mockReset();
+    loadRepoExportDataMock.mockReset();
+    getMissingExportScansMock.mockReset();
+    scanRepositoryMock.mockReset();
+    scanLicensesMock.mockReset();
+    scanDependenciesMock.mockReset();
+    buildRepoExportArchiveMock.mockReset();
+  });
+
+  it('looks the token up by the session user id and ignores a token field on the session', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1', githubToken: 'from-session' } });
+    getTokenMock.mockResolvedValue('from-db');
+    loadRepoExportDataMock.mockResolvedValue(fakeExportData);
+    getMissingExportScansMock.mockReturnValueOnce(['cve', 'license', 'deps']).mockReturnValue([]);
+    scanRepositoryMock.mockResolvedValue({ scanId: 'c' });
+    scanLicensesMock.mockResolvedValue({ scanId: 'l' });
+    scanDependenciesMock.mockResolvedValue({ scanId: 'd' });
+    buildRepoExportArchiveMock.mockReturnValue(new Uint8Array([0x50, 0x4b]));
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(res.status).toBe(200);
+    expect(getTokenMock).toHaveBeenCalledWith('user-1');
+    expect(scanRepositoryMock).toHaveBeenCalledWith('user-1', 'repo-1', 'from-db');
+    expect(scanLicensesMock).toHaveBeenCalledWith('user-1', 'repo-1', 'from-db');
+    expect(scanDependenciesMock).toHaveBeenCalledWith('user-1', 'repo-1', 'from-db');
+  });
+
+  it('passes an empty token on as it is for a user without a stored token (same call as before)', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    getTokenMock.mockResolvedValue('');
+    loadRepoExportDataMock.mockResolvedValue(fakeExportData);
+    getMissingExportScansMock.mockReturnValueOnce(['cve']).mockReturnValue([]);
+    scanRepositoryMock.mockResolvedValue({ scanId: 'c' });
+    buildRepoExportArchiveMock.mockReturnValue(new Uint8Array([0x50, 0x4b]));
+
+    await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(scanRepositoryMock).toHaveBeenCalledWith('user-1', 'repo-1', '');
+  });
+
+  it('does not read the token for an export that runs no scan', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    loadRepoExportDataMock.mockResolvedValue(fakeExportData);
+    getMissingExportScansMock.mockReturnValue([]);
+    buildRepoExportArchiveMock.mockReturnValue(new Uint8Array([0x50, 0x4b]));
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(res.status).toBe(200);
+    expect(getTokenMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-user rate limits: only for the scans an export actually starts
+// ---------------------------------------------------------------------------
+describe('POST /api/export: scan rate limits', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  function exhaust(limiter: { check: (k: string) => unknown }, limit: number, user = 'user-1') {
+    for (let i = 0; i < limit; i++) limiter.check(user);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scanRateLimiter.reset();
+    licenseRateLimiter.reset();
+    depsRateLimiter.reset();
+    authMock.mockReset();
+    getTokenMock.mockReset();
+    getTokenMock.mockResolvedValue('tok-abc');
+    loadRepoExportDataMock.mockReset();
+    getMissingExportScansMock.mockReset();
+    scanRepositoryMock.mockReset();
+    scanLicensesMock.mockReset();
+    scanDependenciesMock.mockReset();
+    buildRepoExportArchiveMock.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    loadRepoExportDataMock.mockResolvedValue(fakeExportData);
+    scanRepositoryMock.mockResolvedValue({ scanId: 'c' });
+    scanLicensesMock.mockResolvedValue({ scanId: 'l' });
+    scanDependenciesMock.mockResolvedValue({ scanId: 'd' });
+    buildRepoExportArchiveMock.mockReturnValue(new Uint8Array([0x50, 0x4b]));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not limit an export of existing data, even with every scan limiter exhausted', async () => {
+    exhaust(scanRateLimiter, SCAN_LIMIT_PER_HOUR);
+    exhaust(licenseRateLimiter, LICENSE_LIMIT_PER_HOUR);
+    exhaust(depsRateLimiter, DEPS_LIMIT_PER_HOUR);
+    getMissingExportScansMock.mockReturnValue([]);
+
+    for (const runMissingScans of [false, true]) {
+      const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans }));
+      expect(res.status).toBe(200);
+    }
+    expect(scanRepositoryMock).not.toHaveBeenCalled();
+  });
+
+  it('does not count or limit an export that stops at the missing_scans 409 (runMissingScans false)', async () => {
+    exhaust(scanRateLimiter, SCAN_LIMIT_PER_HOUR);
+    getMissingExportScansMock.mockReturnValue(['cve']);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: string }).error).toBe('missing_scans');
+  });
+
+  it.each([
+    ['cve', scanRateLimiter, SCAN_LIMIT_PER_HOUR],
+    ['license', licenseRateLimiter, LICENSE_LIMIT_PER_HOUR],
+    ['deps', depsRateLimiter, DEPS_LIMIT_PER_HOUR],
+  ] as const)('answers 429 with Retry-After when the %s limiter is exhausted and that scan is missing, without any scan', async (kind, limiter, limit) => {
+    exhaust(limiter, limit);
+    getMissingExportScansMock.mockReturnValue([kind]);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    expect(await res.json()).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(scanRepositoryMock).not.toHaveBeenCalled();
+    expect(scanLicensesMock).not.toHaveBeenCalled();
+    expect(scanDependenciesMock).not.toHaveBeenCalled();
+    expect(getTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('is not limited by the limiter of a scan that is not missing', async () => {
+    exhaust(scanRateLimiter, SCAN_LIMIT_PER_HOUR);
+    exhaust(depsRateLimiter, DEPS_LIMIT_PER_HOUR);
+    getMissingExportScansMock.mockReturnValueOnce(['license']).mockReturnValue([]);
+
+    const res = await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }));
+
+    expect(res.status).toBe(200);
+    expect(scanLicensesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts one request per missing scan against that limiter, per user', async () => {
+    // Every export finds the cve scan missing first and complete after running it.
+    const missingThenComplete = () => {
+      let call = 0;
+      getMissingExportScansMock.mockReset();
+      getMissingExportScansMock.mockImplementation(() => (call++ % 2 === 0 ? ['cve'] : []));
+    };
+    for (let i = 0; i < SCAN_LIMIT_PER_HOUR; i++) {
+      missingThenComplete();
+      expect((await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }))).status).toBe(200);
+    }
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR);
+    missingThenComplete();
+    expect((await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }))).status).toBe(429);
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR);
+
+    authMock.mockResolvedValue({ user: { id: 'someone-else' } });
+    missingThenComplete();
+    expect((await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }))).status).toBe(200);
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR + 1);
   });
 });

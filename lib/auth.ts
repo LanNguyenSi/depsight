@@ -99,17 +99,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         return false;
       }
     },
+    // The object returned here is what GET /api/auth/session sends to the
+    // browser, so it carries identifiers only, never a GitHub token. Server
+    // code reads the token from the User row (getSessionGitHubToken in
+    // lib/auth-api.ts).
     async session({ session, token }) {
       if (session.user && token.sub) {
         const dbUser = await prisma.user.findUnique({
           where: { githubId: token.sub },
-          select: { id: true, githubLogin: true, githubToken: true },
+          select: { id: true, githubLogin: true },
         });
 
         if (dbUser) {
           session.user.id = dbUser.id;
           session.user.githubLogin = dbUser.githubLogin;
-          session.user.githubToken = dbUser.githubToken;
         }
       }
       return session;
