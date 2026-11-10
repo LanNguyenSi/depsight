@@ -10,17 +10,18 @@
  * to mint a read-only token, e.g. for a headless agent that should not be
  * able to trigger scans or mutate policies.
  *
- * Prints the raw token once to stdout. The token is stored as-is in
- * ApiToken.token, the column every request is matched against
- * (lib/auth-api.ts), so database read access is enough to use it. No
- * endpoint shows it again: a lost token is revoked and replaced.
+ * Prints the raw token once to stdout. Only its SHA-256 hash is stored in
+ * ApiToken.token (lib/api-token.ts); every request is hashed and matched
+ * against it (lib/auth-api.ts), so database read access does not yield a
+ * usable token. Nothing shows the raw value again: a lost token is revoked
+ * and replaced.
  *
  * Intended for operators wiring headless agents (e.g. the depsight
  * MCP server) to a specific user's data scope.
  */
-import crypto from "node:crypto";
 import { ApiTokenScope } from "@prisma/client";
 import { prisma } from "../lib/prisma";
+import { generateApiToken, hashApiToken } from "../lib/api-token";
 
 const USAGE =
   "Usage: npx tsx scripts/mint-api-token.ts --user <userId> [--name <label>] [--scope READ|WRITE] (scope defaults to WRITE)";
@@ -61,13 +62,13 @@ export async function main() {
     process.exit(1);
   }
 
-  const rawToken = "dsat_" + crypto.randomBytes(32).toString("hex");
+  const rawToken = generateApiToken();
   const label = name ?? `cli-${new Date().toISOString().slice(0, 10)}`;
 
   const record = await prisma.apiToken.create({
     data: {
       userId: user.id,
-      token: rawToken,
+      token: hashApiToken(rawToken),
       name: label,
       scope: resolvedScope,
     },

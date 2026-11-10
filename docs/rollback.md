@@ -51,6 +51,14 @@ Symptoms: the relay rolled back (or you rolled back by hand), and the old releas
 
   The next deploy of a release with the key recreates it through the same SQL step. Background in [Deploying the Advisory unique key](configuration.md#deploying-the-advisory-unique-key).
 
+### Worked example: hashed API tokens
+
+The same pre-push SQL file hashes `ApiToken.token` in place (lowercase hex SHA-256 of the `dsat_` token; rows that still start with `dsat_` are the ones not yet migrated, so a re-run changes nothing). The schema did not change, so `db push` has nothing to do for it, but the data did, and the old release matches tokens by their raw value. After a rollback to a release from before the hashing, every `dsat_` token answers 401, existing ones included. The hashes cannot be turned back into tokens.
+
+- Forward fix: deploy a release that hashes (the normal path); the tokens keep working. This is also the fix after an automatic relay rollback that happened after the migrate step (a failed `prisma db push` or health check): the tokens answer 401 only until that forward deploy, nothing needs re-issuing.
+- The deploy that introduces hashing has no 401 window: until the pre-push step has run, the new code also finds a row that still holds the raw value.
+- Intentional downgrade: re-issue the tokens afterwards (Settings, or `scripts/mint-api-token.ts`) and update the agents that use them.
+
 ## Checklist for a pull request that touches `prisma/schema.prisma`
 
 - The change is additive, or it is split into an expand release and a later contract release.

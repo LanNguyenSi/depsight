@@ -78,7 +78,7 @@ npx tsx scripts/mint-api-token.ts --user <userId> --name claude-desktop --scope 
 
 The script's `--scope` defaults to `WRITE` when omitted, matching this script's behaviour from before the scope field existed; pass `--scope READ` explicitly for a read-only token. Every tool in the table above except `depsight_rescan` works with a `READ` token; `depsight_rescan` (`POST /api/scan`, and `POST /api/deps` for its `deps`/`all` targets) requires `WRITE` and returns a 403 for a `READ` token; the error on the `deps` path names the missing write scope. Since v1 does not expose policy mutation or webhook management (see Scope / limitations below), no other shipped tool needs `WRITE` today.
 
-The raw `dsat_…` value is shown **once** (on the Settings page, or printed by the script). Store it in your agent config (env var, secret manager); there is no retrieve-existing endpoint. depsight stores the token unhashed, so protect database access and backups. To rotate, create a new token and revoke the old one in Settings (or `DELETE /api/tokens/<id>` from a signed-in session).
+The raw `dsat_…` value is shown **once** (on the Settings page, or printed by the script). Store it in your agent config (env var, secret manager); there is no retrieve-existing endpoint. depsight stores only a SHA-256 hash of the token, so a database dump does not contain a usable token (the raw value cannot be recovered either, which is why a lost token is replaced). To rotate, create a new token and revoke the old one in Settings (or `DELETE /api/tokens/<id>` from a signed-in session).
 
 All data is scoped to the minting user: tools only see repos that user owns.
 

@@ -1,6 +1,7 @@
 // Route-level tests for GET /api/tokens and POST /api/tokens.
 // Uses auth() (PATTERN B) — session-only, never resolveRequestUser.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -88,6 +89,10 @@ describe('GET /api/tokens', () => {
         select: expect.objectContaining({ scope: true }),
       }),
     );
+    // The query itself must not read the token column (a later change that
+    // returns the select result as-is would otherwise leak the stored value).
+    const select = apiTokenFindMany.mock.calls[0][0].select as Record<string, unknown>;
+    expect(Object.keys(select)).not.toContain('token');
   });
 
   it('(2) SECURITY: route uses auth() only — calling with no auth returns 401 (dsat_ tokens cannot manage tokens)', async () => {
@@ -183,6 +188,35 @@ describe('POST /api/tokens', () => {
         data: expect.objectContaining({ userId: 'user-1', name: 'ci-token', scope: 'WRITE' }),
       }),
     );
+  });
+
+  it('(7a) stores only the SHA-256 of the minted token and returns the raw value once', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    apiTokenCreate.mockResolvedValue({
+      id: 'tok-h',
+      name: 'ci-token',
+      scope: 'WRITE',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    });
+
+    const res = await POST(makePostRequest({ name: 'ci-token' }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as { token: string; record: Record<string, unknown> };
+    const arg = apiTokenCreate.mock.calls[0][0] as {
+      data: { token: string };
+      select: Record<string, unknown>;
+    };
+    // The database write holds the hash of the returned token, not the token.
+    expect(arg.data.token).toBe(createHash('sha256').update(body.token).digest('hex'));
+    expect(arg.data.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(arg.data.token).not.toBe(body.token);
+    expect(arg.data.token.startsWith('dsat_')).toBe(false);
+    // The created row is read back without the token column, and neither the
+    // record nor anything but the one-time `token` field carries the value.
+    expect(Object.keys(arg.select)).not.toContain('token');
+    expect(body.record).not.toHaveProperty('token');
+    expect(JSON.stringify(body.record)).not.toContain(body.token);
   });
 
   it('(7b) accepts an explicit READ scope and persists it', async () => {

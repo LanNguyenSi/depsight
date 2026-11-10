@@ -5,6 +5,7 @@
 // auto-running when imported here; process.exit is stubbed to throw so a
 // call to it halts execution instead of killing the test worker.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -136,7 +137,7 @@ describe('main — success path', () => {
     expect(apiTokenCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user-1',
-        token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
+        token: expect.stringMatching(/^[0-9a-f]{64}$/),
         name: 'headless-agent',
         // No --scope given: defaults to WRITE, matching this script's
         // behaviour from before the scope field existed.
@@ -145,6 +146,22 @@ describe('main — success path', () => {
       select: { id: true, name: true, scope: true, createdAt: true },
     });
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('dsat_'));
+  });
+
+  it('stores the SHA-256 of the printed token, never the printed token itself', async () => {
+    process.argv = ['node', 'mint-api-token.ts', '--user', 'user-1', '--name', 'hashed'];
+    userFindUnique.mockResolvedValue({ id: 'user-1', githubLogin: 'acme' });
+    apiTokenCreate.mockResolvedValue({ id: 'token-db-4', name: 'hashed', scope: 'WRITE', createdAt: new Date('2026-07-01T00:00:00Z') });
+
+    await main();
+
+    const printed = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .map((c) => String(c[0]))
+      .find((line) => /^dsat_[0-9a-f]{64}$/.test(line));
+    expect(printed, 'the raw token is printed once').toBeDefined();
+    const stored = (apiTokenCreate.mock.calls[0][0] as { data: { token: string } }).data.token;
+    expect(stored).toBe(createHash('sha256').update(printed as string).digest('hex'));
+    expect(stored).not.toBe(printed);
   });
 
   it('mints a READ-scoped token when --scope READ is given', async () => {
@@ -157,7 +174,7 @@ describe('main — success path', () => {
     expect(apiTokenCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user-1',
-        token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
+        token: expect.stringMatching(/^[0-9a-f]{64}$/),
         name: 'mcp-readonly',
         scope: 'READ',
       },
@@ -178,7 +195,7 @@ describe('main — success path', () => {
     expect(apiTokenCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user-1',
-        token: expect.stringMatching(/^dsat_[0-9a-f]{64}$/),
+        token: expect.stringMatching(/^[0-9a-f]{64}$/),
         name: 'cli-2026-07-01',
         scope: 'WRITE',
       },

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'node:crypto';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { ApiTokenScope } from '@prisma/client';
+import { generateApiToken, hashApiToken } from '@/lib/api-token';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +34,8 @@ export async function GET() {
 }
 
 // POST /api/tokens — mint a new token. The raw dsat_ value is returned once
-// here; it is stored as-is for lookup but no endpoint returns it again.
+// here; only its SHA-256 hash is stored (lookup hashes the presented token),
+// so no endpoint and no database dump can return it again.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -65,9 +66,9 @@ export async function POST(req: NextRequest) {
     scope = body.scope as ApiTokenScope;
   }
 
-  const rawToken = 'dsat_' + crypto.randomBytes(32).toString('hex');
+  const rawToken = generateApiToken();
   const record = await prisma.apiToken.create({
-    data: { userId: session.user.id, token: rawToken, name, scope },
+    data: { userId: session.user.id, token: hashApiToken(rawToken), name, scope },
     select: { id: true, name: true, scope: true, createdAt: true },
   });
 
