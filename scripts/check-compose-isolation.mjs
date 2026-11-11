@@ -408,10 +408,16 @@ function checkDbExposure(file, cfg, { requireInternalNetworks }) {
   // Every other service (the app included) publishes on loopback only as well. No file is
   // exempt: the hosted file publishes nothing, the other two put the app on 127.0.0.1 and
   // leave the way to the network to a reverse proxy on the same host.
+  // network_mode: host publishes nothing and listens on every host interface, so it
+  // bypasses the port rule; it is refused for every service, and its value may not come
+  // from a variable.
   for (const [name, service] of Object.entries(cfg.services ?? {})) {
     if (databases.has(name) || sharers.has(name)) continue;
     checkPorts(file, service, `${name} `);
-    checkInterpolation(file, name, raw.services?.[name], ['ports']);
+    if (service.network_mode === 'host') {
+      fail(file, `${name} sets network_mode "host", which listens on every host interface`);
+    }
+    checkInterpolation(file, name, raw.services?.[name], ['ports', 'network_mode']);
   }
 }
 

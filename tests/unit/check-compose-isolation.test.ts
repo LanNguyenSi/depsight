@@ -467,6 +467,29 @@ describeIfCompose('check-compose-isolation guard', () => {
         expect(result.status).toBe(0);
       });
 
+      it.each(files)('fails on network_mode host for the app in %s', (file) => {
+        const result = runGuard(
+          fixture(
+            file,
+            replaceFirst('    environment:\n', '    network_mode: host\n    environment:\n'),
+          ),
+        );
+        expectFailure(result, file, ['app sets network_mode "host"']);
+      });
+
+      it.each(files)('fails on an app network_mode from interpolation in %s', (file) => {
+        const result = runGuard(
+          fixture(
+            file,
+            replaceFirst(
+              '    environment:\n',
+              '    network_mode: ${APP_NET:-bridge}\n    environment:\n',
+            ),
+          ),
+        );
+        expectFailure(result, file, ['app sets network_mode through variable interpolation']);
+      });
+
       it.each(files)('fails on an app port address from interpolation in %s', (file) => {
         const result = runGuard(
           fixture(file, replaceFirst(APP_LOOPBACK, '      - "${APP_BIND:-127.0.0.1}:3000:3000"\n')),
@@ -978,6 +1001,10 @@ describeIfCompose('check-compose-isolation guard', () => {
         // ordinary service.
         expectFailure(result, DEV_FILE, ['unrelated publishes 8084->8084 on 0.0.0.0']);
         expect(result.stderr).not.toContain('unrelated (in the network stack');
+        // A sharer is reported once, by the sharer rule, not a second time by the
+        // every-service rule.
+        expect(result.stderr).not.toContain('joined publishes');
+        expect(result.stderr).not.toContain('side publishes');
       });
     });
 
