@@ -8,6 +8,12 @@
 # checkout. Defined before the first use: recipes expand it when they run.
 DC_DEV = docker compose -p depsight-dev -f docker-compose.dev.yml
 
+# Prod compose command. -f pins the file, so a COMPOSE_FILE in .env cannot silently point
+# make prod at another compose file, and a docker-compose.override.yml is no longer merged.
+# No -p on purpose: the project name must still come from .env (COMPOSE_PROJECT_NAME, see
+# docs/configuration.md, Self-hosting), so an older install keeps its database volume.
+DC_PROD = docker compose -f docker-compose.yml
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -37,10 +43,10 @@ dev-clean: ## Stop dev environment and remove volumes
 # ── Production (Docker) ─────────────────────────────────────────────
 
 prod: ## Build and start production containers
-	docker compose up --build -d
+	$(DC_PROD) up --build -d
 
 prod-down: ## Stop production containers
-	docker compose down
+	$(DC_PROD) down
 
 # ── Backup and restore (hosted stack, docker-compose.traefik.yml; *-selfhost: docker-compose.yml) ───
 
