@@ -275,6 +275,10 @@ function checkOperations(file, cfg) {
 //                                         only
 //   ports published on loopback only      yes   yes  any other address hands the database
 //                                                    and its credentials to the network
+//   ports of every other service (the      yes   yes  the dev stack signs anyone in without a
+//     app included) on loopback only                 password and the production file has no proxy
+//                                                    of its own: a reverse proxy on the same host
+//                                                    is the way to the network; no file exempt
 //   same port rule for a service that     yes   yes  defence in depth: Docker refuses port
 //     shares a database service's                    publishing together with network_mode
 //     network stack                                  container: (and service:), so no such route
@@ -395,10 +399,19 @@ function checkDbExposure(file, cfg, { requireInternalNetworks }) {
   for (const [name, service] of databases) {
     checkDbService(file, cfg, raw, renamed, name, service, { requireInternalNetworks });
   }
-  for (const [name, sharedWith] of stackSharers(cfg, databases)) {
+  const sharers = stackSharers(cfg, databases);
+  for (const [name, sharedWith] of sharers) {
     const service = cfg.services[name];
     checkPorts(file, service, `${name} (in the network stack of ${sharedWith}) `);
     checkInterpolation(file, name, raw.services?.[name], ['ports', 'network_mode']);
+  }
+  // Every other service (the app included) publishes on loopback only as well. No file is
+  // exempt: the hosted file publishes nothing, the other two put the app on 127.0.0.1 and
+  // leave the way to the network to a reverse proxy on the same host.
+  for (const [name, service] of Object.entries(cfg.services ?? {})) {
+    if (databases.has(name) || sharers.has(name)) continue;
+    checkPorts(file, service, `${name} `);
+    checkInterpolation(file, name, raw.services?.[name], ['ports']);
   }
 }
 

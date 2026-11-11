@@ -432,6 +432,64 @@ describeIfCompose('check-compose-isolation guard', () => {
       expect(result.stderr).not.toContain('db publishes 5435->5432');
     });
 
+    describe('the app port', () => {
+      const APP_LOOPBACK = '      - "127.0.0.1:3000:3000"\n';
+      const files = ['docker-compose.dev.yml', 'docker-compose.yml'];
+
+      it.each(files)('passes on the shipped app port in %s, which is loopback only', (file) => {
+        const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        expect(text).toContain(APP_LOOPBACK);
+        expect(runGuard(fixture(null)).status).toBe(0);
+      });
+
+      it.each(files)('fails on an app port with no host address or on 0.0.0.0 in %s', (file) => {
+        const result = runGuard(
+          fixture(
+            file,
+            replaceFirst(
+              APP_LOOPBACK,
+              '      - "3000:3000"\n      - "0.0.0.0:3001:3000"\n      - "192.0.2.1:3002:3000"\n',
+            ),
+          ),
+        );
+        expectFailure(result, file, [
+          'app publishes 3000->3000 on 0.0.0.0',
+          'app publishes 3001->3000 on 0.0.0.0',
+          'app publishes 3002->3000 on 192.0.2.1',
+        ]);
+      });
+
+      it.each(files)('accepts 127.0.0.1 and [::1] for the app port in %s', (file) => {
+        const result = runGuard(
+          fixture(file, replaceFirst(APP_LOOPBACK, `${APP_LOOPBACK}      - "[::1]:3001:3000"\n`)),
+        );
+        expect(result.stderr).not.toContain('app publishes');
+        expect(result.status).toBe(0);
+      });
+
+      it.each(files)('fails on an app port address from interpolation in %s', (file) => {
+        const result = runGuard(
+          fixture(file, replaceFirst(APP_LOOPBACK, '      - "${APP_BIND:-127.0.0.1}:3000:3000"\n')),
+        );
+        expectFailure(result, file, ['app sets ports through variable interpolation']);
+      });
+
+      it('fails on a published port of the hosted file, which publishes none', () => {
+        const result = runGuard(
+          fixture(
+            'docker-compose.traefik.yml',
+            replaceFirst(
+              '\nvolumes:\n',
+              '  extra:\n    image: busybox\n    ports:\n      - "8080:8080"\n\nvolumes:\n',
+            ),
+          ),
+        );
+        expectFailure(result, 'docker-compose.traefik.yml', [
+          'extra publishes 8080->8080 on 0.0.0.0',
+        ]);
+      });
+    });
+
     it('fails on a dev db with network_mode host, which publishes nothing the port check can see', () => {
       const result = runGuard(
         fixture(
@@ -916,7 +974,10 @@ describeIfCompose('check-compose-isolation guard', () => {
           'joined (in the network stack of container:some-database) publishes 8083->8083 on 0.0.0.0',
         ]);
         expect(result.stderr).not.toContain('side-loopback');
-        expect(result.stderr).not.toContain('unrelated');
+        // Not in the db's network stack, but still held to the loopback rule as an
+        // ordinary service.
+        expectFailure(result, DEV_FILE, ['unrelated publishes 8084->8084 on 0.0.0.0']);
+        expect(result.stderr).not.toContain('unrelated (in the network stack');
       });
     });
 
