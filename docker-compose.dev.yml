@@ -18,7 +18,9 @@ services:
       # poisoning host-side `tsc`/`harness preflight` with phantom TS2307s.
       - next_cache:/app/.next
     ports:
-      - "3000:3000"
+      # Loopback only: this stack enables Dev Login (any username signs in without a
+      # password) and a fixed NEXTAUTH_SECRET, so it must not be reachable from the network.
+      - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://dev:dev@db:5432/depsight_dev

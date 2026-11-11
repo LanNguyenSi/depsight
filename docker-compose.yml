@@ -1,7 +1,7 @@
-# Production stack for self-hosting WITHOUT a reverse proxy (`make prod`): the app is
-# published on port 3000 and the database on 127.0.0.1:5432. Before exposing the host,
-# follow docs/configuration.md (Self-hosting): set POSTGRES_PASSWORD, put a reverse proxy in
-# front and bind port 3000 to 127.0.0.1, set WEBHOOK_TRUSTED_PROXY_HOPS (this file defaults it
+# Production stack for self-hosting with no bundled reverse proxy (`make prod`): the app is
+# published on 127.0.0.1:3000 and the database on 127.0.0.1:5432 (both loopback only). Before
+# exposing the host, follow docs/configuration.md (Self-hosting): set POSTGRES_PASSWORD, run a
+# reverse proxy on this host in front of port 3000, set WEBHOOK_TRUSTED_PROXY_HOPS (this file defaults it
 # to 0, no trusted proxy), and apply the schema yourself (this file has no migrate service).
 # docker-compose.traefik.yml is the hosted instance's file, with its hostnames; see
 # "Which compose file" in the same chapter.
@@ -23,7 +23,8 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      # Loopback only: a reverse proxy on this host terminates TLS and forwards here.
+      - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
       # Explicit V8 heap ceiling: Node otherwise derives it from the memory cap.
