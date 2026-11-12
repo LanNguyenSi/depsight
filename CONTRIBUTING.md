@@ -27,9 +27,10 @@ Thanks for your interest. depsight is a GitHub-connected developer security dash
    npx tsc --noEmit
    npm run test:coverage            # CI's test command: global and per-file coverage floors, so it can fail where npm test passes
    (cd mcp && npm ci && npx tsc --noEmit && npm test)   # the MCP package has its own lockfile, typecheck and tests
+   node scripts/check-compose-isolation.mjs             # the compose isolation guard of CI's Lint job
    ```
 
-   CI also runs a Postgres-backed test that is skipped locally unless `DEPSIGHT_TEST_DATABASE_URL` is set, see [tests/README.md](tests/README.md).
+   Three more CI jobs cannot be matched by those commands alone. `Advisory dedupe (Postgres)` runs the two Postgres-backed test files (`tests/unit/advisory-dedupe-db.test.ts` and `tests/unit/api-token-hash-db.test.ts`), whose database half is skipped locally unless `DEPSIGHT_TEST_DATABASE_URL` points at a server, for example the dev stack's Postgres once `make dev-up` has it up (needs docker); see [tests/README.md](tests/README.md). `Restore drill (Postgres)` runs `scripts/restore-drill.sh` against a real Postgres (needs docker). `Backup scripts` runs `shellcheck scripts/*.sh docker/entrypoint.dev.sh` and then `bash scripts/backup.test.sh`, `bash scripts/restore.test.sh` and `bash scripts/entrypoint.dev.test.sh`, which stub `docker`, `npm` and `npx`, so only `shellcheck` has to be installed. The npm audit gate is a separate workflow (`.github/workflows/audit.yml`, `scripts/audit-gate.mjs` over both lockfile trees), not part of `ci.yml`.
 
 4. For Prisma schema changes, edit `prisma/schema.prisma`; the schema is applied with `npm run db:push` (no migrations directory; the script runs the SQL in `prisma/pre-push/` before `prisma db push`, and so does the `.relay.yml` deploy hook; a new unique key over existing rows needs that step, since a bare push refuses it). A rollback never reverts the schema, so keep the change additive or split it over two releases, see [docs/rollback.md](docs/rollback.md).
 5. Open the PR with a clear summary, motivation, and test plan.
