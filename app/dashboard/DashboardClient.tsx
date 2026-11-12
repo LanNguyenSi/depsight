@@ -16,6 +16,7 @@ import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 import { scanAllStopMessage } from '@/lib/rate-limit-client';
+import { requestRepoSync } from '@/lib/repo-sync-client';
 
 interface ScanSummary {
   id: string;
@@ -178,6 +179,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => parseTab(searchParams.get('tab')));
   const [dependabotDisabled, setDependabotDisabled] = useState(false);
   const [enablingDependabot, setEnablingDependabot] = useState(false);
@@ -426,8 +428,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
   async function handleSync() {
     setSyncing(true);
+    setSyncError(null);
     try {
-      await fetch('/api/repos/sync', { method: 'POST' });
+      const result = await requestRepoSync();
+      if (!result.ok) {
+        setSyncError(result.error);
+        return;
+      }
       window.location.reload();
     } finally {
       setSyncing(false);
@@ -846,6 +853,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             </div>
           </div>
 
+          {syncError && (
+            <p role="alert" className="mb-2 text-xs text-red-400">
+              {syncError}
+            </p>
+          )}
+
           {scanAllError && (
             <p role="alert" className="mb-2 text-xs text-amber-400">
               {scanAllError}
@@ -1199,6 +1212,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                         >
                           {syncing ? t['dashboard.syncing'] : t['dashboard.ci.noData.sync']}
                         </button>
+                        {syncError && (
+                          <p role="alert" className="text-xs text-red-400">
+                            {syncError}
+                          </p>
+                        )}
                       </div>
                     )
                 )}

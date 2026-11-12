@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell';
 import { TeamHealthCard } from '@/components/overview/TeamHealthCard';
 import { RepoComparisonTable } from '@/components/overview/RepoComparisonTable';
 import type { ScannerStatuses } from '@/lib/scan/freshness';
+import { requestRepoSync } from '@/lib/repo-sync-client';
 
 interface RepoHealthSummary {
   repoId: string;
@@ -65,15 +66,12 @@ export function OverviewClient({ data }: OverviewClientProps) {
     setSyncing(true);
     setSyncError(null);
     try {
-      const res = await fetch('/api/repos/sync', { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: 'Sync failed' }));
-        setSyncError((data as { error?: string }).error ?? 'Sync failed');
+      const result = await requestRepoSync();
+      if (!result.ok) {
+        setSyncError(result.error);
         return;
       }
       window.location.reload();
-    } catch {
-      setSyncError('Network error');
     } finally {
       setSyncing(false);
     }
