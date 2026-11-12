@@ -853,7 +853,8 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             </div>
           </div>
 
-          {syncError && (
+          {/* the CI-tab empty state shows its own alert under its sync button */}
+          {syncError && !(activeTab === 'ci' && selectedRepo && !ciEnabled) && (
             <p role="alert" className="mb-2 text-xs text-red-400">
               {syncError}
             </p>
