@@ -1,6 +1,12 @@
 import semver from 'semver';
 import { createGitHubClient } from '@/lib/github';
 import {
+  SUPPORTED_ECOSYSTEMS,
+  ecosystemPrecedence,
+  type Ecosystem,
+  type EcosystemInfo,
+} from '@/lib/ecosystem';
+import {
   type FetchedManifest,
   type LockfileResolutions,
   type NarrowNpmResolution,
@@ -969,17 +975,117 @@ async function collectDeps(
 
 // ---- Main export -----------------------------------------------------------
 
+// OSV querybatch accepts at most 1000 queries per request; each request gets a
+// 12s timeout. A failed/timeout chunk degrades to empty for that chunk only.
+const CHUNK_SIZE = 1000;
+const TIMEOUT_MS = 12_000;
+// Parallel vuln-detail requests.
+const CONCURRENCY = 8;
+
+export interface OsvScanTarget {
+  eco: string;
+  osvEco: string;
+  manifestPaths: string[];
+}
+
+/**
+ * The supported ecosystems of the repo that OSV can be asked about, primary
+ * first, then by manifest precedence. A hand-built info without
+ * `manifestPathsByEcosystem` is the primary ecosystem alone, as before.
+ */
+export function osvScanTargets(info: EcosystemInfo): OsvScanTarget[] {
+  const byEco: Partial<Record<Ecosystem, string[]>> =
+    info.manifestPathsByEcosystem ??
+    (info.supported ? { [info.ecosystem]: info.manifestPaths } : {});
+  const targets: OsvScanTarget[] = [];
+  for (const [eco, manifestPaths] of Object.entries(byEco) as Array<[Ecosystem, string[]]>) {
+    const osvEco = osvEcosystem(eco);
+    if (!SUPPORTED_ECOSYSTEMS.has(eco) || !osvEco) continue;
+    targets.push({ eco, osvEco, manifestPaths });
+  }
+  const rank = (t: OsvScanTarget) =>
+    t.eco === info.ecosystem ? -1 : ecosystemPrecedence(t.eco as Ecosystem);
+  return targets.sort((a, b) => rank(a) - rank(b));
+}
+
+/**
+ * Batch-query OSV for one ecosystem's deps and return vuln id -> affected deps.
+ * `tag` suffixes the degraded-source labels so a failure names its ecosystem
+ * when it is not the primary one.
+ */
+async function queryOsvBatches(
+  deps: DepEntry[],
+  osvEco: string,
+  tag: string,
+): Promise<Map<string, DepEntry[]>> {
+  const vulnToDeps = new Map<string, DepEntry[]>();
+
+  for (let chunkStart = 0; chunkStart < deps.length; chunkStart += CHUNK_SIZE) {
+    const chunkDeps = deps.slice(chunkStart, chunkStart + CHUNK_SIZE);
+    const chunkQueries = chunkDeps.map(({ name, version }) => ({
+      version,
+      package: { name, ecosystem: osvEco },
+    }));
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    let chunkResults: Array<{ vulns?: Array<{ id: string }> }>;
+    try {
+      const resp = await fetch('https://api.osv.dev/v1/querybatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: chunkQueries }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!resp.ok) {
+        console.warn(`[osv] querybatch chunk at ${chunkStart} failed with status ${resp.status}`);
+        noteDegraded(`OSV querybatch${tag}`, `HTTP ${resp.status}`);
+        continue; // degrade to empty for this chunk
+      }
+      const parsed = (await resp.json()) as { results: typeof chunkResults };
+      chunkResults = parsed.results ?? [];
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.warn(`[osv] querybatch chunk at ${chunkStart} failed:`, err);
+      noteDegraded(`OSV querybatch${tag}`, err);
+      continue; // degrade to empty for this chunk (abort/timeout or network error)
+    }
+
+    // Map each chunk result back to its corresponding dep (index alignment per chunk)
+    for (let j = 0; j < chunkResults.length && j < chunkDeps.length; j++) {
+      const vulns = chunkResults[j]?.vulns ?? [];
+      for (const vuln of vulns) {
+        const list = vulnToDeps.get(vuln.id) ?? [];
+        list.push(chunkDeps[j]);
+        vulnToDeps.set(vuln.id, list);
+      }
+    }
+  }
+
+  return vulnToDeps;
+}
+
 /**
  * Fetch CVE advisories for a repository from OSV.dev. Returns advisories (may
- * be empty) and the detected ecosystem string. Never throws — OSV is
+ * be empty) and the detected PRIMARY ecosystem string. Never throws: OSV is
  * supplementary. ecosystem is null only on a top-level unexpected error;
- * otherwise the detected ecosystem string is always returned even when
+ * otherwise the primary ecosystem string is always returned even when
  * unsupported or when advisories is empty.
+ *
+ * Every supported ecosystem with a manifest in the repo is queried (not only
+ * the primary one), each with its own OSV ecosystem name, and each advisory
+ * carries the ecosystem of the dependency it was found for. The primary
+ * ecosystem is only the label stored on the scan row. Request volume stays
+ * bounded: deps are batched per ecosystem (<=1000 per request) and vuln
+ * details are fetched once per vuln id across all ecosystems.
  *
  * An empty result is "read, nothing found" only when every read succeeded. A
  * failed manifest read, OSV request or vulnerability lookup still returns what
  * was found but is reported through `noteDegraded` (lib/scan/degraded.ts), so
  * a scanner that tracks degraded sources does not count the run as a success.
+ * A failure in a secondary ecosystem is reported under a label naming it.
  */
 export async function fetchOsvAdvisories(
   accessToken: string,
@@ -988,94 +1094,49 @@ export async function fetchOsvAdvisories(
   branch: string,
 ): Promise<{ advisories: GitHubAdvisory[]; ecosystem: string | null }> {
   try {
-    // 1. Detect ecosystem
+    // 1. Detect ecosystems
     const ecosystemInfo = await detectEcosystem(accessToken, owner, repo, branch);
     const eco = ecosystemInfo.ecosystem;
-    const osvEco = osvEcosystem(eco);
 
-    if (!ecosystemInfo.supported || !osvEco) {
+    const targets = osvScanTargets(ecosystemInfo);
+    if (targets.length === 0) {
       return { advisories: [], ecosystem: eco };
     }
 
-    // 2. Collect deps (manifest-only, no registry lookups)
+    // 2. Per ecosystem: collect deps (manifest-only, no registry lookups) and
+    //    batch-query OSV. A failure in one ecosystem degrades that ecosystem only.
     const octokit = createGitHubClient(accessToken);
-    let deps: DepEntry[];
-    try {
-      deps = await collectDeps(
-        eco,
-        octokit,
-        owner,
-        repo,
-        ecosystemInfo.manifestPaths,
-        ecosystemInfo.observedLockfilePaths,
-        ecosystemInfo.observedTreeFacts,
-      );
-    } catch (err) {
-      console.warn('[osv] dep collection failed:', err);
-      noteDegraded('OSV dependency collection', err);
-      return { advisories: [], ecosystem: eco };
-    }
+    const groups: Array<{ target: OsvScanTarget; vulnToDeps: Map<string, DepEntry[]> }> = [];
 
-    if (deps.length === 0) return { advisories: [], ecosystem: eco };
-
-    // 3. Batch-query OSV in chunks of <=1000 (OSV querybatch limit).
-    //    Each chunk uses a 12s AbortController timeout.
-    //    A failed/timeout chunk degrades to empty for that chunk only; other chunks are unaffected.
-    const CHUNK_SIZE = 1000;
-    const TIMEOUT_MS = 12_000;
-
-    const vulnToDeps = new Map<string, DepEntry[]>();
-
-    for (let chunkStart = 0; chunkStart < deps.length; chunkStart += CHUNK_SIZE) {
-      const chunkDeps = deps.slice(chunkStart, chunkStart + CHUNK_SIZE);
-      const chunkQueries = chunkDeps.map(({ name, version }) => ({
-        version,
-        package: { name, ecosystem: osvEco },
-      }));
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      let chunkResults: Array<{ vulns?: Array<{ id: string }> }>;
+    for (const target of targets) {
+      const tag = target.eco === eco ? '' : ` (${target.eco})`;
+      let deps: DepEntry[];
       try {
-        const resp = await fetch('https://api.osv.dev/v1/querybatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: chunkQueries }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        if (!resp.ok) {
-          console.warn(`[osv] querybatch chunk at ${chunkStart} failed with status ${resp.status}`);
-          noteDegraded('OSV querybatch', `HTTP ${resp.status}`);
-          continue; // degrade to empty for this chunk
-        }
-        const parsed = (await resp.json()) as { results: typeof chunkResults };
-        chunkResults = parsed.results ?? [];
+        deps = await collectDeps(
+          target.eco,
+          octokit,
+          owner,
+          repo,
+          target.manifestPaths,
+          ecosystemInfo.observedLockfilePaths,
+          ecosystemInfo.observedTreeFacts,
+        );
       } catch (err) {
-        clearTimeout(timeoutId);
-        console.warn(`[osv] querybatch chunk at ${chunkStart} failed:`, err);
-        noteDegraded('OSV querybatch', err);
-        continue; // degrade to empty for this chunk (abort/timeout or network error)
+        console.warn(`[osv] dep collection failed${tag}:`, err);
+        noteDegraded(`OSV dependency collection${tag}`, err);
+        continue;
       }
+      if (deps.length === 0) continue;
 
-      // Map each chunk result back to its corresponding dep (index alignment per chunk)
-      for (let j = 0; j < chunkResults.length && j < chunkDeps.length; j++) {
-        const vulns = chunkResults[j]?.vulns ?? [];
-        for (const vuln of vulns) {
-          const list = vulnToDeps.get(vuln.id) ?? [];
-          list.push(chunkDeps[j]);
-          vulnToDeps.set(vuln.id, list);
-        }
-      }
+      const vulnToDeps = await queryOsvBatches(deps, target.osvEco, tag);
+      if (vulnToDeps.size > 0) groups.push({ target, vulnToDeps });
     }
 
-    if (vulnToDeps.size === 0) return { advisories: [], ecosystem: eco };
+    if (groups.length === 0) return { advisories: [], ecosystem: eco };
 
-    // 5. Fetch full vuln details with bounded concurrency (~8 parallel requests)
-    const vulnIds = [...vulnToDeps.keys()];
+    // 3. Fetch full vuln details with bounded concurrency, once per vuln id
+    const vulnIds = [...new Set(groups.flatMap((g) => [...g.vulnToDeps.keys()]))];
     const vulnDetails = new Map<string, OsvVuln>();
-    const CONCURRENCY = 8;
 
     await withConcurrency(vulnIds, CONCURRENCY, async (id) => {
       const controller = new AbortController();
@@ -1101,42 +1162,45 @@ export async function fetchOsvAdvisories(
       }
     });
 
-    // 6. Build one GitHubAdvisory per (vuln, affected dep)
+    // 4. Build one GitHubAdvisory per (vuln, affected dep), with the ecosystem
+    //    the dep was queried under
     const advisories: GitHubAdvisory[] = [];
-    for (const [vulnId, affectedDeps] of vulnToDeps) {
-      const vuln = vulnDetails.get(vulnId);
-      if (!vuln) continue;
+    for (const { target, vulnToDeps } of groups) {
+      for (const [vulnId, affectedDeps] of vulnToDeps) {
+        const vuln = vulnDetails.get(vulnId);
+        if (!vuln) continue;
 
-      const { ghsaId, cveId } = extractAliases(vuln);
-      const severity = mapOsvSeverity(vuln);
-      const summary =
-        vuln.summary ??
-        (vuln.details ? vuln.details.slice(0, 200) : vulnId);
-      const publishedAt = vuln.published ? new Date(vuln.published) : null;
-      const url =
-        vuln.references?.find((r) => r.type === 'ADVISORY')?.url ??
-        `https://osv.dev/vulnerability/${vulnId}`;
+        const { ghsaId, cveId } = extractAliases(vuln);
+        const severity = mapOsvSeverity(vuln);
+        const summary =
+          vuln.summary ??
+          (vuln.details ? vuln.details.slice(0, 200) : vulnId);
+        const publishedAt = vuln.published ? new Date(vuln.published) : null;
+        const url =
+          vuln.references?.find((r) => r.type === 'ADVISORY')?.url ??
+          `https://osv.dev/vulnerability/${vulnId}`;
 
-      for (const dep of affectedDeps) {
-        const { vulnerableRange, fixedVersion } = extractVulnRangeInfo(
-          vuln,
-          dep.name,
-          osvEco,
-          dep.version,
-        );
-        advisories.push({
-          ghsaId,
-          cveId,
-          severity,
-          summary,
-          packageName: dep.name,
-          ecosystem: eco,
-          vulnerableRange,
-          fixedVersion,
-          publishedAt,
-          url,
-          source: 'osv',
-        });
+        for (const dep of affectedDeps) {
+          const { vulnerableRange, fixedVersion } = extractVulnRangeInfo(
+            vuln,
+            dep.name,
+            target.osvEco,
+            dep.version,
+          );
+          advisories.push({
+            ghsaId,
+            cveId,
+            severity,
+            summary,
+            packageName: dep.name,
+            ecosystem: target.eco,
+            vulnerableRange,
+            fixedVersion,
+            publishedAt,
+            url,
+            source: 'osv',
+          });
+        }
       }
     }
 
