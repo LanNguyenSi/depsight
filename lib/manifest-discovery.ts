@@ -119,7 +119,11 @@ export interface ObservedTreeFacts {
    * `npm-shrinkwrap.json` and `deno.lock` in the (non-excluded) tree.
    */
   foreignLockfilePaths: string[];
-  /** The manifest list hit MAX_MANIFESTS, so manifests beyond the cut are unknown. */
+  /**
+   * Some ecosystem's manifest list hit MAX_MANIFESTS (the cap is per ecosystem),
+   * so manifests beyond the cut are unknown. A repo with more than MAX_MANIFESTS
+   * manifests in total but no ecosystem over the cap is not capped.
+   */
   manifestsCapped: boolean;
   /**
    * Paths of every `.npmrc` in the (non-excluded) tree. An `.npmrc` can change
@@ -380,8 +384,27 @@ export function parseNpmAlias(spec: string): { realName: string; realSpec: strin
 }
 
 /**
- * Detect the repo's primary ecosystem and every manifest path of that ecosystem
- * by walking the full git tree once. Falls back to a root-only probe when the
+ * Apply MAX_MANIFESTS to each ecosystem separately, keeping the root-first
+ * order. One cap over all ecosystems let a large npm monorepo push a nested
+ * composer.json or go.mod past the cut, so that ecosystem was never scanned.
+ * A repo with a single ecosystem is cut exactly as before. Worst case a scan
+ * therefore reads MAX_MANIFESTS manifests for each of the six supported
+ * ecosystems (600), not 100 in all.
+ */
+function capManifestRefsPerEcosystem(refs: ManifestRef[]): ManifestRef[] {
+  const taken = new Map<Ecosystem, number>();
+  return refs.filter((r) => {
+    const n = taken.get(r.ecosystem) ?? 0;
+    if (n >= MAX_MANIFESTS) return false;
+    taken.set(r.ecosystem, n + 1);
+    return true;
+  });
+}
+
+/**
+ * Detect the repo's primary ecosystem (a label) and, by walking the full git
+ * tree once, the manifest paths of the primary ecosystem (`manifestPaths`) and
+ * of every supported ecosystem (`manifestPathsByEcosystem`). Falls back to a root-only probe when the
  * tree can't be read or comes back truncated, so single-root repos never
  * regress.
  */
@@ -407,7 +430,7 @@ export async function detectEcosystem(
     });
     const tree = (data.tree ?? []) as TreeEntry[];
     const allRefs = collectManifestRefs(tree);
-    refs = allRefs.slice(0, MAX_MANIFESTS);
+    refs = capManifestRefsPerEcosystem(allRefs);
     if (data.truncated) {
       // GitHub truncates trees above ~100k entries; the manifest set may be
       // incomplete. Rare, but log so an under-count isn't silent.
@@ -422,7 +445,7 @@ export async function detectEcosystem(
       observedLockfilePaths = selectLockfilePaths(tree);
       observedTreeFacts = {
         foreignLockfilePaths: selectForeignLockfilePaths(tree),
-        manifestsCapped: allRefs.length > MAX_MANIFESTS,
+        manifestsCapped: allRefs.length > refs.length,
         npmrcPaths: selectNpmrcPaths(tree),
         packageManagerConfigPaths: selectPackageManagerConfigPaths(tree),
       };
@@ -454,12 +477,18 @@ export async function detectEcosystem(
 
   const primary = pickPrimaryEcosystem(refs);
   const manifestPaths = refs.filter((r) => r.ecosystem === primary).map((r) => r.path);
+  const manifestPathsByEcosystem: Partial<Record<Ecosystem, string[]>> = {};
+  for (const r of refs) {
+    if (!SUPPORTED_ECOSYSTEMS.has(r.ecosystem)) continue;
+    (manifestPathsByEcosystem[r.ecosystem] ??= []).push(r.path);
+  }
 
   return {
     ecosystem: primary,
     manifestFile: manifestPaths[0] ?? null,
     supported: SUPPORTED_ECOSYSTEMS.has(primary),
     manifestPaths,
+    manifestPathsByEcosystem,
     observedLockfilePaths,
     observedTreeFacts,
   };

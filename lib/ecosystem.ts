@@ -17,6 +17,15 @@ export interface EcosystemInfo {
   // monorepo packages), repo-relative. Empty for unknown/unsupported ecosystems.
   manifestPaths: string[];
   /**
+   * Manifests of EVERY supported ecosystem in the repo, repo-relative, keyed by
+   * ecosystem (the primary one included, with the same paths as
+   * `manifestPaths`). `ecosystem`/`manifestPaths` stay the label and the file
+   * set of the primary ecosystem; consumers that must cover the whole repo (the
+   * OSV channel) read this. Absent on a hand-built info: readers then fall back
+   * to `{ [ecosystem]: manifestPaths }`.
+   */
+  manifestPathsByEcosystem?: Partial<Record<Ecosystem, string[]>>;
+  /**
    * JS lockfile paths (package-lock.json, yarn.lock) OBSERVED during the same
    * full git-tree walk that produced manifestPaths — the actual existing
    * paths, not guessed candidates (task c2ddfe93, dedup of the parallel
