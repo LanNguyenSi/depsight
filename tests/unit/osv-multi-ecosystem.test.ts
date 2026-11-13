@@ -173,11 +173,13 @@ describe('OSV channel covers every supported ecosystem of a repo', () => {
 
   it('without a composer.lock the composer.json constraint floors are queried', async () => {
     const osv = stubOsv();
-    await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK } });
+    const { degraded } = await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK } });
 
     expect(
       osv.queries.filter((q) => q.ecosystem === 'Packagist').map((q) => `${q.name}@${q.version}`).sort(),
     ).toEqual(['monolog/monolog@3.5', 'symfony/http-kernel@6.4.1']);
+    // A missing lock (404) is normal repository content, never a degraded source.
+    expect(degraded).toBeNull();
   });
 
   it('a locked version above the floor clears an advisory that only affects the floor', async () => {
