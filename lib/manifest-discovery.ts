@@ -119,7 +119,11 @@ export interface ObservedTreeFacts {
    * `npm-shrinkwrap.json` and `deno.lock` in the (non-excluded) tree.
    */
   foreignLockfilePaths: string[];
-  /** The manifest list hit MAX_MANIFESTS, so manifests beyond the cut are unknown. */
+  /**
+   * Some ecosystem's manifest list hit MAX_MANIFESTS (the cap is per ecosystem),
+   * so manifests beyond the cut are unknown. A repo with more than MAX_MANIFESTS
+   * manifests in total but no ecosystem over the cap is not capped.
+   */
   manifestsCapped: boolean;
   /**
    * Paths of every `.npmrc` in the (non-excluded) tree. An `.npmrc` can change
@@ -383,7 +387,9 @@ export function parseNpmAlias(spec: string): { realName: string; realSpec: strin
  * Apply MAX_MANIFESTS to each ecosystem separately, keeping the root-first
  * order. One cap over all ecosystems let a large npm monorepo push a nested
  * composer.json or go.mod past the cut, so that ecosystem was never scanned.
- * A repo with a single ecosystem is cut exactly as before.
+ * A repo with a single ecosystem is cut exactly as before. Worst case a scan
+ * therefore reads MAX_MANIFESTS manifests for each of the six supported
+ * ecosystems (600), not 100 in all.
  */
 function capManifestRefsPerEcosystem(refs: ManifestRef[]): ManifestRef[] {
   const taken = new Map<Ecosystem, number>();

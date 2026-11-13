@@ -16,9 +16,9 @@ vi.mock('@/lib/manifests/php', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/manifests/php')>();
   return {
     ...actual,
-    collectPhpDeps: (...args: Parameters<typeof actual.collectPhpDeps>) => {
+    collectPhpDepsResolved: (...args: Parameters<typeof actual.collectPhpDepsResolved>) => {
       if (phpCollect.fail) throw new Error('php collect boom');
-      return actual.collectPhpDeps(...args);
+      return actual.collectPhpDepsResolved(...args);
     },
   };
 });
@@ -28,6 +28,7 @@ import type { EcosystemInfo } from '@/lib/ecosystem';
 import { detectEcosystem } from '@/lib/manifest-discovery';
 import { trackDegraded } from '@/lib/scan/degraded';
 import { loadRepo, type Scenario } from './helpers/npm-repo-fixture';
+import { WORKSPACE_SCENARIOS } from './helpers/npm-workspace-scenarios';
 
 const pkg = (deps: Record<string, string>) => JSON.stringify({ name: 'p', dependencies: deps });
 const composer = (require: Record<string, string>) => JSON.stringify({ require });
@@ -36,13 +37,32 @@ const composer = (require: Record<string, string>) => JSON.stringify({ require }
 const NPM_PROJECTS: Record<string, string> = Object.fromEntries(
   Array.from({ length: 8 }, (_, i) => [`app-${i}/package.json`, pkg({ lodash: '4.17.20' })]),
 );
+const COMPOSER_JSON = composer({
+  php: '>=8.1',
+  'symfony/http-kernel': '^6.4.1',
+  'monolog/monolog': '^3.5',
+});
+// A realistic lock: a direct dependency resolved above its floor (with the `v`
+// prefix composer writes), a direct one at its floor, a transitive package and
+// a dev package the composer.json does not list.
+const lockEntry = (name: string, version: string) => ({ name, version, type: 'library' });
+const COMPOSER_LOCK = JSON.stringify({
+  packages: [
+    lockEntry('symfony/http-kernel', 'v6.4.13'),
+    lockEntry('monolog/monolog', '3.5.0'),
+    lockEntry('psr/log', '3.0.0'),
+    lockEntry('some/branch', 'dev-main'),
+    lockEntry('some/branch-range', '1.0.x-dev'),
+  ],
+  'packages-dev': [lockEntry('phpunit/phpunit', '10.5.1')],
+});
 const PHP_PROJECT: Record<string, string> = {
-  'notification-service/composer.json': composer({
-    php: '>=8.1',
-    'symfony/http-kernel': '6.4.1',
-    'monolog/monolog': '3.5.0',
-  }),
-  'notification-service/composer.lock': JSON.stringify({ packages: [] }),
+  'notification-service/composer.json': COMPOSER_JSON,
+  'notification-service/composer.lock': COMPOSER_LOCK,
+};
+/** The same project without its lock. */
+const PHP_PROJECT_NO_LOCK: Record<string, string> = {
+  'notification-service/composer.json': COMPOSER_JSON,
 };
 
 interface Query {
@@ -79,7 +99,8 @@ function stubOsv(hits: Record<string, string> = {}, failEcosystem?: string) {
           ok: true,
           json: async () => ({
             results: body.queries.map((q) => {
-              const id = hits[`${q.package.ecosystem}:${q.package.name}`];
+              const key = `${q.package.ecosystem}:${q.package.name}`;
+              const id = hits[`${key}@${q.version}`] ?? hits[key];
               return id ? { vulns: [{ id }] } : {};
             }),
           }),
@@ -89,6 +110,7 @@ function stubOsv(hits: Record<string, string> = {}, failEcosystem?: string) {
       detailIds.push(id);
       const [ecosystem, name] = Object.entries(hits)
         .find(([, v]) => v === id)![0]
+        .replace(/@[^@/]*$/, '')
         .split(/:(.*)/s)
         .slice(0, 2);
       return {
@@ -120,22 +142,91 @@ async function scan(scenario: Scenario) {
   }
 }
 
+const manyComposer = (n: number): Record<string, string> =>
+  Object.fromEntries(
+    Array.from({ length: n }, (_, i) => [
+      `svc-${String(i).padStart(3, '0')}/composer.json`,
+      composer({ 'acme/lib': '1.0.0' }),
+    ]),
+  );
+
 afterEach(() => {
   vi.unstubAllGlobals();
   phpCollect.fail = false;
 });
 
 describe('OSV channel covers every supported ecosystem of a repo', () => {
-  it('queries Packagist for a nested composer project beside root-level npm projects', async () => {
+  it('queries Packagist for a nested composer project beside root-level npm projects, at the locked versions', async () => {
     const osv = stubOsv();
     await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT } });
 
     const packagist = osv.queries.filter((q) => q.ecosystem === 'Packagist');
     expect(packagist.map((q) => `${q.name}@${q.version}`).sort()).toEqual([
       'monolog/monolog@3.5.0',
-      'symfony/http-kernel@6.4.1',
+      'phpunit/phpunit@10.5.1',
+      'psr/log@3.0.0',
+      'symfony/http-kernel@6.4.13',
     ]);
     expect(osv.queries.filter((q) => q.ecosystem === 'npm').map((q) => q.name)).toEqual(['lodash']);
+  });
+
+  it('without a composer.lock the composer.json constraint floors are queried', async () => {
+    const osv = stubOsv();
+    await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK } });
+
+    expect(
+      osv.queries.filter((q) => q.ecosystem === 'Packagist').map((q) => `${q.name}@${q.version}`).sort(),
+    ).toEqual(['monolog/monolog@3.5', 'symfony/http-kernel@6.4.1']);
+  });
+
+  it('a locked version above the floor clears an advisory that only affects the floor', async () => {
+    stubOsv({ 'Packagist:symfony/http-kernel@6.4.1': 'GHSA-floor' });
+    const withLock = await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT } });
+    expect(withLock.value.advisories).toEqual([]);
+
+    stubOsv({ 'Packagist:symfony/http-kernel@6.4.1': 'GHSA-floor' });
+    const noLock = await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK } });
+    expect(noLock.value.advisories.map((a) => a.packageName)).toEqual(['symfony/http-kernel']);
+  });
+
+  it('a lock-only (transitive) package is queried and its advisory reported', async () => {
+    stubOsv({ 'Packagist:psr/log@3.0.0': 'GHSA-transitive' });
+    const { value } = await scan({ files: { ...NPM_PROJECTS, ...PHP_PROJECT } });
+
+    expect(value.advisories.map((a) => [a.packageName, a.ecosystem])).toEqual([['psr/log', 'php']]);
+  });
+
+  it('an unparseable composer.lock is a degraded source and the floors are queried', async () => {
+    const osv = stubOsv();
+    const { degraded } = await scan({
+      files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK, 'notification-service/composer.lock': '{not json' },
+    });
+
+    expect(degraded).toContain('composer.lock parse');
+    expect(
+      osv.queries.filter((q) => q.ecosystem === 'Packagist').map((q) => `${q.name}@${q.version}`).sort(),
+    ).toEqual(['monolog/monolog@3.5', 'symfony/http-kernel@6.4.1']);
+  });
+
+  it('constraints without a lock are queried at a plain version (wildcard and alternatives)', async () => {
+    const osv = stubOsv();
+    await scan({
+      files: {
+        'composer.json': composer({
+          'symfony/console': '6.4.*',
+          'symfony/yaml': '^5.4|^6.0',
+          'acme/range': '>=2.1 <3.0',
+          'acme/any': '*',
+          'acme/dev': 'dev-main',
+        }),
+      },
+    });
+
+    expect(osv.queries.map((q) => `${q.name}@${q.version}`).sort()).toEqual([
+      'acme/range@2.1',
+      'symfony/console@6.4.0',
+      'symfony/yaml@5.4',
+    ]);
   });
 
   it('negative control: without a composer project there is no Packagist query', async () => {
@@ -182,7 +273,7 @@ describe('OSV channel covers every supported ecosystem of a repo', () => {
     await scan({ files: { Gemfile: 'source "https://rubygems.org"', ...PHP_PROJECT } });
 
     expect(osv.queries.every((q) => q.ecosystem === 'Packagist')).toBe(true);
-    expect(osv.queries).toHaveLength(2);
+    expect(osv.queries).toHaveLength(4);
   });
 
   it('a failing secondary ecosystem is reported under its name and keeps the primary result', async () => {
@@ -261,6 +352,25 @@ describe('detectEcosystem manifestPathsByEcosystem', () => {
     expect(info.manifestPaths).toHaveLength(100);
     expect(info.manifestPathsByEcosystem?.php).toEqual(['notification-service/composer.json']);
     expect(info.observedTreeFacts?.manifestsCapped).toBe(true);
+  });
+
+  it('more than 100 manifests in total is not capped while no single ecosystem exceeds the cap', async () => {
+    loadRepo({ files: { 'package.json': pkg({}), ...manyComposer(50) }, extraManifests: 60 });
+    const info = await detectEcosystem('t', 'o', 'r', 'main');
+
+    expect(info.manifestPathsByEcosystem?.npm).toHaveLength(61);
+    expect(info.manifestPathsByEcosystem?.php).toHaveLength(50);
+    expect(info.observedTreeFacts?.manifestsCapped).toBe(false);
+  });
+
+  it('that uncapped mixed repo still gets the npm narrow override (the floor no lockfile installs is not queried)', async () => {
+    const osv = stubOsv();
+    // 3 workspace manifests + 99 composer.json = 102 in total, none above 100 per ecosystem
+    await scan({ files: { ...WORKSPACE_SCENARIOS.wsGoal.files, ...manyComposer(99) } });
+
+    expect(
+      osv.queries.filter((q) => q.ecosystem === 'npm').map((q) => `${q.name}@${q.version}`).sort(),
+    ).toEqual(['vite@6.4.0', 'vite@7.3.7', 'vitest@3.2.4']);
   });
 
   it('a repo below the cap is not reported as capped', async () => {

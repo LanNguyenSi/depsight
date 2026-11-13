@@ -31,7 +31,7 @@ import {
 import { collectGoDeps } from '@/lib/manifests/go';
 import { collectJavaDeps } from '@/lib/manifests/java';
 import { collectRustDeps } from '@/lib/manifests/rust';
-import { collectPhpDeps } from '@/lib/manifests/php';
+import { collectPhpDepsResolved } from '@/lib/manifests/php';
 import type { GitHubAdvisory, Severity } from '@/lib/cve/github-advisories';
 import { noteDegraded } from '@/lib/scan/degraded';
 
@@ -964,7 +964,7 @@ async function collectDeps(
     }
 
     case 'php': {
-      const phpDeps = await collectPhpDeps(octokit, owner, repo, manifestPaths);
+      const phpDeps = await collectPhpDepsResolved(octokit, owner, repo, manifestPaths);
       return phpDeps.filter(({ version }) => /\d/.test(version));
     }
 
