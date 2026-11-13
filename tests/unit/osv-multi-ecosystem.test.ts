@@ -53,6 +53,7 @@ const COMPOSER_LOCK = JSON.stringify({
     lockEntry('psr/log', '3.0.0'),
     lockEntry('some/branch', 'dev-main'),
     lockEntry('some/branch-range', '1.0.x-dev'),
+    lockEntry('some/branch-named', 'dev-release-2'),
   ],
   'packages-dev': [lockEntry('phpunit/phpunit', '10.5.1')],
 });
@@ -196,16 +197,51 @@ describe('OSV channel covers every supported ecosystem of a repo', () => {
     expect(value.advisories.map((a) => [a.packageName, a.ecosystem])).toEqual([['psr/log', 'php']]);
   });
 
-  it('an unparseable composer.lock is a degraded source and the floors are queried', async () => {
+  const FLOORS = ['monolog/monolog@3.5', 'symfony/http-kernel@6.4.1'];
+  const packagistQueries = (osv: ReturnType<typeof stubOsv>) =>
+    osv.queries.filter((q) => q.ecosystem === 'Packagist').map((q) => `${q.name}@${q.version}`).sort();
+
+  it('a malformed composer.lock falls back to the floors without a degraded marker', async () => {
     const osv = stubOsv();
     const { degraded } = await scan({
       files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK, 'notification-service/composer.lock': '{not json' },
     });
 
-    expect(degraded).toContain('composer.lock parse');
-    expect(
-      osv.queries.filter((q) => q.ecosystem === 'Packagist').map((q) => `${q.name}@${q.version}`).sort(),
-    ).toEqual(['monolog/monolog@3.5', 'symfony/http-kernel@6.4.1']);
+    expect(degraded).toBeNull();
+    expect(packagistQueries(osv)).toEqual(FLOORS);
+  });
+
+  it('an empty composer.lock (the shape of an unreadable large file) falls back to the floors without a degraded marker', async () => {
+    const osv = stubOsv();
+    const { degraded } = await scan({
+      files: { ...NPM_PROJECTS, ...PHP_PROJECT_NO_LOCK, 'notification-service/composer.lock': '' },
+    });
+
+    expect(degraded).toBeNull();
+    expect(packagistQueries(osv)).toEqual(FLOORS);
+  });
+
+  it('a composer.lock served empty by the default contents type is read through the raw type', async () => {
+    const osv = stubOsv();
+    const { degraded } = await scan({
+      files: { ...NPM_PROJECTS, ...PHP_PROJECT },
+      oversize: ['notification-service/composer.lock'],
+    });
+
+    expect(degraded).toBeNull();
+    expect(packagistQueries(osv)).toContain('symfony/http-kernel@6.4.13');
+    expect(packagistQueries(osv)).toContain('psr/log@3.0.0');
+  });
+
+  it('a composer.lock whose read fails is a degraded source and the floors are queried', async () => {
+    const osv = stubOsv();
+    const { degraded } = await scan({
+      files: { ...NPM_PROJECTS, ...PHP_PROJECT },
+      fail: ['notification-service/composer.lock'],
+    });
+
+    expect(degraded).toContain('GitHub file read');
+    expect(packagistQueries(osv)).toEqual(FLOORS);
   });
 
   it('constraints without a lock are queried at a plain version (wildcard and alternatives)', async () => {
@@ -218,12 +254,20 @@ describe('OSV channel covers every supported ecosystem of a repo', () => {
           'acme/range': '>=2.1 <3.0',
           'acme/any': '*',
           'acme/dev': 'dev-main',
+          'acme/spaced': '>= 2.3 < 3.0',
+          'acme/stability': '^1.4@beta',
+          'acme/aliased': '2.5.0 as 2.0.0',
+          'acme/branch-alias': '1.0.x-dev',
+          'acme/branch': 'dev-release-2.x',
         }),
       },
     });
 
     expect(osv.queries.map((q) => `${q.name}@${q.version}`).sort()).toEqual([
+      'acme/aliased@2.5.0',
       'acme/range@2.1',
+      'acme/spaced@2.3',
+      'acme/stability@1.4',
       'symfony/console@6.4.0',
       'symfony/yaml@5.4',
     ]);

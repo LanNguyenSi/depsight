@@ -1,5 +1,5 @@
 import { fetchManifestContents, type Octokit } from '@/lib/manifest-discovery';
-import { noteDegraded } from '@/lib/scan/degraded';
+import { isNothingThere, noteDegraded } from '@/lib/scan/degraded';
 
 export interface ComposerDep {
   name: string;
@@ -65,18 +65,21 @@ export async function collectPhpDeps(
 
 /**
  * Reduce a composer version constraint to the one version OSV is asked about:
- * the first alternative of an `||`/`|` list, the first term of an AND list
- * (space or comma), its operator stripped, and a wildcard segment (`.*`, `.x`)
- * read as `.0` (`6.4.*` gives `6.4.0`). Returns '' when no version is left
- * (`*`, `dev-main`, `@dev`), which the caller drops.
+ * an `@<stability>` suffix is dropped (an `as <alias>` falls away with the first term), then the first
+ * alternative of an `||`/`|` list, the first term of an AND list (space or
+ * comma, whitespace after the operator allowed), its operator stripped, and a
+ * wildcard segment (`.*`, `.x`) read as `.0` (`6.4.*` gives `6.4.0`). Returns
+ * '' when no release version is left: `*`, a `dev-` branch, a `-dev` branch
+ * alias (`1.0.x-dev`). The caller drops those.
  */
 export function composerConstraintFloor(constraint: string): string {
-  const alternative = constraint.split(/\s*\|\|?\s*/)[0] ?? '';
-  const term = alternative.trim().split(/[\s,]+/)[0] ?? '';
-  const version = term
-    .replace(/^[^0-9]*/, '')
-    .replace(/\.(\*|x)(?=\.|$)/gi, '.0')
-    .replace(/-dev$/i, '');
+  const alternative = (constraint.split(/\s*\|\|?\s*/)[0] ?? '')
+    .trim()
+    .replace(/@[A-Za-z]+$/, '')
+    .replace(/(>=|<=|!=|==|[<>=^~])\s+/g, '$1');
+  const term = alternative.split(/[\s,]+/)[0] ?? '';
+  if (/^[^0-9a-z]*dev-/i.test(term) || /-dev$/i.test(term)) return '';
+  const version = term.replace(/^[^0-9]*/, '').replace(/\.(\*|x)(?=\.|$)/gi, '.0');
   return /\d/.test(version) ? version : '';
 }
 
@@ -92,6 +95,42 @@ function parseComposerRequire(content: string): Array<[string, string]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Read the composer.lock files in the raw media type. The default contents
+ * response is empty (`encoding: "none"`) for a file over 1 MB, which a large
+ * lock easily is; the raw type is served up to 100 MB. A missing file is
+ * skipped; any other failure is reported as an unreadable file, like
+ * `fetchManifestContents` does.
+ */
+async function fetchComposerLocks(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  paths: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const BATCH_SIZE = 10; // bound concurrency to avoid secondary rate limits
+  for (let i = 0; i < paths.length; i += BATCH_SIZE) {
+    await Promise.all(
+      paths.slice(i, i + BATCH_SIZE).map(async (path) => {
+        try {
+          const resp = await octokit.rest.repos.getContent({
+            owner,
+            repo,
+            path,
+            mediaType: { format: 'raw' },
+          });
+          const data = resp.data as unknown;
+          if (typeof data === 'string') out.set(path, data);
+        } catch (err) {
+          if (!isNothingThere(err)) noteDegraded('GitHub file read', err);
+        }
+      }),
+    );
+  }
+  return out;
 }
 
 /**
@@ -125,9 +164,9 @@ export function parseComposerLock(content: string): Map<string, string> {
  * composer.lock beside it (when present) supplies the installed versions: a
  * direct dependency takes its locked version over the constraint floor, and a
  * locked package that composer.json does not list (a transitive one, or a
- * dev one) is added. Without a lock, or when the lock cannot be parsed
- * (reported as a degraded source), the project falls back to the floors of
- * its `require`. Entries are deduped by name and version for locked ones and
+ * dev one) is added. Without a lock, or when the lock is empty or cannot be
+ * parsed (skipped silently, like a malformed npm lockfile), the project falls
+ * back to the floors of its `require`. Entries are deduped by name and version for locked ones and
  * by name (first seen, root first) for floors. A directory holding only a
  * composer.lock is not a manifest and is not read.
  */
@@ -139,11 +178,10 @@ export async function collectPhpDepsResolved(
 ): Promise<ComposerDep[]> {
   const paths = manifestPaths.length > 0 ? manifestPaths : DEFAULT_PATHS;
   const lockPathOf = (p: string) => p.replace(/composer\.json$/i, 'composer.lock');
-  const [manifests, locks] = await Promise.all([
+  const [manifests, lockByPath] = await Promise.all([
     fetchManifestContents(octokit, owner, repo, paths),
-    fetchManifestContents(octokit, owner, repo, paths.map(lockPathOf)),
+    fetchComposerLocks(octokit, owner, repo, paths.map(lockPathOf)),
   ]);
-  const lockByPath = new Map(locks.map((l) => [l.path, l.content]));
 
   const seen = new Set<string>();
   const out: ComposerDep[] = [];
@@ -156,11 +194,12 @@ export async function collectPhpDepsResolved(
   for (const { path, content } of manifests) {
     let locked: Map<string, string> | null = null;
     const lockContent = lockByPath.get(lockPathOf(path));
-    if (lockContent !== undefined) {
+    if (lockContent) {
       try {
         locked = parseComposerLock(lockContent);
-      } catch (err) {
-        noteDegraded('composer.lock parse', err);
+      } catch {
+        // Malformed lock: skipped like a malformed npm lockfile, the floors
+        // stand. Not a degraded source, a rescan cannot clear it.
       }
     }
 

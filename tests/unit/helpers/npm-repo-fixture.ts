@@ -21,6 +21,8 @@ export interface Scenario {
   files: Record<string, string>;
   /** Paths whose content read fails with HTTP 500. */
   fail?: string[];
+  /** Paths GitHub serves empty (`encoding: "none"`) unless the raw media type is asked for (files over 1 MB). */
+  oversize?: string[];
   /** The git tree comes back truncated (no observed lockfile set). */
   truncated?: boolean;
   /** Test-only: the manifest list is cut at its cap (more than 100 manifests). */
@@ -29,9 +31,15 @@ export interface Scenario {
   lockedFillers?: boolean;
 }
 
-const state: { files: Record<string, string>; fail: Set<string>; truncated: boolean } = {
+const state: {
+  files: Record<string, string>;
+  fail: Set<string>;
+  oversize: Set<string>;
+  truncated: boolean;
+} = {
   files: {},
   fail: new Set(),
+  oversize: new Set(),
   truncated: false,
 };
 
@@ -55,9 +63,19 @@ export function githubMockModule() {
           }),
         },
         repos: {
-          getContent: async ({ path }: { path: string }) => {
+          getContent: async ({
+            path,
+            mediaType,
+          }: {
+            path: string;
+            mediaType?: { format?: string };
+          }) => {
             if (state.fail.has(path)) throw httpError(500, 'boom');
             if (!(path in state.files)) throw httpError(404, 'nf');
+            // The raw media type returns the file as a string, whatever its size.
+            if (mediaType?.format === 'raw') return { data: state.files[path] };
+            // The default type serves no content for a file over 1 MB.
+            if (state.oversize.has(path)) return { data: { content: '', encoding: 'none' } };
             return { data: { content: Buffer.from(state.files[path]).toString('base64') } };
           },
           get: async () => ({ data: { default_branch: 'main' } }),
@@ -77,6 +95,7 @@ export function loadRepo(scenario: Scenario): void {
   }
   state.files = files;
   state.fail = new Set(scenario.fail ?? []);
+  state.oversize = new Set(scenario.oversize ?? []);
   state.truncated = Boolean(scenario.truncated);
 }
 
