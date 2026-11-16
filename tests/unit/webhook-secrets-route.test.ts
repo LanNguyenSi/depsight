@@ -22,6 +22,7 @@ import { POST, DELETE, PATCH } from '@/app/api/webhook-secrets/[repoId]/route';
 import { openWebhookSecret, sealWebhookSecret } from '@/lib/pr/webhook-secret';
 import { webhookSecretRateLimiter, WEBHOOK_SECRET_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 interface Row {
   id: string;
@@ -326,5 +327,30 @@ describe('webhook secret routes', () => {
       expect(table[2].webhookSecretEnc).toBe('sealed-b');
       expect(updateManyMock.mock.calls[0][0].where).toEqual({ id: 'row-b', userId: 'user-a' });
     });
+  });
+});
+
+describe('PATCH /api/webhook-secrets/[repoId]: request body cap', () => {
+  beforeEach(() => {
+    updateManyMock.mockReset();
+    login('user-a');
+  });
+
+  it('answers 413 for a body over the cap and updates nothing', async () => {
+    const res = await PATCH(
+      req('PATCH', 'row-a', { scanForks: true, padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }),
+      params('row-a'),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps answering 400 for malformed JSON', async () => {
+    const res = await PATCH(req('PATCH', 'row-a', '{not json'), params('row-a'));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Invalid JSON body' });
   });
 });

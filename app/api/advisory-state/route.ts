@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,14 +24,21 @@ function parseIdentifier(value: unknown): string | null {
   return trimmed;
 }
 
-async function readBody(req: NextRequest): Promise<Record<string, unknown> | null> {
+type BodyRead = { body: Record<string, unknown> | null } | { response: NextResponse };
+
+async function readBody(req: NextRequest): Promise<BodyRead> {
   try {
-    const body: unknown = await req.json();
-    return body !== null && typeof body === 'object' && !Array.isArray(body)
-      ? (body as Record<string, unknown>)
-      : null;
+    const parsed = await readJsonCapped<unknown>(req);
+    if (!parsed.ok) return { response: parsed.response };
+    const body = parsed.body;
+    return {
+      body:
+        body !== null && typeof body === 'object' && !Array.isArray(body)
+          ? (body as Record<string, unknown>)
+          : null,
+    };
   } catch {
-    return null;
+    return { body: null };
   }
 }
 
@@ -56,7 +64,9 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
-  const body = await readBody(req);
+  const read = await readBody(req);
+  if ('response' in read) return read.response;
+  const body = read.body;
   const target = body ? parseTarget(body) : null;
   if (!body || !target) {
     return NextResponse.json(
@@ -146,7 +156,9 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
-  const body = await readBody(req);
+  const read = await readBody(req);
+  if ('response' in read) return read.response;
+  const body = read.body;
   const target = body ? parseTarget(body) : null;
   if (!target) {
     return NextResponse.json(

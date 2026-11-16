@@ -30,6 +30,7 @@ vi.mock('@/lib/policy/engine', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/policies/evaluate/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,5 +126,21 @@ describe('POST /api/policies/evaluate', () => {
     expect(res.status).toBe(500);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('engine error');
+  });
+});
+
+describe('POST /api/policies/evaluate: request body cap', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    evaluatePoliciesMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  it('answers 413 for a body over the cap and evaluates nothing', async () => {
+    const res = await POST(makeRequest({ scanId: 'scan-1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(evaluatePoliciesMock).not.toHaveBeenCalled();
   });
 });

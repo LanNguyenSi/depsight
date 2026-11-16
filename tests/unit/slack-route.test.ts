@@ -48,6 +48,7 @@ vi.mock('@/lib/prisma', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST, DELETE } from '@/app/api/slack/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -316,5 +317,23 @@ describe('DELETE /api/slack', () => {
     expect(slackConfigDeleteMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'user-1' } }),
     );
+  });
+});
+
+describe('POST /api/slack: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    slackConfigUpsert.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  it('answers 413 for a body over the cap and saves nothing', async () => {
+    const res = await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x', channel: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,7 @@ import {
   depsRateLimiter,
   rateLimitedResponse,
 } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const body = await req.json() as { repoId?: string; runMissingScans?: boolean };
+  const parsed = await readJsonCapped<{ repoId?: string; runMissingScans?: boolean }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
   const { repoId, runMissingScans = false } = body;
 
   if (!repoId) {

@@ -42,6 +42,7 @@ vi.mock('@/lib/prisma', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/webhooks/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -230,5 +231,107 @@ describe('POST /api/webhooks', () => {
         data: expect.objectContaining({ userId: 'user-1', name: 'My Hook', url: 'https://example.com/hook' }),
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: request body cap and the write-only signing secret
+// ---------------------------------------------------------------------------
+const PUBLIC_KEYS = ['createdAt', 'enabled', 'events', 'id', 'name', 'url'];
+
+/** A prisma stand-in that honours `select`, so the response shows what a real query returns. */
+function applySelect(row: Record<string, unknown>, select: Record<string, boolean> | undefined) {
+  if (!select) return row;
+  return Object.fromEntries(Object.entries(row).filter(([k]) => select[k]));
+}
+
+const fullRow = {
+  id: 'wh-new',
+  userId: 'user-1',
+  name: 'My Hook',
+  url: 'https://example.com/hook',
+  secret: 'whsec_super_secret',
+  events: ['cve.critical'],
+  enabled: true,
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+describe('POST /api/webhooks: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    webhookConfigCreate.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockResolvedValue({
+      url: new URL('https://example.com/hook'),
+      addresses: ['93.184.216.34'],
+    });
+  });
+
+  it('answers 413 for a body over the cap and creates nothing', async () => {
+    const res = await POST(
+      makePostRequest({
+        name: 'My Hook',
+        url: 'https://example.com/hook',
+        events: ['cve.critical'],
+        secret: 'x'.repeat(DEFAULT_JSON_BODY_BYTES),
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('webhook responses never carry the signing secret', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    webhookConfigCreate.mockReset();
+    webhookConfigFindMany.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockResolvedValue({
+      url: new URL('https://example.com/hook'),
+      addresses: ['93.184.216.34'],
+    });
+  });
+
+  it('POST returns exactly the public keys, with the secret stored but not echoed', async () => {
+    webhookConfigCreate.mockImplementation(
+      async (args: { select?: Record<string, boolean> }) => applySelect(fullRow, args.select),
+    );
+
+    const res = await POST(
+      makePostRequest({
+        name: 'My Hook',
+        url: 'https://example.com/hook',
+        events: ['cve.critical'],
+        secret: 'whsec_super_secret',
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const { webhook } = await res.json() as { webhook: Record<string, unknown> };
+    expect(Object.keys(webhook).sort()).toEqual(PUBLIC_KEYS);
+    expect(JSON.stringify(webhook)).not.toContain('whsec_super_secret');
+    expect(webhookConfigCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ secret: 'whsec_super_secret' }),
+      }),
+    );
+  });
+
+  it('GET returns exactly the public keys', async () => {
+    webhookConfigFindMany.mockImplementation(
+      async (args: { select?: Record<string, boolean> }) => [applySelect(fullRow, args.select)],
+    );
+
+    const res = await GET();
+
+    const { webhooks } = await res.json() as { webhooks: Record<string, unknown>[] };
+    expect(Object.keys(webhooks[0]).sort()).toEqual(PUBLIC_KEYS);
   });
 });

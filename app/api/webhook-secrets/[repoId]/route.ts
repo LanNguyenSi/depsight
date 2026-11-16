@@ -7,6 +7,7 @@ import {
   sealWebhookSecret,
 } from '@/lib/pr/webhook-secret';
 import { rateLimitedResponse, webhookSecretRateLimiter } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -101,7 +102,9 @@ export async function PATCH(
 
   let body: unknown;
   try {
-    body = await req.json();
+    const parsed = await readJsonCapped(req);
+    if (!parsed.ok) return parsed.response;
+    body = parsed.body;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }

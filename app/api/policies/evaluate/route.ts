@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { evaluatePolicies } from '@/lib/policy/engine';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const body = await req.json() as { scanId?: unknown };
+  const parsed = await readJsonCapped<{ scanId?: unknown }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
   const { scanId } = body;
 
   if (typeof scanId !== 'string' || !scanId.trim()) {

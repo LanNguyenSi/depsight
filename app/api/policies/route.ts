@@ -3,6 +3,7 @@ import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { listPolicies, createPolicy } from '@/lib/policy/service';
 import { validatePolicyRule } from '@/lib/policy/engine';
 import { PolicyType, Severity } from '@prisma/client';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,13 +40,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
 
-  const body = await req.json() as {
+  const parsed = await readJsonCapped<{
     name?: unknown;
     type?: unknown;
     rule?: unknown;
     severity?: unknown;
     enabled?: unknown;
-  };
+  }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const { name, type, rule, severity, enabled } = body;
 

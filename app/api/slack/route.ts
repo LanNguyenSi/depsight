@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { assertPublicUrl, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,12 +23,14 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await req.json() as {
+  const parsed = await readJsonCapped<{
     webhookUrl?: string;
     channel?: string;
     minSeverity?: string;
     enabled?: boolean;
-  };
+  }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const { webhookUrl, channel, minSeverity, enabled } = body;
 

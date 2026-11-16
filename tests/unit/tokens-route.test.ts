@@ -30,6 +30,7 @@ vi.mock('@/lib/prisma', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/tokens/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -284,5 +285,37 @@ describe('POST /api/tokens', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('A token name is required');
+  });
+});
+
+describe('POST /api/tokens: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    apiTokenCreate.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  it('answers 413 for a body over the cap and mints nothing', async () => {
+    const res = await POST(
+      makePostRequest({ name: 'ci-token', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps treating malformed JSON as an empty body (400 name required)', async () => {
+    const res = await POST(
+      new NextRequest('http://localhost/api/tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not json',
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'A token name is required' });
+    expect(apiTokenCreate).not.toHaveBeenCalled();
   });
 });

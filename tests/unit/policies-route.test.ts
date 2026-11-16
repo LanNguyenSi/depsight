@@ -54,6 +54,7 @@ vi.mock('@/lib/policy/service', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/policies/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -560,6 +561,22 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     const res = await POST(makePostRequest(validPolicyBody()));
 
     expect(res.status).toBe(403);
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/policies: request body cap', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    createPolicyMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  it('answers 413 for a body over the cap and creates nothing', async () => {
+    const res = await POST(makePostRequest({ name: 'x'.repeat(DEFAULT_JSON_BODY_BYTES), type: 'LICENSE' }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
     expect(createPolicyMock).not.toHaveBeenCalled();
   });
 });

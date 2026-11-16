@@ -3,6 +3,7 @@
 // Covers: 401, 400, 409 (no-run), 409 (auto-run but still missing), 200 zip, 500.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -461,5 +462,23 @@ describe('POST /api/export: scan rate limits', () => {
     missingThenComplete();
     expect((await POST(makePostRequest({ repoId: 'repo-1', runMissingScans: true }))).status).toBe(200);
     expect(scanRepositoryMock).toHaveBeenCalledTimes(SCAN_LIMIT_PER_HOUR + 1);
+  });
+});
+
+describe('POST /api/export: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    getTokenMock.mockReset();
+    getTokenMock.mockResolvedValue('tok-abc');
+    loadRepoExportDataMock.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  it('answers 413 for a body over the cap and exports nothing', async () => {
+    const res = await POST(makePostRequest({ repoId: 'repo-1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(loadRepoExportDataMock).not.toHaveBeenCalled();
   });
 });
