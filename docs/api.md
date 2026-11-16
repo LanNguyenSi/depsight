@@ -11,6 +11,8 @@ A session counts only when it carries a user id: a signed-in session whose user 
 
 The table lists every route handler except the NextAuth handlers under `/api/auth/*` and the webhook-secret routes, which are listed under [GitHub pull-request webhook](#github-pull-request-webhook).
 
+**Request body size.** A JSON request body over 256 KiB (1 MiB for `POST /api/dependabot/enable-all`, whose body is a list of repository ids) is refused with `413` and `{ "error": "Request body too large" }` before any work starts, whether the size is declared in `Content-Length` or counted while the body streams in. The GitHub webhook has its own 1 MiB cap, see [GitHub pull-request webhook](#github-pull-request-webhook).
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read; rate limited, see [Rate limits](#rate-limits) |
@@ -44,8 +46,8 @@ The table lists every route handler except the NextAuth handlers under `/api/aut
 | `POST` | `/api/tokens` | Create a token (body: `{ name, scope? }`, `name` up to 100 characters, `scope` `READ` or `WRITE`, default `WRITE`). Answers 201 `{ token, record }`; no other endpoint returns the `dsat_` value again, and the database holds only its SHA-256 hash. 400 for a missing or too long name or an unknown scope |
 | `DELETE` | `/api/tokens/[id]` | Revoke a token (sets `revokedAt`); answers `{ ok: true }`, or 404 when the token is unknown, not the caller's or already revoked |
 | `GET` | `/api/webhooks` | The caller's outgoing webhooks (`id`, `name`, `url`, `events`, `enabled`, `createdAt`), without the secret |
-| `POST` | `/api/webhooks` | Create an outgoing webhook (body: `{ name, url, secret?, events }`, `events` from `cve.critical`, `cve.high`, `scan.completed`; `url` must be a public `http(s)` target). Answers 201 `{ webhook }` with the full row, secret included; 400 for a missing field, a non-public URL or an unknown event. See [Outgoing webhooks](#outgoing-webhooks) |
-| `PATCH` | `/api/webhooks/[id]` | Enable or disable a webhook (body: `{ enabled? }`; without `enabled` it toggles). Answers `{ webhook }` with the full row, secret included; 404 if it is not the caller's |
+| `POST` | `/api/webhooks` | Create an outgoing webhook (body: `{ name, url, secret?, events }`, `events` from `cve.critical`, `cve.high`, `scan.completed`; `url` must be a public `http(s)` target). Answers 201 `{ webhook }` with `id`, `name`, `url`, `events`, `enabled` and `createdAt`, never the secret; 400 for a missing field, a non-public URL or an unknown event. See [Outgoing webhooks](#outgoing-webhooks) |
+| `PATCH` | `/api/webhooks/[id]` | Enable or disable a webhook (body: `{ enabled? }`; without `enabled` it toggles). Answers `{ webhook }` with `id`, `name`, `url`, `events`, `enabled` and `createdAt`, never the secret; 404 if it is not the caller's |
 | `DELETE` | `/api/webhooks/[id]` | Delete a webhook; answers `{ success: true }`, 404 if it is not the caller's |
 | `GET` | `/api/slack` | The caller's Slack configuration, `{ config }` (null when none is set) |
 | `POST` | `/api/slack` | Create or replace the Slack configuration (body: `{ webhookUrl, channel?, minSeverity?, enabled? }`; `minSeverity` one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, default `HIGH`; `enabled` defaults to true; `webhookUrl` must be a public `http(s)` target). Answers `{ config }` |
@@ -201,7 +203,7 @@ Each delivery is a `POST` with the JSON body and these headers:
 - `X-depsight-Event: <event>`
 - `X-depsight-Signature: sha256=<hex>`, only when the webhook has a secret: the HMAC-SHA256 of the raw request body under that secret. To verify, compute the same HMAC over the raw body as received and compare it in constant time.
 
-The URL must be a public `http(s)` target: it is checked when the webhook is created and again at every delivery, and a non-public target is not called. Each event is delivered once; a failed delivery is not retried.
+The URL must be a public `http(s)` target: it is checked when the webhook is created and again at every delivery, and a non-public target is not called. Each event is delivered once; a failed delivery is not retried. A delivery is also bounded because the receiver is user-controlled: a response body over 1 MiB, or a request (connect, headers and body together) that takes longer than 15 seconds, is aborted and counts as a failed delivery.
 
 ## MCP server
 
