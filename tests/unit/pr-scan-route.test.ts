@@ -25,6 +25,7 @@ vi.mock('@/lib/pr/pr-scanner', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/pr-scan/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 import { prScanRateLimiter, PR_SCAN_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
@@ -252,5 +253,24 @@ describe('POST /api/pr-scan: per-user rate limit', () => {
 
     authMock.mockResolvedValue({ user: { id: 'someone-else' } });
     expect((await POST(makePostRequest(validBody))).status).toBe(200);
+  });
+});
+
+describe('POST /api/pr-scan: request body cap', () => {
+  beforeEach(() => {
+    prScanRateLimiter.reset();
+    authMock.mockReset();
+    getTokenMock.mockReset();
+    getTokenMock.mockResolvedValue('tok-123');
+    scanPRAndCommentMock.mockReset();
+    authMock.mockResolvedValue(SESSION);
+  });
+
+  it('answers 413 for a body over the cap and scans nothing', async () => {
+    const res = await POST(makePostRequest({ owner: 'acme', repo: 'api', prNumber: 42, padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(scanPRAndCommentMock).not.toHaveBeenCalled();
   });
 });

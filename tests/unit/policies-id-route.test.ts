@@ -55,6 +55,7 @@ vi.mock('@/lib/policy/service', () => ({
 // ---------------------------------------------------------------------------
 import { GET, PUT, DELETE } from '@/app/api/policies/[id]/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -833,5 +834,22 @@ describe('GET /api/policies/[id] (real auth-api composition)', () => {
 
     expect(res.status).toBe(403);
     expect(deletePolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/policies/[id]: request body cap', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    getPolicyByIdMock.mockReset();
+    updatePolicyMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  it('answers 413 for a body over the cap and updates nothing', async () => {
+    const res = await PUT(makePutRequest('pol-1', { name: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }), makeParams('pol-1'));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 });

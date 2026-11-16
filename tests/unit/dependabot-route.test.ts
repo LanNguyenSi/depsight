@@ -33,6 +33,7 @@ vi.mock('@/lib/cve/github-advisories', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/dependabot/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -133,5 +134,23 @@ describe('POST /api/dependabot', () => {
     const body = await res.json() as { success: boolean };
     expect(body.success).toBe(true);
     expect(enableDependabotAlertsMock).toHaveBeenCalledWith('tok-123', 'acme', 'my-app');
+  });
+});
+
+describe('POST /api/dependabot: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    repoFindFirst.mockReset();
+    enableDependabotAlertsMock.mockReset();
+    authMock.mockResolvedValue(SESSION);
+  });
+
+  it('answers 413 for a body over the cap and looks nothing up', async () => {
+    const res = await POST(makePostRequest({ repoId: 'repo-1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(repoFindFirst).not.toHaveBeenCalled();
+    expect(enableDependabotAlertsMock).not.toHaveBeenCalled();
   });
 });

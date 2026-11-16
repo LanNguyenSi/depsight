@@ -53,6 +53,7 @@ vi.mock('@/lib/license/scanner', () => ({
 // ---------------------------------------------------------------------------
 import { GET, POST } from '@/app/api/license/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 import { licenseRateLimiter, LICENSE_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
@@ -290,5 +291,22 @@ describe('POST /api/license: per-user rate limit', () => {
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /api/license: request body cap', () => {
+  beforeEach(() => {
+    licenseRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    scanLicensesMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  it('answers 413 for a body over the cap and scans nothing', async () => {
+    const res = await POST(makePostRequest({ repoId: 'repo-1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(scanLicensesMock).not.toHaveBeenCalled();
   });
 });
