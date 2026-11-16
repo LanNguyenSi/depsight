@@ -88,6 +88,39 @@ describe('safeFetch limits: normal responses', () => {
     expect((await res.text()).length).toBe(1000);
   });
 
+  it('accepts a body of exactly the cap that arrives in several chunks', async () => {
+    handler = async (_req, res) => {
+      res.writeHead(200);
+      for (const size of [400, 400, 200]) {
+        res.write('x'.repeat(size));
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      res.end();
+    };
+
+    const res = await safeFetch(URL_UNDER_TEST, undefined, { maxResponseBytes: 1000 });
+
+    expect((await res.text()).length).toBe(1000);
+  });
+
+  it('rejects a body one byte over the cap that arrives in several chunks', async () => {
+    handler = async (_req, res) => {
+      res.writeHead(200);
+      for (const size of [400, 400, 201]) {
+        res.write('x'.repeat(size));
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      res.end();
+    };
+
+    const err = await safeFetch(URL_UNDER_TEST, undefined, { maxResponseBytes: 1000 }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(SafeFetchLimitError);
+    expect((err as SafeFetchLimitError).kind).toBe('response_too_large');
+  });
+
   it('passes the request body and method to the server', async () => {
     let seen = '';
     handler = (req, res) => {
@@ -227,5 +260,25 @@ describe('safeFetch limits: total timeout', () => {
       setTimeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
     }
+  });
+});
+
+describe('safeFetch limits: connection lost mid-body', () => {
+  it('rejects promptly with the connection error, not a limit error, and closes the socket', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'content-length': '100' });
+      res.write('partial');
+      setTimeout(() => res.socket?.destroy(), 30);
+    };
+
+    const started = Date.now();
+    const err = await safeFetch(URL_UNDER_TEST, undefined, { timeoutMs: 3000 }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(SafeFetchLimitError);
+    expect(Date.now() - started).toBeLessThan(1500);
+    await allSocketsClosed();
   });
 });

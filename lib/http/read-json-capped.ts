@@ -42,5 +42,6 @@ export async function readJsonCapped<T = unknown>(
 ): Promise<CappedJson<T>> {
   const raw = await readBodyCapped(req, maxBytes);
   if (raw === null) return { ok: false, response: bodyTooLargeResponse() };
-  return { ok: true, body: JSON.parse(raw.toString('utf8')) as T };
+  // TextDecoder drops a leading UTF-8 BOM, as Request.json() does.
+  return { ok: true, body: JSON.parse(new TextDecoder('utf-8').decode(raw)) as T };
 }
