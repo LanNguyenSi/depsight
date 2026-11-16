@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { scanRepository, ScanAccessError } from '@/lib/cve/scanner';
 import { scanRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,9 @@ export async function POST(req: NextRequest) {
     return rateLimitedResponse(limit);
   }
 
-  const body = await req.json() as { repoId?: string };
+  const parsed = await readJsonCapped<{ repoId?: string }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
   const { repoId } = body;
 
   if (!repoId) {

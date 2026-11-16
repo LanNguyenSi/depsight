@@ -33,6 +33,7 @@ vi.mock('@/lib/cve/github-advisories', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/dependabot/enable-all/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES, ID_LIST_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -198,5 +199,39 @@ describe('POST /api/dependabot/enable-all', () => {
     await POST(makePostRequest({ repoIds: ['r1'] }));
 
     expect(enableDependabotAlertsMock).toHaveBeenCalledWith('tok-123', 'org', 'myrepo');
+  });
+});
+
+describe('POST /api/dependabot/enable-all: request body cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    getTokenMock.mockReset();
+    getTokenMock.mockResolvedValue('tok-123');
+    repoFindMany.mockReset();
+    repoFindMany.mockResolvedValue([]);
+    enableDependabotAlertsMock.mockReset();
+    authMock.mockResolvedValue(SESSION);
+  });
+
+  const idsOfAbout = (bytes: number) =>
+    Array.from({ length: Math.ceil(bytes / 28) }, (_, i) => `c${String(i).padStart(24, '0')}`);
+
+  it('takes a list above the default cap, because it has its own larger cap', async () => {
+    const repoIds = idsOfAbout(DEFAULT_JSON_BODY_BYTES * 2);
+    expect(JSON.stringify({ repoIds }).length).toBeGreaterThan(DEFAULT_JSON_BODY_BYTES);
+    expect(JSON.stringify({ repoIds }).length).toBeLessThan(ID_LIST_JSON_BODY_BYTES);
+
+    const res = await POST(makePostRequest({ repoIds }));
+
+    expect(res.status).not.toBe(413);
+    expect(repoFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 413 above its own cap and looks nothing up', async () => {
+    const res = await POST(makePostRequest({ repoIds: idsOfAbout(ID_LIST_JSON_BODY_BYTES + 1) }));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(repoFindMany).not.toHaveBeenCalled();
   });
 });

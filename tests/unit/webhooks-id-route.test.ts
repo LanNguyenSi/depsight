@@ -36,6 +36,7 @@ vi.mock('@/lib/prisma', () => ({
 // ---------------------------------------------------------------------------
 import { DELETE, PATCH } from '@/app/api/webhooks/[id]/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -251,5 +252,57 @@ describe('PATCH /api/webhooks/[id]', () => {
         data: expect.objectContaining({ enabled: true }),
       }),
     );
+  });
+});
+
+describe('PATCH /api/webhooks/[id]: body cap and signing secret', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    webhookConfigFindFirst.mockReset();
+    webhookConfigUpdate.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  it('answers 413 for a body over the cap and touches nothing', async () => {
+    const res = await PATCH(
+      makePatchRequest('wh-1', { enabled: false, padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }),
+      makeParams('wh-1'),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(webhookConfigFindFirst).not.toHaveBeenCalled();
+    expect(webhookConfigUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns exactly the public keys, never the signing secret', async () => {
+    const row = {
+      id: 'wh-1',
+      userId: 'user-1',
+      name: 'My Hook',
+      url: 'https://example.com/hook',
+      secret: 'whsec_super_secret',
+      events: ['cve.critical'],
+      enabled: true,
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    webhookConfigFindFirst.mockResolvedValue(row);
+    webhookConfigUpdate.mockImplementation(
+      async (args: { data: { enabled: boolean }; select?: Record<string, boolean> }) => {
+        const next: Record<string, unknown> = { ...row, enabled: args.data.enabled };
+        return args.select
+          ? Object.fromEntries(Object.entries(next).filter(([k]) => args.select?.[k]))
+          : next;
+      },
+    );
+
+    const res = await PATCH(makePatchRequest('wh-1', { enabled: false }), makeParams('wh-1'));
+
+    expect(res.status).toBe(200);
+    const { webhook } = await res.json() as { webhook: Record<string, unknown> };
+    expect(Object.keys(webhook).sort()).toEqual(['createdAt', 'enabled', 'events', 'id', 'name', 'url']);
+    expect(webhook.enabled).toBe(false);
+    expect(JSON.stringify(webhook)).not.toContain('whsec_super_secret');
   });
 });

@@ -36,6 +36,7 @@ vi.mock('@/lib/prisma', () => ({
 
 import { PUT, DELETE } from '@/app/api/advisory-state/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 function makeRequest(method: 'PUT' | 'DELETE', body: unknown, raw = false): NextRequest {
   return new NextRequest('http://localhost/api/advisory-state', {
@@ -209,5 +210,32 @@ describe('DELETE /api/advisory-state', () => {
     const res = await DELETE(makeRequest('DELETE', target));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true, cleared: false });
+  });
+});
+
+describe('advisory-state request body cap', () => {
+  const oversized = { ...target, status: 'IGNORED', note: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) };
+
+  it('PUT answers 413 for a body over the cap, before any lookup', async () => {
+    const res = await PUT(makeRequest('PUT', oversized));
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(repoFindFirst).not.toHaveBeenCalled();
+    expect(stateUpsert).not.toHaveBeenCalled();
+  });
+
+  it('DELETE answers 413 for a body over the cap, before any lookup', async () => {
+    const res = await DELETE(makeRequest('DELETE', oversized));
+
+    expect(res.status).toBe(413);
+    expect(repoFindFirst).not.toHaveBeenCalled();
+    expect(stateDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps answering 400 for malformed JSON', async () => {
+    const res = await PUT(makeRequest('PUT', '{not json', true));
+
+    expect(res.status).toBe(400);
   });
 });

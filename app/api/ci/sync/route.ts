@@ -7,6 +7,7 @@ import {
   ciSyncAllRateLimiter,
   rateLimitedResponse,
 } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +29,9 @@ export async function POST(req: NextRequest) {
 
   let body: { repoId?: string } = {};
   try {
-    body = await req.json();
+    const parsed = await readJsonCapped<{ repoId?: string }>(req);
+    if (!parsed.ok) return parsed.response;
+    body = parsed.body;
   } catch {
     // empty body is fine
   }

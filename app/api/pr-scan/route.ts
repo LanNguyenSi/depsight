@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { scanPRAndComment } from '@/lib/pr/pr-scanner';
 import { getSessionGitHubToken } from '@/lib/auth-api';
 import { prScanRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,11 +27,13 @@ export async function POST(req: NextRequest) {
     return rateLimitedResponse(limit);
   }
 
-  const body = await req.json() as {
+  const parsed = await readJsonCapped<{
     owner?: string;
     repo?: string;
     prNumber?: number;
-  };
+  }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const { owner, repo, prNumber } = body;
 

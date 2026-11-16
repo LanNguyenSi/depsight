@@ -63,6 +63,7 @@ import { POST, GET } from '@/app/api/scan/route';
 import { NextRequest } from 'next/server';
 import { ScanAccessError } from '@/lib/cve/scanner';
 import { scanRateLimiter, SCAN_LIMIT_PER_HOUR } from '@/lib/rate-limit';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -540,5 +541,53 @@ describe('POST /api/scan: per-user rate limit', () => {
     const res = await POST(makeRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /api/scan: request body cap', () => {
+  beforeEach(() => {
+    scanRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    scanRepositoryMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue({
+      id: 'me',
+      githubLogin: 'octocat',
+      githubToken: 'gh_tok',
+      scope: 'WRITE',
+    });
+    scanRepositoryMock.mockResolvedValue({ scanId: 'scan-1', alreadyRunning: false });
+  });
+
+  it('answers 413 for a body over the cap and never starts a scan', async () => {
+    const res = await POST(
+      makeRequest({ repoId: 'repo-1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(scanRepositoryMock).not.toHaveBeenCalled();
+  });
+
+  it('answers 413 from the declared Content-Length alone', async () => {
+    const req = new NextRequest('http://localhost/api/scan', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(DEFAULT_JSON_BODY_BYTES + 1),
+      },
+      body: JSON.stringify({ repoId: 'repo-1' }),
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(413);
+    expect(scanRepositoryMock).not.toHaveBeenCalled();
+  });
+
+  it('still scans for a normal body', async () => {
+    const res = await POST(makeRequest({ repoId: 'repo-1' }));
+
+    expect(res.status).toBe(200);
+    expect(scanRepositoryMock).toHaveBeenCalledTimes(1);
   });
 });

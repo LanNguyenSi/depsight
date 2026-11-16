@@ -3,6 +3,7 @@ import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { getPolicyById, updatePolicy, deletePolicy } from '@/lib/policy/service';
 import { validatePolicyRule } from '@/lib/policy/engine';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,13 +51,15 @@ export async function PUT(req: NextRequest, { params }: RouteParams) {
   }
 
   const { id } = await params;
-  const body = await req.json() as {
+  const parsed = await readJsonCapped<{
     name?: unknown;
     type?: unknown;
     rule?: unknown;
     severity?: unknown;
     enabled?: unknown;
-  };
+  }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const updateData: {
     name?: string;

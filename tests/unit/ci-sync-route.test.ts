@@ -57,6 +57,7 @@ vi.mock('@/lib/ci/sync', () => ({
 // ---------------------------------------------------------------------------
 import { POST } from '@/app/api/ci/sync/route';
 import { NextRequest } from 'next/server';
+import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
 import {
   ciSyncRepoRateLimiter,
   ciSyncAllRateLimiter,
@@ -382,5 +383,45 @@ describe('POST /api/ci/sync: per-user rate limit', () => {
     const res = await POST(makePostRequest({}));
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /api/ci/sync: request body cap', () => {
+  beforeEach(() => {
+    ciSyncRepoRateLimiter.reset();
+    ciSyncAllRateLimiter.reset();
+    authMock.mockReset();
+    headersMock.mockReset();
+    headersMock.mockResolvedValue(buildHeaders({}));
+    authMock.mockResolvedValue(SESSION);
+    repoFindFirst.mockReset();
+    syncRepoByIdMock.mockReset();
+    syncAllUserReposMock.mockReset();
+    syncAllUserReposMock.mockResolvedValue({ repos: 0 });
+  });
+
+  it('answers 413 for a body over the cap and starts no sync', async () => {
+    const res = await POST(
+      makePostRequest({ repoId: 'r1', padding: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'Request body too large' });
+    expect(repoFindFirst).not.toHaveBeenCalled();
+    expect(syncRepoByIdMock).not.toHaveBeenCalled();
+    expect(syncAllUserReposMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps treating malformed JSON as an empty body (syncs all repos)', async () => {
+    const res = await POST(
+      new NextRequest('http://localhost/api/ci/sync', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not json',
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(syncAllUserReposMock).toHaveBeenCalledTimes(1);
   });
 });

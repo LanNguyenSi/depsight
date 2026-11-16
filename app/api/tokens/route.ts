@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { ApiTokenScope } from '@prisma/client';
 import { generateApiToken, hashApiToken } from '@/lib/api-token';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +43,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as { name?: unknown; scope?: unknown };
+  let body: { name?: unknown; scope?: unknown } = {};
+  try {
+    const parsed = await readJsonCapped<{ name?: unknown; scope?: unknown }>(req);
+    if (!parsed.ok) return parsed.response;
+    body = parsed.body;
+  } catch {
+    // Malformed JSON is treated as an empty body (answered by the name check).
+  }
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) {
     return NextResponse.json({ error: 'A token name is required' }, { status: 400 });

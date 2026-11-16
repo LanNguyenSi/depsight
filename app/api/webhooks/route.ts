@@ -2,8 +2,20 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { assertPublicUrl, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
+
+// The HMAC signing secret is write-only: no response (list, create or toggle)
+// returns it back to the caller.
+const WEBHOOK_PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  url: true,
+  events: true,
+  enabled: true,
+  createdAt: true,
+} as const;
 
 // GET /api/webhooks — list user's webhook configs
 export async function GET() {
@@ -13,7 +25,7 @@ export async function GET() {
   const webhooks = await prisma.webhookConfig.findMany({
     where: { userId: session.user.id },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, name: true, url: true, events: true, enabled: true, createdAt: true },
+    select: WEBHOOK_PUBLIC_SELECT,
   });
 
   return NextResponse.json({ webhooks });
@@ -24,12 +36,14 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await req.json() as {
+  const parsed = await readJsonCapped<{
     name?: string;
     url?: string;
     secret?: string;
     events?: string[];
-  };
+  }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   const { name, url, secret, events } = body;
 
@@ -63,6 +77,7 @@ export async function POST(req: NextRequest) {
       secret: secret || null,
       events,
     },
+    select: WEBHOOK_PUBLIC_SELECT,
   });
 
   return NextResponse.json({ webhook }, { status: 201 });

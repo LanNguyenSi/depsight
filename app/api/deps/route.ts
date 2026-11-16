@@ -3,6 +3,7 @@ import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { scanDependencies } from '@/lib/deps/scanner';
 import { depsRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,9 @@ export async function POST(req: NextRequest) {
     return rateLimitedResponse(limit);
   }
 
-  const body = await req.json() as { repoId?: string };
+  const parsed = await readJsonCapped<{ repoId?: string }>(req);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
   const { repoId } = body;
   if (!repoId) {
     return NextResponse.json({ error: 'repoId is required' }, { status: 400 });

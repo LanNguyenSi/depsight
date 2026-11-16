@@ -469,3 +469,31 @@ describe('notifyForScan', () => {
     expect(slackBodyText()).toContain('Mittel:* 4');
   });
 });
+
+describe('notifier: a delivery stopped by a safeFetch limit', () => {
+  beforeEach(() => {
+    webhookConfigFindMany.mockReset();
+    safeFetchMock.mockReset();
+  });
+
+  it('counts as a failed delivery: the others still go out and the call resolves', async () => {
+    webhookConfigFindMany.mockResolvedValue([
+      { url: 'https://slow.example.com/hook', secret: null, events: ['scan.completed'] },
+      { url: 'https://fine.example.com/hook', secret: null, events: ['scan.completed'] },
+    ]);
+    safeFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('https://slow.')) {
+        throw Object.assign(new Error('Request timed out after 15000 ms'), {
+          name: 'SafeFetchLimitError',
+        });
+      }
+      return { ok: true, status: 200 };
+    });
+
+    await expect(
+      notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-1', 'cve', { cveCount: 0 }, []),
+    ).resolves.toBeUndefined();
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(2);
+  });
+});

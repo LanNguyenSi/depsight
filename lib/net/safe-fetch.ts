@@ -198,13 +198,48 @@ export function pinnedLookup(validated: string[]): LookupFunction {
   }) as LookupFunction;
 }
 
+/** Default cap on a response body: webhook and Slack receivers answer with a few bytes. */
+export const SAFE_FETCH_MAX_RESPONSE_BYTES = 1024 * 1024;
+
+/** Default total budget (connect, headers and body) for one delivery. */
+export const SAFE_FETCH_TIMEOUT_MS = 15_000;
+
+export interface SafeFetchLimits {
+  /** Abort the request once the response body exceeds this many bytes. */
+  maxResponseBytes?: number;
+  /** Abort the request when it has not completed after this many milliseconds. */
+  timeoutMs?: number;
+}
+
+/** A delivery stopped by a safeFetch resource limit (response size or total time). */
+export class SafeFetchLimitError extends Error {
+  readonly kind: 'response_too_large' | 'timeout';
+  constructor(kind: 'response_too_large' | 'timeout', message: string) {
+    super(message);
+    this.name = 'SafeFetchLimitError';
+    this.kind = kind;
+  }
+}
+
 /**
  * SSRF-safe outbound fetch for user-supplied URLs. Validates the URL, resolves
  * its public IPs once, then dials only those addresses (Host header + TLS SNI
  * preserved). Redirects are disabled so a public host cannot 30x the server
  * into an internal target after the check.
+ *
+ * The target is user-controlled, so the exchange is bounded: the response body
+ * may not exceed `maxResponseBytes` and the whole request (connect, headers,
+ * body) may not take longer than `timeoutMs`. Either limit rejects with a
+ * SafeFetchLimitError and destroys the socket, so a receiver that streams
+ * forever or trickles bytes cannot pin a socket or memory.
  */
-export function safeFetch(input: string, init?: RequestInit): Promise<Response> {
+export function safeFetch(
+  input: string,
+  init?: RequestInit,
+  limits?: SafeFetchLimits,
+): Promise<Response> {
+  const maxResponseBytes = limits?.maxResponseBytes ?? SAFE_FETCH_MAX_RESPONSE_BYTES;
+  const timeoutMs = limits?.timeoutMs ?? SAFE_FETCH_TIMEOUT_MS;
   return assertPublicUrl(input).then(({ url, addresses }) => {
     const transport = url.protocol === 'https:' ? https : http;
     const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
@@ -220,6 +255,19 @@ export function safeFetch(input: string, init?: RequestInit): Promise<Response> 
     const body = typeof init?.body === 'string' ? init.body : undefined;
 
     return new Promise<Response>((resolve, reject) => {
+      let settled = false;
+      const settle = (): boolean => {
+        if (settled) return false;
+        settled = true;
+        clearTimeout(timer);
+        return true;
+      };
+      const fail = (err: Error): void => {
+        if (!settle()) return;
+        req.destroy();
+        reject(err);
+      };
+
       const req = transport.request(
         {
           protocol: url.protocol,
@@ -231,9 +279,31 @@ export function safeFetch(input: string, init?: RequestInit): Promise<Response> 
           lookup: pinnedLookup(addresses),
         },
         (res) => {
+          const tooLarge = (): SafeFetchLimitError =>
+            new SafeFetchLimitError(
+              'response_too_large',
+              `Response body exceeds ${maxResponseBytes} bytes`,
+            );
+          const declared = Number(res.headers['content-length']);
+          if (Number.isFinite(declared) && declared > maxResponseBytes) {
+            fail(tooLarge());
+            return;
+          }
+          // A reset mid-body surfaces as an error on the response, not the request.
+          res.on('error', fail);
           const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
+          let received = 0;
+          res.on('data', (c: Buffer) => {
+            if (settled) return;
+            received += c.length;
+            if (received > maxResponseBytes) {
+              fail(tooLarge());
+              return;
+            }
+            chunks.push(c);
+          });
           res.on('end', () => {
+            if (!settle()) return;
             const status = res.statusCode ?? 0;
             // Disable redirect-following: a 30x is surfaced as-is, never chased
             // into an internal target.
@@ -254,7 +324,14 @@ export function safeFetch(input: string, init?: RequestInit): Promise<Response> 
           });
         },
       );
-      req.on('error', reject);
+      // Armed once the request exists; every settle path clears it.
+      const timer = setTimeout(() => {
+        fail(new SafeFetchLimitError('timeout', `Request timed out after ${timeoutMs} ms`));
+      }, timeoutMs);
+      req.on('error', (err) => {
+        if (!settle()) return;
+        reject(err);
+      });
       if (body) req.write(body);
       req.end();
     });
