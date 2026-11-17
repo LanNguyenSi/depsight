@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEscapeKey, nextFocusIndex, restoreTarget } from '@/components/dialog-focus';
+import { isEscapeKey, nextFocusIndex, restoreTarget, returnFocusTarget } from '@/components/dialog-focus';
 
 describe('isEscapeKey', () => {
   it('closes on Escape', () => {
@@ -70,5 +70,32 @@ describe('restoreTarget', () => {
   it('returns null when there was no previous element', () => {
     expect(restoreTarget(null, true)).toBeNull();
     expect(restoreTarget(null, false)).toBeNull();
+  });
+});
+
+describe('returnFocusTarget', () => {
+  const el = (isConnected: boolean) => ({ isConnected }) as unknown as Element;
+
+  it('prefers the named opener over the previously focused element', () => {
+    const preferred = el(true);
+    const previous = el(true);
+    expect(returnFocusTarget(preferred, previous)).toBe(preferred);
+  });
+
+  it('falls back to the previously focused element when the opener is detached', () => {
+    const previous = el(true);
+    expect(returnFocusTarget(el(false), previous)).toBe(previous);
+  });
+
+  it('falls back to the previously focused element when no opener is named', () => {
+    const previous = el(true);
+    expect(returnFocusTarget(null, previous)).toBe(previous);
+  });
+
+  it('returns null (body) when neither element is in the document', () => {
+    expect(returnFocusTarget(el(false), el(false))).toBeNull();
+    expect(returnFocusTarget(null, el(false))).toBeNull();
+    expect(returnFocusTarget(el(false), null)).toBeNull();
+    expect(returnFocusTarget(null, null)).toBeNull();
   });
 });

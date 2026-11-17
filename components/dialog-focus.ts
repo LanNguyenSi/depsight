@@ -36,6 +36,22 @@ export function restoreTarget<T extends Element>(
   return isConnected ? previous : null;
 }
 
+/**
+ * Focus target on close when the caller names a preferred opener (the
+ * trigger it holds a ref to) besides the element that had focus at open
+ * time: the preferred one wins while it is in the document, otherwise the
+ * previously focused one, otherwise `null` (body). Safari does not focus a
+ * button on click, so the previously focused element can be the page body
+ * instead of the trigger.
+ */
+export function returnFocusTarget<T extends Element>(
+  preferred: T | null,
+  previous: T | null,
+): T | null {
+  return restoreTarget(preferred, preferred?.isConnected ?? false)
+    ?? restoreTarget(previous, previous?.isConnected ?? false);
+}
+
 /** Elements Tab can reach, used to build the focus list of a dialog. */
 export const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

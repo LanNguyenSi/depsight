@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocale, interpolate } from '@/lib/i18n';
+import { useDialogFocus } from '@/components/useDialogFocus';
 
 interface PRScanButtonProps {
   owner: string;
@@ -35,6 +36,20 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
   // does not exist there); the modal only ever opens on click, by which
   // time the client has mounted.
   const [mounted] = useState(() => typeof window !== 'undefined');
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Escape closes only the dialog (the surrounding menu stays open), focus
+  // goes back to the menuitem that opened it, which is still mounted.
+  useDialogFocus({
+    open: open && mounted,
+    rootRef: dialogRef,
+    initialFocus: () => inputRef.current,
+    onEscape: () => setOpen(false),
+    returnFocusRef: triggerRef,
+    lockScroll: true,
+  });
 
   async function handleScan() {
     const num = parseInt(prNumber, 10);
@@ -70,6 +85,7 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
   return (
     <>
       <button
+        ref={triggerRef}
         onClick={() => {
           setOpen(true);
           setResult(null);
@@ -93,6 +109,7 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
           onClick={() => setOpen(false)}
         >
           <div
+            ref={dialogRef}
             className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4"
             onClick={(e) => e.stopPropagation()}
           >
@@ -102,10 +119,12 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
             </p>
 
             <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">
+              <label htmlFor="pr-scan-modal-input" className="block text-xs font-medium text-gray-400 mb-1.5">
                 {t['prScan.label']}
               </label>
               <input
+                id="pr-scan-modal-input"
+                ref={inputRef}
                 type="number"
                 min={1}
                 value={prNumber}
