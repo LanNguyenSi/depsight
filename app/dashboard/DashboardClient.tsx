@@ -14,6 +14,8 @@ import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
+import { isEscapeKey } from '@/components/dialog-focus';
+import { ActionsMenuTrigger, RepoTabButton } from './DashboardChrome';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 import { scanAllStopMessage } from '@/lib/rate-limit-client';
 import { requestRepoSync } from '@/lib/repo-sync-client';
@@ -192,6 +194,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   // Actions dropdown
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!actionsOpen) return;
     function handleClickOutside(e: MouseEvent) {
@@ -199,8 +202,17 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
         setActionsOpen(false);
       }
     }
+    function handleKey(e: KeyboardEvent) {
+      if (!isEscapeKey(e.key)) return;
+      setActionsOpen(false);
+      actionsButtonRef.current?.focus();
+    }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
   }, [actionsOpen]);
 
   // Scan all repos
@@ -814,6 +826,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
   return (
     <AppShell repoCount={repos.length}>
+      <h1 className="text-lg font-semibold text-white mb-4">{t['nav.dashboard']}</h1>
       <div className="flex flex-col md:flex-row gap-6 items-start">
         {/* Sidebar — repo list */}
         <aside className={`w-full md:w-72 md:shrink-0 md:sticky md:top-20 md:max-h-[calc(100vh-6rem)] flex flex-col ${selectedRepo ? 'hidden md:flex' : 'flex'}`}>
@@ -995,18 +1008,16 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       })}
                   </div>
                   <div className="relative shrink-0" ref={actionsRef}>
-                    <button
+                    <ActionsMenuTrigger
+                      open={actionsOpen}
+                      label={t['dashboard.actions']}
+                      buttonRef={actionsButtonRef}
                       onClick={() => setActionsOpen((v) => !v)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 transition-colors"
-                    >
-                      {t['dashboard.actions']}
-                      <svg viewBox="0 0 20 20" className={`w-3.5 h-3.5 fill-current transition-transform ${actionsOpen ? 'rotate-180' : ''}`}>
-                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
+                    />
                     {actionsOpen && (
-                      <div className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
+                      <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleCveScan(selectedRepo); }}
                           disabled={scanning}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1014,6 +1025,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleLicenseScan(selectedRepo); }}
                           disabled={scanningLicense}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1021,6 +1033,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleDepsScan(selectedRepo); }}
                           disabled={scanningDeps}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1032,12 +1045,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
                         </div>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleSbomDownload(selectedRepo); }}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
                         >
                           {t['dashboard.actions.sbomExport']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleBundleExport(selectedRepo); }}
                           disabled={exportingBundle}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1058,9 +1073,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       key === 'deps' ? depsDetail?.summary.total :
                       scanHistory.length || undefined;
                     return (
-                      <button
+                      <RepoTabButton
                         key={key}
-                        onClick={() => {
+                        active={activeTab === key}
+                        label={label}
+                        count={count}
+                        onSelect={() => {
                           if (key === activeTab) return;
                           handlingUrlChange.current = true;
                           setActiveTab(key);
@@ -1069,17 +1087,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                             : `/dashboard?tab=${key}`;
                           router.replace(url);
                         }}
-                        className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
-                          activeTab === key
-                            ? 'text-blue-400 border-blue-400'
-                            : 'text-gray-500 border-transparent hover:text-gray-300'
-                        }`}
-                      >
-                        {label}
-                        {count !== undefined && count > 0 && (
-                          <span className="ml-1.5 text-gray-600 tabular-nums">{count}</span>
-                        )}
-                      </button>
+                      />
                     );
                   })}
                 </div>

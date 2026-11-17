@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { FOCUSABLE_SELECTOR, isEscapeKey, nextFocusIndex, restoreTarget } from '@/components/dialog-focus';
 
 interface ConfirmModalProps {
   open: boolean;
@@ -25,9 +26,12 @@ export function ConfirmModal({
 }: ConfirmModalProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Autofocus: cancel for destructive dialogs, confirm otherwise.
     if (destructive) {
       cancelRef.current?.focus();
@@ -35,10 +39,35 @@ export function ConfirmModal({
       confirmRef.current?.focus();
     }
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onCancel();
+      if (isEscapeKey(e.key)) {
+        onCancel();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (focusables.length === 0) return;
+      const current =
+        document.activeElement instanceof HTMLElement
+          ? focusables.indexOf(document.activeElement)
+          : -1;
+      const next = nextFocusIndex(current, focusables.length, e.shiftKey);
+      e.preventDefault();
+      focusables[next]?.focus();
     }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      // Return focus to the element that opened the dialog; if it is gone
+      // from the document (the list row re-rendered), fall back to body.
+      const target = restoreTarget(previouslyFocused, previouslyFocused?.isConnected ?? false);
+      if (target) {
+        target.focus();
+      } else {
+        document.body.focus();
+      }
+    };
   }, [open, destructive, onCancel]);
 
   if (!open) return null;
@@ -52,6 +81,7 @@ export function ConfirmModal({
       style={{ animation: 'fadeIn 150ms ease-out' }}
     >
       <div
+        ref={dialogRef}
         className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4"
         style={{ animation: 'scaleIn 150ms ease-out' }}
       >

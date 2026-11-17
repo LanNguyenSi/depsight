@@ -83,6 +83,9 @@
 #                            the hosted file's service; set it empty for the self-hosting
 #                            docker-compose.yml, which has none: the step is skipped, the
 #                            script says so, and you apply the schema yourself)
+#   COMPOSE_GUARD_FORCE      set to 1 or yes to skip the check that the
+#                            stack was created from BACKUP_COMPOSE_FILE (for the rare
+#                            intended case only)
 #   PG_USER / PG_DB          database user and name (default: depsight / depsight); the
 #                            user needs CREATEDB for the scratch database (the compose
 #                            superuser has it), which is created and dropped from the
@@ -96,7 +99,9 @@
 #      be read (nothing committed, database unchanged, app left stopped), or interrupted
 #      before psql confirmed the load (check the database: if only this script was
 #      stopped, psql may have committed)
-#   2  refused: no file, file missing, no --yes, compose file missing, db not running,
+#   2  refused: no file, file missing, no --yes, compose file missing, the
+#      containers of the project were created from another compose file
+#      (scripts/check-running-stack.sh; override COMPOSE_GUARD_FORCE=1), db not running,
 #      psql in the db service not one restore.sh supports
 #   3  the pre-restore dump failed; nothing was changed (use --no-pre-backup to go on)
 #   4  the dump is restored, but the migrate step or the app start failed, or the
@@ -245,6 +250,13 @@ if [ "$confirmed" -ne 1 ]; then
   echo "restore: would replace the content of database '$PG_DB' (compose file $COMPOSE_FILE) with $file." >&2
   refuse "this destroys everything not in the dump, including rows written after it; run again with --yes to proceed"
 fi
+
+# Both production files use the project name depsight, so a stack created from the other
+# compose file is the same project: restoring "into" it would stop its app and replace its
+# database through a file that does not describe it (docs/configuration.md, Which compose
+# file). The helper prints why it refuses; nothing was written or stopped before this point
+# (a restore without --yes already ended above).
+"$SCRIPT_DIR/check-running-stack.sh" "$COMPOSE_FILE" || exit 2
 
 # Work on a private snapshot: the later steps (the scratch load, stopping the app, the
 # pre-restore dump) take time, and the file may be rotated away or truncated in between.
