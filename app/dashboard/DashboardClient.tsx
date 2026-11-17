@@ -1047,7 +1047,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                         </button>
                         <div role="separator" className="border-t border-gray-800 my-1" />
                         <div role="none">
-                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem />
+                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem fallbackFocusRef={actionsButtonRef} />
                         </div>
                         <button
                           role="menuitem"

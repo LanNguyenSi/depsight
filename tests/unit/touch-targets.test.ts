@@ -246,7 +246,7 @@ describe('dashboard controls', () => {
 
   it('keeps the actions menu owning only menu items: the PR scan wrapper and the divider are presentational', () => {
     const menu = src.slice(src.indexOf('<div role="menu"'));
-    expect(menu).toContain('<div role="none">\n                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem />');
+    expect(menu).toContain('<div role="none">\n                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem fallbackFocusRef={actionsButtonRef} />');
     expect(menu).toContain('<div role="separator" className="border-t border-gray-800 my-1" />');
   });
 });
