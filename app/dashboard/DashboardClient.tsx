@@ -826,6 +826,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
   return (
     <AppShell repoCount={repos.length}>
+      <h1 className="text-lg font-semibold text-white mb-4">{t['nav.dashboard']}</h1>
       <div className="flex flex-col md:flex-row gap-6 items-start">
         {/* Sidebar — repo list */}
         <aside className={`w-full md:w-72 md:shrink-0 md:sticky md:top-20 md:max-h-[calc(100vh-6rem)] flex flex-col ${selectedRepo ? 'hidden md:flex' : 'flex'}`}>

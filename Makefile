@@ -14,6 +14,25 @@ DC_DEV = docker compose -p depsight-dev -f docker-compose.dev.yml
 # docs/configuration.md, Self-hosting), so an older install keeps its database volume.
 DC_PROD = docker compose -f docker-compose.yml
 
+# Guard for the targets that act on the production project (prod, prod-down). docker-compose.yml
+# and docker-compose.traefik.yml (the hosted instance's file) both pin `name: depsight`, so on
+# the hosted host they are the SAME project: make prod would recreate the live containers
+# without their Traefik labels and networks (public routes answer 404) and make prod-down would
+# remove them. The helper reads the compose labels Docker recorded on the containers of the
+# project, running or stopped, and refuses, before anything changes, unless they were created
+# from docker-compose.yml (a stack that also uses docker-compose.override.yml passes; a stack
+# whose files include docker-compose.traefik.yml is refused, --other-prod; exit 2).
+# No container, or the same file, passes. FORCE=1 (or yes) on the make command line skips it,
+# for the rare case you mean it: `make prod FORCE=1`; a FORCE in the shell environment is
+# ignored. The same variable is passed on to backup.sh and restore.sh. Recovery after a make
+# prod on the hosted host: docker compose -f docker-compose.traefik.yml up -d
+GUARD_PROD = scripts/check-running-stack.sh --other-prod docker-compose.traefik.yml docker-compose.yml
+ifeq ($(origin FORCE),command line)
+ifneq ($(filter 1 yes,$(FORCE)),)
+export COMPOSE_GUARD_FORCE := 1
+endif
+endif
+
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -42,10 +61,12 @@ dev-clean: ## Stop dev environment and remove volumes
 
 # ── Production (Docker) ─────────────────────────────────────────────
 
-prod: ## Build and start production containers
+prod: ## Build and start production containers (self-hosting file; refuses on the hosted host, see FORCE=1)
+	$(GUARD_PROD)
 	$(DC_PROD) up --build -d
 
-prod-down: ## Stop production containers
+prod-down: ## Stop production containers (self-hosting file; refuses on the hosted host, see FORCE=1)
+	$(GUARD_PROD)
 	$(DC_PROD) down
 
 # ── Backup and restore (hosted stack, docker-compose.traefik.yml; *-selfhost: docker-compose.yml) ───
