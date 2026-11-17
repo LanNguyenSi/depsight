@@ -160,6 +160,8 @@ export function AppShell({ children, repoCount }: AppShellProps) {
               onClick={() => setMenuOpen((v) => !v)}
               className="sm:hidden p-1.5 text-gray-400 hover:text-gray-200 transition-colors"
               aria-label={t['nav.menu']}
+              aria-expanded={menuOpen}
+              aria-controls="mobile-nav"
             >
               <svg viewBox="0 0 20 20" className="w-5 h-5 fill-current">
                 {menuOpen ? (
@@ -173,7 +175,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
         </div>
         {/* Mobile dropdown */}
         {menuOpen && (
-          <div className="sm:hidden border-t border-gray-800 px-4 py-3 space-y-1" style={{ animation: 'slideDown 150ms ease-out' }}>
+          <div id="mobile-nav" className="sm:hidden border-t border-gray-800 px-4 py-3 space-y-1" style={{ animation: 'slideDown 150ms ease-out' }}>
             {NAV_ITEMS.map(({ href, label }) => {
               const active = pathname === href;
               return (
