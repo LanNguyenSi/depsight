@@ -43,6 +43,9 @@ echo "\$*" >> "\$FAKE_DOCKER_LOG"
 case "\$*" in
   # scripts/check-running-stack.sh: the containers of the project (FAKE_IDS, none by
   # default) and the compose labels of each (FAKE_INSPECT_OUT: "<project> <config_files>")
+  # ps -a -q lists every container of the project, ps -q only the running ones (FAKE_IDS);
+  # FAKE_STOPPED_IDS are the stopped ones
+  *" ps -a -q") [ "\${FAKE_PSQ_FAIL:-0}" = 1 ] && exit 1; for id in \${FAKE_IDS:-} \${FAKE_STOPPED_IDS:-}; do echo "\$id"; done; exit 0 ;;
   *" ps -q") [ "\${FAKE_PSQ_FAIL:-0}" = 1 ] && exit 1; for id in \${FAKE_IDS:-}; do echo "\$id"; done; exit 0 ;;
   inspect\ *) [ "\${FAKE_INSPECT_FAIL:-0}" = 1 ] && exit 1; var="FAKE_INSPECT_OUT_\${*: -1}"; printf '%s\n' "\${!var:-\${FAKE_INSPECT_OUT:-}}"; exit 0 ;;
   # make prod / prod-down reach the stub only after the guard let them through
@@ -379,26 +382,29 @@ done
 
 # ---- the compose-file guard (scripts/check-running-stack.sh), on its own, in backup.sh and
 # behind the make targets. The fake docker answers `compose -f <file> ps -q` with FAKE_IDS
-# (default none) and every `docker inspect` with FAKE_INSPECT_OUT ("<project> <files>").
+# (default none, plus the stopped FAKE_STOPPED_IDS) and every `docker inspect` with FAKE_INSPECT_OUT ("<project> <files>").
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 GUARD="$SCRIPT_DIR/check-running-stack.sh"
 SELF_FILE="$WORKDIR/docker-compose.yml"; : > "$SELF_FILE"
 HOSTED_LABEL="depsight /srv/depsight/docker-compose.traefik.yml"
 SELF_LABEL="depsight /srv/depsight/docker-compose.yml"
-# run_guard <file> [VAR=value ...]; sets rc, out_text
+# run_guard [--exact] <file> [VAR=value ...]; sets rc, out_text
 run_guard() {
+  local mode=()
+  if [ "$1" = --exact ]; then mode=(--exact); shift; fi
   local f="$1"; shift
   : > "$FAKE_DOCKER_LOG"
   rc=0
-  out_text="$(env PATH="$FAKE_BIN:$PATH" "$@" "$GUARD" "$f" 2>&1)" || rc=$?
+  # DOCKER_HOST and DOCKER_CONTEXT: a real docker reached by mistake fails closed
+  out_text="$(env PATH="$FAKE_BIN:$PATH" DOCKER_HOST=unix:///nonexistent DOCKER_CONTEXT=default "$@" "$GUARD" ${mode[@]+"${mode[@]}"} "$f" 2>&1)" || rc=$?
 }
 no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
 
-# (p1) no running container: nothing to hit, passes without asking for labels
+# (p1) no container, running or stopped: nothing to hit, passes without asking for labels
 {
   run_guard "$SELF_FILE"
-  if [ "$rc" -eq 0 ] && grep -q "compose -f $SELF_FILE ps -q" "$FAKE_DOCKER_LOG" && no_inspect; then
-    pass "(p1) guard: no running container passes"
+  if [ "$rc" -eq 0 ] && grep -q "compose -f $SELF_FILE ps -a -q" "$FAKE_DOCKER_LOG" && no_inspect; then
+    pass "(p1) guard: no container of the project passes"
   else
     fail "(p1) guard no container: rc=$rc"
   fi
@@ -418,7 +424,7 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
 # and the right command, nothing else is called
 {
   run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
-  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.traefik.yml, not from docker-compose.yml" <<< "$out_text" \
+  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.traefik.yml, not from docker-compose.yml alone" <<< "$out_text" \
     && grep -q "docker compose -f docker-compose.traefik.yml " <<< "$out_text" \
     && [ "$(wc -l < "$FAKE_DOCKER_LOG" | tr -d ' ')" = 2 ]; then
     pass "(p3) guard: stack from the hosted file refused for the self-hosting file (exit 2, names the live file and the command)"
@@ -431,7 +437,7 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
 {
   HOSTED_FILE="$WORKDIR/docker-compose.traefik.yml"; : > "$HOSTED_FILE"
   run_guard "$HOSTED_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
-  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.yml, not from docker-compose.traefik.yml" <<< "$out_text"; then
+  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.yml, not from docker-compose.traefik.yml alone" <<< "$out_text"; then
     pass "(p3b) guard: stack from the self-hosting file refused for the hosted file"
   else
     fail "(p3b) guard reverse mismatch: rc=$rc out=$out_text"
@@ -471,17 +477,23 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
   fi
 }
 
-# (p5b) an empty COMPOSE_GUARD_FORCE is not an override
+# (p5b) only 1 and yes are an override: empty, 0, true and no are not
 {
-  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=
-  if [ "$rc" -eq 2 ]; then
-    pass "(p5b) guard: an empty COMPOSE_GUARD_FORCE does not skip the check"
+  rcs=""
+  for v in "" 0 true no; do
+    run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE="$v"
+    rcs="$rcs$rc"
+  done
+  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=yes
+  if [ "$rcs" = 2222 ] && [ "$rc" -eq 0 ]; then
+    pass "(p5b) guard: COMPOSE_GUARD_FORCE empty, 0, true and no do not skip the check, yes does"
   else
-    fail "(p5b) guard empty override: rc=$rc"
+    fail "(p5b) guard override values: $rcs / yes=$rc"
   fi
 }
 
-# (p6) a label that lists several files matches when the file is one of them
+# (p6) default mode (backup.sh, restore.sh): a label that lists several files matches when
+# the file is one of them, none matching refuses
 {
   run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="depsight /srv/a/docker-compose.override.yml,/srv/b/docker-compose.yml"
   r1=$rc
@@ -490,6 +502,51 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
     pass "(p6) guard: several config files match by base name, none matching refuses"
   else
     fail "(p6) guard several files: $r1/$rc"
+  fi
+}
+
+# (p6b) --exact (make prod, prod-down): the label must list the file and nothing else; a
+# stack created from both production files is refused, the same label passes without --exact
+BOTH_LABEL="depsight /srv/depsight/docker-compose.yml,/srv/depsight/docker-compose.traefik.yml"
+{
+  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL"
+  r1=$rc; o1="$out_text"
+  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL"
+  r2=$rc
+  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
+  r3=$rc
+  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
+  r4=$rc
+  if [ "$r1" -eq 2 ] && grep -q "not from docker-compose.yml alone" <<< "$o1" && [ "$r2" -eq 0 ] && [ "$r3" -eq 0 ] && [ "$r4" -eq 2 ]; then
+    pass "(p6b) guard --exact: both production files refused, the same label passes in default mode, the file alone passes"
+  else
+    fail "(p6b) guard --exact: $r1/$r2/$r3/$r4"
+  fi
+}
+
+# (p6c) the hint names every live file as its own -f, and one file for BACKUP_COMPOSE_FILE
+{
+  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="depsight /srv/a/one.yml,/srv/b/two.yml"
+  o1="$out_text"; r1=$rc
+  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
+  if [ "$r1" -eq 2 ] && grep -q "docker compose -f one.yml -f two.yml <up" <<< "$o1" && ! grep -q "one.yml, two.yml <" <<< "$o1" \
+    && grep -q "take one file" <<< "$o1" && grep -q "BACKUP_COMPOSE_FILE=docker-compose.traefik.yml" <<< "$out_text"; then
+    pass "(p6c) guard: the command hint repeats -f per file and the scripts hint names a single file"
+  else
+    fail "(p6c) guard hint: $o1 // $out_text"
+  fi
+}
+
+# (p6d) a stopped container counts: running ones are none, one stopped container came from
+# the other file
+{
+  run_guard "$SELF_FILE" FAKE_STOPPED_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
+  r1=$rc
+  run_guard "$SELF_FILE" FAKE_STOPPED_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
+  if [ "$r1" -eq 2 ] && [ "$rc" -eq 0 ] && grep -q 'ps -a -q' "$FAKE_DOCKER_LOG"; then
+    pass "(p6d) guard: a stopped container of the other file is refused, one of the same file passes"
+  else
+    fail "(p6d) guard stopped: $r1/$rc"
   fi
 }
 
@@ -529,7 +586,7 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
   d3="$WORKDIR/q3"
   run_backup "$d3" FAKE_IDS="c1" FAKE_INSPECT_OUT="depsight /srv/depsight/docker-compose.traefik.yml" COMPOSE_GUARD_FORCE=1
   r3=$rc
-  if [ "$r1" -eq 2 ] && [ "$no_dump1" = 1 ] && [ ! -d "$d" ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml" <<< "$o1" \
+  if [ "$r1" -eq 2 ] && [ "$no_dump1" = 1 ] && [ ! -d "$d" ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml alone" <<< "$o1" \
     && [ "$r2" -eq 0 ] && [ "$(count_sql "$d2")" = 1 ] \
     && [ "$r3" -eq 0 ] && [ "$(count_sql "$d3")" = 1 ]; then
     pass "(q) backup.sh: stack from another file refused before dumping (exit 2, no directory), same file and the override go on"
@@ -546,13 +603,14 @@ run_make() {
   shift
   : > "$FAKE_DOCKER_LOG"
   rc=0
-  out_text="$(env PATH="$FAKE_BIN:$PATH" ${envs[@]+"${envs[@]}"} make -C "$REPO_DIR" "$@" 2>&1)" || rc=$?
+  # DOCKER_HOST and DOCKER_CONTEXT: a real docker reached by mistake fails closed
+  out_text="$(env PATH="$FAKE_BIN:$PATH" DOCKER_HOST=unix:///nonexistent DOCKER_CONTEXT=default ${envs[@]+"${envs[@]}"} make -C "$REPO_DIR" "$@" 2>&1)" || rc=$?
 }
 sent_up() { grep -q 'compose -f docker-compose.yml up --build -d' "$FAKE_DOCKER_LOG"; }
 sent_down() { grep -q 'compose -f docker-compose.yml down' "$FAKE_DOCKER_LOG"; }
 if command -v make > /dev/null 2>&1; then
   # (r1) nothing running: the guard asks, then prod goes through; prod-down too
-  run_make -- prod; a=$rc; l_ps="$(grep -n 'ps -q' "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true)"; l_up="$(grep -n ' up ' "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true)"
+  run_make -- prod; a=$rc; l_ps="$(grep -n 'ps -a -q' "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true)"; l_up="$(grep -n ' up ' "$FAKE_DOCKER_LOG" | head -1 | cut -d: -f1 || true)"
   run_make -- prod-down; b=$rc
   if [ "$a" -eq 0 ] && [ "$b" -eq 0 ] && [ -n "$l_ps" ] && [ -n "$l_up" ] && [ "$l_ps" -lt "$l_up" ] && sent_down; then
     pass "(r1) make prod and prod-down: nothing running passes, the guard runs before docker compose"
@@ -577,14 +635,34 @@ if command -v make > /dev/null 2>&1; then
     fail "(r3) make hosted stack: $a/$b up=$up_a down=$dn_b"
   fi
   # (r4) the override: FORCE=1 and FORCE=yes skip the guard; FORCE=0 and an empty FORCE do not
-  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod FORCE=1; a=$rc; up_a=0; sent_up && up_a=1; asked_a=0; grep -q 'ps -q' "$FAKE_DOCKER_LOG" && asked_a=1
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod FORCE=1; a=$rc; up_a=0; sent_up && up_a=1; asked_a=0; grep -q 'ps -a -q' "$FAKE_DOCKER_LOG" && asked_a=1
   run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod-down FORCE=yes; b=$rc; dn_b=0; sent_down && dn_b=1
   run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod FORCE=0; c=$rc
   run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod FORCE=; d=$rc
-  if [ "$a" -eq 0 ] && [ "$up_a" = 1 ] && [ "$asked_a" = 0 ] && [ "$b" -eq 0 ] && [ "$dn_b" = 1 ] && [ "$c" -ne 0 ] && [ "$d" -ne 0 ]; then
-    pass "(r4) make FORCE=1 and FORCE=yes skip the guard; FORCE=0 and an empty FORCE do not"
+  # FORCE from the shell environment is not an override, only FORCE on the command line is
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" FORCE=1 -- prod; e=$rc; up_e=0; sent_up && up_e=1
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" FORCE=1 -- prod-down; f=$rc; dn_f=0; sent_down && dn_f=1
+  # COMPOSE_GUARD_FORCE=0 in the environment is not an override either; =1 is
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=0 -- prod; g=$rc
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=1 -- prod; h=$rc
+  if [ "$a" -eq 0 ] && [ "$up_a" = 1 ] && [ "$asked_a" = 0 ] && [ "$b" -eq 0 ] && [ "$dn_b" = 1 ] && [ "$c" -ne 0 ] && [ "$d" -ne 0 ] \
+    && [ "$e" -ne 0 ] && [ "$up_e" = 0 ] && [ "$f" -ne 0 ] && [ "$dn_f" = 0 ] && [ "$g" -ne 0 ] && [ "$h" -eq 0 ]; then
+    pass "(r4) make FORCE=1 and FORCE=yes on the command line skip the guard; FORCE=0, an empty FORCE and FORCE in the shell environment do not; COMPOSE_GUARD_FORCE=0 does not, =1 does"
   else
-    fail "(r4) make FORCE: $a/$b/$c/$d up=$up_a down=$dn_b asked=$asked_a"
+    fail "(r4) make FORCE: $a/$b/$c/$d/$e/$f/$g/$h up=$up_a down=$dn_b asked=$asked_a env=$up_e/$dn_f"
+  fi
+  # (r6) a stopped container of the hosted stack: prod and prod-down are refused too, and so is
+  # a stack created from both production files; a stopped container of the same file passes
+  run_make FAKE_STOPPED_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod; a=$rc; up_a=0; sent_up && up_a=1
+  run_make FAKE_STOPPED_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- prod-down; b=$rc; dn_b=0; sent_down && dn_b=1
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$BOTH_LABEL" -- prod; c=$rc; up_c=0; sent_up && up_c=1
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$BOTH_LABEL" -- prod-down; d=$rc; dn_d=0; sent_down && dn_d=1
+  run_make FAKE_STOPPED_IDS=c1 FAKE_INSPECT_OUT="depsight /srv/depsight/docker-compose.yml" -- prod; e=$rc
+  if [ "$a" -ne 0 ] && [ "$up_a" = 0 ] && [ "$b" -ne 0 ] && [ "$dn_b" = 0 ] \
+    && [ "$c" -ne 0 ] && [ "$up_c" = 0 ] && [ "$d" -ne 0 ] && [ "$dn_d" = 0 ] && [ "$e" -eq 0 ]; then
+    pass "(r6) make prod and prod-down: a stopped hosted container and a stack from both files are refused, a stopped container of docker-compose.yml passes"
+  else
+    fail "(r6) make stopped/both: $a/$b/$c/$d/$e up=$up_a/$up_c down=$dn_b/$dn_d"
   fi
   # (r5) make backup passes the guard on to backup.sh: refused on a mismatch, FORCE=1 goes on
   run_make BACKUP_DIR="$WORKDIR/r5a" FAKE_IDS=c1 FAKE_INSPECT_OUT="$SELF_LABEL" -- backup; a=$rc; dir_a=0; [ -d "$WORKDIR/r5a" ] && dir_a=1

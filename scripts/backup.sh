@@ -45,7 +45,7 @@
 #   0  dump written and validated (hook, if set, succeeded; rotation done)
 #   1  pg_dump failed or the dump failed validation (nothing published)
 #   2  refused before dumping: bad configuration, BACKUP_DIR inside the checkout but
-#      outside backups/, compose file missing, the running containers of the project
+#      outside backups/, compose file missing, the containers of the project
 #      were created from another compose file (scripts/check-running-stack.sh; override
 #      COMPOSE_GUARD_FORCE=1), or the db service is not running
 #   3  dump is published and valid, but the off-host hook failed (rotation is

@@ -63,6 +63,7 @@ sentinel() { [ "$1" = 1 ] || sed -n 's/^\\echo //p' "$2" | tail -n 1; }
 case "$*" in
   # scripts/check-running-stack.sh: the containers of the project (FAKE_IDS, none by
   # default) and their compose labels (FAKE_INSPECT_OUT: "<project> <config_files>")
+  *" ps -a -q") for id in ${FAKE_IDS:-} ${FAKE_STOPPED_IDS:-}; do echo "$id"; done; exit 0 ;;
   *" ps -q") for id in ${FAKE_IDS:-}; do echo "$id"; done; exit 0 ;;
   inspect\ *) printf '%s\n' "${FAKE_INSPECT_OUT:-}"; exit 0 ;;
   *" ps "*) [ "${FAKE_PS_FAIL:-0}" = 1 ] && exit 1; printf '%s\n' ${FAKE_RUNNING:-app db}; exit 0 ;;
@@ -1045,8 +1046,8 @@ REAL_LOAD='*ON_ERROR_STOP=1 -U depsight -d depsight'
   run_restore FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=1 -- --yes "$DUMP"
   r4=$rc; ok4=0; asked4=0
   if stdin_is_reset_plus_dump; then ok4=1; fi
-  if grep -q -E ' ps -q$|^inspect ' "$FAKE_DOCKER_LOG"; then asked4=1; fi
-  if [ "$r1" -eq 2 ] && [ "$clean1" = 1 ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml" <<< "$o1" \
+  if grep -q -E ' ps -a -q$|^inspect ' "$FAKE_DOCKER_LOG"; then asked4=1; fi
+  if [ "$r1" -eq 2 ] && [ "$clean1" = 1 ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml alone" <<< "$o1" \
     && [ "$r2" -eq 2 ] && [ "$clean2" = 1 ] && grep -q "has no com.docker.compose.project.config_files label" <<< "$o2" \
     && [ "$r3" -eq 0 ] && [ "$ok3" = 1 ] \
     && [ "$r4" -eq 0 ] && [ "$ok4" = 1 ] && [ "$asked4" = 0 ]; then

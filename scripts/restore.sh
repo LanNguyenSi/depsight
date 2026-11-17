@@ -99,7 +99,7 @@
 #      be read (nothing committed, database unchanged, app left stopped), or interrupted
 #      before psql confirmed the load (check the database: if only this script was
 #      stopped, psql may have committed)
-#   2  refused: no file, file missing, no --yes, compose file missing, the running
+#   2  refused: no file, file missing, no --yes, compose file missing, the
 #      containers of the project were created from another compose file
 #      (scripts/check-running-stack.sh; override COMPOSE_GUARD_FORCE=1), db not running,
 #      psql in the db service not one restore.sh supports
