@@ -61,6 +61,10 @@ if [ -n "${FAKE_KILL_ON:-}" ]; then
 fi
 sentinel() { [ "$1" = 1 ] || sed -n 's/^\\echo //p' "$2" | tail -n 1; }
 case "$*" in
+  # scripts/check-running-stack.sh: the containers of the project (FAKE_IDS, none by
+  # default) and their compose labels (FAKE_INSPECT_OUT: "<project> <config_files>")
+  *" ps -q") for id in ${FAKE_IDS:-}; do echo "$id"; done; exit 0 ;;
+  inspect\ *) printf '%s\n' "${FAKE_INSPECT_OUT:-}"; exit 0 ;;
   *" ps "*) [ "${FAKE_PS_FAIL:-0}" = 1 ] && exit 1; printf '%s\n' ${FAKE_RUNNING:-app db}; exit 0 ;;
   *" exec "*pg_dump*)
     [ "${FAKE_PGDUMP_FAIL:-0}" = 1 ] && { echo "pg_dump: fatal error" >&2; exit 1; }
@@ -1018,6 +1022,37 @@ REAL_LOAD='*ON_ERROR_STOP=1 -U depsight -d depsight'
     pass "(sh2) BACKUP_COMPOSE_FILE: unset and empty use the hosted file, a set value wins everywhere"
   else
     fail "(sh2) compose file precedence: rc=$c1/$c2/$c3 used=[$f1] [$f2] [$f3]"
+  fi
+}
+
+# (gd) the compose-file guard (scripts/check-running-stack.sh): the stack that runs must have
+# been created from the compose file the restore is pointed at (compose.yml here)
+{
+  HOSTED_LABEL="depsight /srv/depsight/docker-compose.traefik.yml"
+  # mismatch: exit 2 before anything is copied, stopped or loaded
+  run_restore FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" -- --yes "$DUMP"
+  r1=$rc; o1="$out_text"; clean1=0
+  if no_db_calls && no_real_changes && [ ! -d "$BACKUPS" ] && no_tmp_left; then clean1=1; fi
+  # a label without a config file: refused as well
+  run_restore FAKE_IDS=c1 FAKE_INSPECT_OUT="depsight " -- --yes "$DUMP"
+  r2=$rc; o2="$out_text"; clean2=0
+  if no_db_calls && no_real_changes && [ ! -d "$BACKUPS" ]; then clean2=1; fi
+  # the same file: restored as usual
+  run_restore FAKE_IDS=c1 FAKE_INSPECT_OUT="depsight /srv/depsight/compose.yml" -- --yes "$DUMP"
+  r3=$rc; ok3=0
+  if stdin_is_reset_plus_dump; then ok3=1; fi
+  # the override: a mismatch does not stop it, and the check does not even ask docker
+  run_restore FAKE_IDS=c1 FAKE_INSPECT_OUT="$HOSTED_LABEL" COMPOSE_GUARD_FORCE=1 -- --yes "$DUMP"
+  r4=$rc; ok4=0; asked4=0
+  if stdin_is_reset_plus_dump; then ok4=1; fi
+  if grep -q -E ' ps -q$|^inspect ' "$FAKE_DOCKER_LOG"; then asked4=1; fi
+  if [ "$r1" -eq 2 ] && [ "$clean1" = 1 ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml" <<< "$o1" \
+    && [ "$r2" -eq 2 ] && [ "$clean2" = 1 ] && grep -q "has no com.docker.compose.project.config_files label" <<< "$o2" \
+    && [ "$r3" -eq 0 ] && [ "$ok3" = 1 ] \
+    && [ "$r4" -eq 0 ] && [ "$ok4" = 1 ] && [ "$asked4" = 0 ]; then
+    pass "(gd) compose guard: another file's stack and an unlabelled one refused before anything changes (exit 2), same file and COMPOSE_GUARD_FORCE restore"
+  else
+    fail "(gd) compose guard: rc=$r1/$r2/$r3/$r4 clean=$clean1/$clean2 ok=$ok3/$ok4 asked=$asked4 out=$o1"
   fi
 }
 
