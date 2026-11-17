@@ -198,6 +198,11 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   useEffect(() => {
     if (!actionsOpen) return;
     function handleClickOutside(e: MouseEvent) {
+      const target = e.target as Element | null;
+      // The PR-scan modal renders through a portal to document.body, so its
+      // own clicks are outside the menu in the DOM. They must not dismiss the
+      // menu: dismissing it unmounts the modal row (and with it the modal).
+      if (target?.closest?.('[data-pr-scan-portal]')) return;
       if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
         setActionsOpen(false);
       }
@@ -1217,7 +1222,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           type="button"
                           onClick={() => void handleSync()}
                           disabled={syncing}
-                          className="mt-2 text-xs font-medium px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white transition-colors"
+                          className="mt-2 text-xs font-medium px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white transition-colors"
                         >
                           {syncing ? t['dashboard.syncing'] : t['dashboard.ci.noData.sync']}
                         </button>
@@ -1260,7 +1265,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
               <button
                 onClick={() => void handleEnableAllAndScan()}
                 disabled={enablingAll}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 {enablingAll ? t['dashboard.dependabot.enabling.progress'] : t['dashboard.dependabot.enableAll']}
               </button>

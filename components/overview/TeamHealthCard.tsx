@@ -37,7 +37,7 @@ export function TeamHealthCard({ aggregate }: TeamHealthCardProps) {
           <p className="text-xs text-gray-400 mb-4">{t['overview.noScans.hint']}</p>
           <a
             href="/dashboard"
-            className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
+            className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
           >
             {t['overview.noScans.action']}
           </a>

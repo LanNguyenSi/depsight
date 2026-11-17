@@ -406,7 +406,7 @@ export function SettingsClient() {
             <button
               type="submit"
               disabled={creating}
-              className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {creating ? t['token.creating'] : t['token.create']}
             </button>
@@ -528,7 +528,7 @@ export function SettingsClient() {
             <button
               type="submit"
               disabled={webhookCreating}
-              className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+              className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {webhookCreating ? t['settings.webhooks.creating'] : t['settings.webhooks.create']}
             </button>
@@ -641,7 +641,7 @@ export function SettingsClient() {
               <button
                 type="submit"
                 disabled={slackSaving}
-                className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                className="px-3 py-1.5 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 {slackSaving ? t['settings.slack.saving'] : t['settings.slack.save']}
               </button>

@@ -237,6 +237,7 @@ const de = {
   'deps.col.age': 'Alter',
   'deps.col.status': 'Status',
   'deps.empty': 'Keine Abhängigkeiten gefunden.',
+  'deps.tableScrollLabel': 'Abhängigkeiten, seitlich scrollbar',
 
   // License
   'license.title': 'Lizenz-Übersicht',
@@ -245,6 +246,7 @@ const de = {
   'license.violations': 'Copyleft-Konflikte',
   'license.review': 'Review empfohlen',
   'license.compatible': 'Kompatibel ({count})',
+  'license.compatibleScrollLabel': 'Kompatible Pakete, scrollbar',
 
   // Risk Timeline
   'timeline.title': 'Risiko-Verlauf',
@@ -643,6 +645,7 @@ const en = {
   'deps.col.age': 'Age',
   'deps.col.status': 'Status',
   'deps.empty': 'No dependencies found.',
+  'deps.tableScrollLabel': 'Dependencies, scrollable to the right',
 
   // License
   'license.title': 'License Overview',
@@ -651,6 +654,7 @@ const en = {
   'license.violations': 'Copyleft Conflicts',
   'license.review': 'Review recommended',
   'license.compatible': 'Compatible ({count})',
+  'license.compatibleScrollLabel': 'Compatible packages, scrollable',
 
   // Risk Timeline
   'timeline.title': 'Risk Timeline',

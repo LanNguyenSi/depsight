@@ -145,7 +145,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
           <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">
             {interpolate(t['license.compatible'], { count: filteredCompatible.length })}
           </h4>
-          <div className="space-y-1 max-h-64 overflow-y-auto">
+          <div className="space-y-1 max-h-64 overflow-y-auto" role="region" aria-label={t['license.compatibleScrollLabel']} tabIndex={0}>
             {filteredCompatible.map((l) => (
               <LicenseRow key={l.id} entry={l} />
             ))}

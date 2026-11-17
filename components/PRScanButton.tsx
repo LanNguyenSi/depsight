@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocale, interpolate } from '@/lib/i18n';
 
 interface PRScanButtonProps {
@@ -28,6 +29,12 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The trigger renders as a row of a `role="menu"` popup, so the modal is
+  // portaled to document.body: an inline overlay would become a menu child
+  // and break aria-required-children. Never on the server (document.body
+  // does not exist there); the modal only ever opens on click, by which
+  // time the client has mounted.
+  const [mounted] = useState(() => typeof window !== 'undefined');
 
   async function handleScan() {
     const num = parseInt(prNumber, 10);
@@ -74,8 +81,14 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
         {t['prScan.button']}
       </button>
 
-      {open && (
+      {open &&
+        mounted &&
+        createPortal(
         <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pr-scan-modal-title"
+          data-pr-scan-portal
           className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
           onClick={() => setOpen(false)}
         >
@@ -83,7 +96,7 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
             className="bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6 w-full max-w-md mx-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-base font-semibold text-white mb-1">{t['prScan.title']}</h3>
+            <h3 id="pr-scan-modal-title" className="text-base font-semibold text-white mb-1">{t['prScan.title']}</h3>
             <p className="text-sm text-gray-400 mb-4">
               {interpolate(t['prScan.desc'], { owner, repo })}
             </p>
@@ -144,14 +157,15 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
               <button
                 onClick={() => void handleScan()}
                 disabled={loading || !prNumber}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 {loading ? t['prScan.scanning'] : t['prScan.start']}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
