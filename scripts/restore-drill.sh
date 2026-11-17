@@ -62,7 +62,7 @@ cat > "$WORK/bin/docker" <<SHIM
 if [ "\$1" = compose ] && [ "\$2" = -f ]; then
   shift 3
   case "\$1" in
-    ps) echo db; exit 0 ;;
+    ps) case " \$* " in *" -q "*) ;; *) echo db ;; esac; exit 0 ;;  # ps -q, any other flags (scripts/check-running-stack.sh): no container ids, the stack has no compose labels
     exec)
       shift
       [ "\$1" = -T ] && shift
