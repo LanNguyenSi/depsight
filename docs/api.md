@@ -203,7 +203,7 @@ Each delivery is a `POST` with the JSON body and these headers:
 - `X-depsight-Event: <event>`
 - `X-depsight-Signature: sha256=<hex>`, only when the webhook has a secret: the HMAC-SHA256 of the raw request body under that secret. To verify, compute the same HMAC over the raw body as received and compare it in constant time.
 
-The URL must be a public `http(s)` target: it is checked when the webhook is created and again at every delivery, and a non-public target is not called. Each event is delivered once; a failed delivery is not retried. A delivery is also bounded because the receiver is user-controlled: a response body over 1 MiB, or a request (connect, headers and body together) that takes longer than 15 seconds, is aborted and counts as a failed delivery.
+The URL must be a public `http(s)` target: it is checked when the webhook is created and again at every delivery, and a non-public target is not called. Each event is delivered once; a failed delivery is not retried. A delivery is also bounded because the receiver is user-controlled: a response body over 1 MiB, or a request (host name lookup, connect, headers and body together) that takes longer than 15 seconds, is aborted and counts as a failed delivery.
 
 ## MCP server
 

@@ -109,7 +109,10 @@ function isBlockedIp(ip: string): boolean {
  * Validate that `input` is a safe public http(s) URL and return its resolved
  * public IP addresses. Throws SsrfBlockedError on any violation.
  */
-export async function assertPublicUrl(input: string): Promise<{ url: URL; addresses: string[] }> {
+export async function assertPublicUrl(
+  input: string,
+  options?: { dnsTimeoutMs?: number },
+): Promise<{ url: URL; addresses: string[] }> {
   let url: URL;
   try {
     url = new URL(input);
@@ -141,12 +144,38 @@ export async function assertPublicUrl(input: string): Promise<{ url: URL; addres
     return { url, addresses: [hostname] };
   }
 
+  // The host is user-controlled, so its resolver may answer slowly. The lookup
+  // is raced against a fixed bound and a miss rejects with SafeFetchLimitError.
+  //
+  // Trade-off, chosen deliberately: dns.lookup (getaddrinfo on the 4-thread
+  // libuv pool) is kept instead of a dns.Resolver (c-ares, no pool thread),
+  // because getaddrinfo honours /etc/hosts and nsswitch, which a deployment may
+  // rely on, and a Resolver would silently change what a hostname resolves to.
+  // The cost: the race frees the delivery, not the thread. An abandoned
+  // getaddrinfo call keeps its pool slot until the system resolver gives up
+  // (resolv.conf timeout and attempts); nothing here cancels it. What the bound
+  // guarantees is that no delivery waits on it, or retains anything for it,
+  // beyond dnsTimeoutMs.
+  const dnsTimeoutMs = options?.dnsTimeoutMs ?? SAFE_FETCH_TIMEOUT_MS;
+  let timer: NodeJS.Timeout | undefined;
   let resolved: string[];
   try {
-    const records = await dns.lookup(hostname, { all: true });
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new SafeFetchLimitError('timeout', `DNS lookup timed out after ${dnsTimeoutMs} ms`),
+          ),
+        dnsTimeoutMs,
+      );
+    });
+    const records = await Promise.race([dns.lookup(hostname, { all: true }), timeout]);
     resolved = records.map((r) => r.address);
-  } catch {
+  } catch (err) {
+    if (err instanceof SafeFetchLimitError) throw err;
     throw new SsrfBlockedError('Could not resolve URL host');
+  } finally {
+    clearTimeout(timer);
   }
 
   if (resolved.length === 0) {
@@ -229,9 +258,10 @@ export class SafeFetchLimitError extends Error {
  *
  * The target is user-controlled, so the exchange is bounded: the response body
  * may not exceed `maxResponseBytes` and the whole request (connect, headers,
- * body) may not take longer than `timeoutMs`. Either limit rejects with a
- * SafeFetchLimitError and destroys the socket, so a receiver that streams
- * forever or trickles bytes cannot pin a socket or memory.
+ * body, plus the DNS lookup before them) may not take longer than
+ * `timeoutMs`. Either limit rejects with a SafeFetchLimitError and destroys
+ * the socket, so a receiver that streams forever or trickles bytes cannot pin
+ * a socket or memory.
  */
 export function safeFetch(
   input: string,
@@ -240,7 +270,11 @@ export function safeFetch(
 ): Promise<Response> {
   const maxResponseBytes = limits?.maxResponseBytes ?? SAFE_FETCH_MAX_RESPONSE_BYTES;
   const timeoutMs = limits?.timeoutMs ?? SAFE_FETCH_TIMEOUT_MS;
-  return assertPublicUrl(input).then(({ url, addresses }) => {
+  // One budget for the whole delivery: the DNS lookup counts against `timeoutMs`
+  // and the request timer below only gets what is left of it.
+  const startedAt = Date.now();
+  return assertPublicUrl(input, { dnsTimeoutMs: timeoutMs }).then(({ url, addresses }) => {
+    const requestTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
     const transport = url.protocol === 'https:' ? https : http;
     const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
 
@@ -327,7 +361,7 @@ export function safeFetch(
       // Armed once the request exists; every settle path clears it.
       const timer = setTimeout(() => {
         fail(new SafeFetchLimitError('timeout', `Request timed out after ${timeoutMs} ms`));
-      }, timeoutMs);
+      }, requestTimeoutMs);
       req.on('error', (err) => {
         if (!settle()) return;
         reject(err);
