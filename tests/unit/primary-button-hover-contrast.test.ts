@@ -5,7 +5,7 @@
 // `hover:bg-blue-500`, so the class cannot come back. Opacity-modified
 // variants (`hover:bg-blue-500/30`) are not solid white-on-blue surfaces
 // and are out of scope, hence the negative lookahead for `/`. The same
-// holds for the destructive button: white on red-500 (#fb2c36, 3.7:1) fails
+// holds for the destructive button: white on red-500 (#fb2c36, 3.8:1) fails
 // AA, red-700 (about 6.4:1) passes, so `hover:bg-red-500` is forbidden too.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';

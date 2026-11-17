@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -61,5 +63,13 @@ describe('ConfirmModal markup', () => {
     expect(tag).toContain('bg-blue-600');
     expect(tag).toContain('hover:bg-blue-700');
     expect(tag).not.toContain('red');
+  });
+
+  // Autofocus runs only in a browser. initialFocusTarget is unit-tested in
+  // dialog-focus.test.ts; pin that the component maps its answer to the
+  // right button, so a swap cannot make Enter confirm a deletion.
+  it('maps the destructive focus target to the cancel button', () => {
+    const source = readFileSync(resolve(__dirname, '../../components/ConfirmModal.tsx'), 'utf8');
+    expect(source).toContain("initialFocusTarget(destructive) === 'cancel' ? cancelRef.current : confirmRef.current");
   });
 });

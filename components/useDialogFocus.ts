@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type RefObject } from 'react';
-import { FOCUSABLE_SELECTOR, isEscapeKey, nextFocusIndex, returnFocusTarget } from '@/components/dialog-focus';
+import { FOCUSABLE_SELECTOR, handleDialogKey, lockBodyScroll, returnFocusTarget } from '@/components/dialog-focus';
 
 interface UseDialogFocusOptions {
   open: boolean;
@@ -17,6 +17,12 @@ interface UseDialogFocusOptions {
    * trigger cannot always be read from `document.activeElement`).
    */
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /**
+   * Persistent element to focus when the opener is gone on close (the menu
+   * button of a menu whose item opened the dialog), tried before the
+   * element that had focus at open time.
+   */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   /** Hide body scroll while open and restore the previous value on close and unmount. */
   lockScroll?: boolean;
 }
@@ -32,6 +38,7 @@ export function useDialogFocus({
   initialFocus,
   onEscape,
   returnFocusRef,
+  fallbackFocusRef,
   lockScroll = false,
 }: UseDialogFocusOptions): void {
   // Latest callbacks without re-running the effect (and re-stealing focus)
@@ -48,43 +55,32 @@ export function useDialogFocus({
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const opener = returnFocusRef?.current ?? null;
-    const previousOverflow = document.body.style.overflow;
-    if (lockScroll) document.body.style.overflow = 'hidden';
+    const fallback = fallbackFocusRef?.current ?? null;
+    const restoreScroll = lockScroll ? lockBodyScroll(document.body.style) : null;
     initialFocusRef.current()?.focus();
 
     function onKeyDown(e: KeyboardEvent) {
-      if (isEscapeKey(e.key)) {
-        e.stopPropagation();
-        onEscapeRef.current();
-        return;
-      }
-      if (e.key !== 'Tab') return;
       const root = rootRef.current;
-      if (!root) return;
-      const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (focusables.length === 0) return;
-      const current =
-        document.activeElement instanceof HTMLElement
-          ? focusables.indexOf(document.activeElement)
-          : -1;
-      const next = nextFocusIndex(current, focusables.length, e.shiftKey);
-      e.preventDefault();
-      focusables[next]?.focus();
+      handleDialogKey(e, {
+        focusables: root ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [],
+        active: document.activeElement,
+        onEscape: () => onEscapeRef.current(),
+      });
     }
     // Capture phase on window runs before the document-level listeners of
     // the page, so stopPropagation keeps an Escape from reaching them.
     window.addEventListener('keydown', onKeyDown, true);
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
-      if (lockScroll) document.body.style.overflow = previousOverflow;
+      restoreScroll?.();
       // Return focus to the opener; if it is gone from the document (the
       // list row re-rendered), fall back to body.
-      const target = returnFocusTarget(opener, previouslyFocused);
+      const target = returnFocusTarget(opener, previouslyFocused, fallback);
       if (target) {
         target.focus();
       } else {
         document.body.focus();
       }
     };
-  }, [open, lockScroll, rootRef, returnFocusRef]);
+  }, [open, lockScroll, rootRef, returnFocusRef, fallbackFocusRef]);
 }

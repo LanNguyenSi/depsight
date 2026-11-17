@@ -29,16 +29,27 @@ describe('PRScanButton', () => {
     expect(source).toContain('lockScroll: true');
     expect(source).toContain('returnFocusRef: triggerRef');
     expect(source).toContain('initialFocus: () => inputRef.current');
+    // The hook is on only while the dialog is rendered; `open: false` would disable it.
+    expect(source).toContain('open: open && mounted,');
+    expect(source).toContain('fallbackFocusRef,');
   });
 
-  // Same limits as above for the hook: the Escape and scroll-lock branches
-  // only run in a browser, so pin the calls that implement them.
-  it('the shared hook consumes Escape in the capture phase and restores the previous overflow', () => {
+  // Same limits as above for the hook: it runs only in a browser, so pin
+  // that it calls the shared decision functions (their branches are tested
+  // in dialog-focus.test.ts) and the listener and overflow plumbing.
+  it('the shared hook delegates to the decision functions and keeps the listener plumbing', () => {
     const hook = readFileSync(resolve(__dirname, '../../components/useDialogFocus.ts'), 'utf8');
-    expect(hook).toContain('e.stopPropagation()');
+    expect(hook).toContain('handleDialogKey(e, {');
+    expect(hook).toContain('onEscape: () => onEscapeRef.current()');
+    expect(hook).toContain('lockScroll ? lockBodyScroll(document.body.style) : null');
+    expect(hook).toContain('restoreScroll?.()');
+    expect(hook).toContain('returnFocusTarget(opener, previouslyFocused, fallback)');
     expect(hook).toContain("window.addEventListener('keydown', onKeyDown, true)");
     expect(hook).toContain("window.removeEventListener('keydown', onKeyDown, true)");
-    expect(hook).toContain('document.body.style.overflow = previousOverflow');
-    expect(hook).toContain('const previousOverflow = document.body.style.overflow');
+  });
+
+  it('the dashboard hands the actions menu button to the dialog as the fallback focus target', () => {
+    const src = readFileSync(resolve(__dirname, '../../app/dashboard/DashboardClient.tsx'), 'utf8');
+    expect(src).toContain('menuItem fallbackFocusRef={actionsButtonRef}');
   });
 });

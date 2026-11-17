@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocale, interpolate } from '@/lib/i18n';
 import { useDialogFocus } from '@/components/useDialogFocus';
@@ -10,6 +10,8 @@ interface PRScanButtonProps {
   repo: string;
   /** Render the trigger as a row of the surrounding `role="menu"` (same look as its siblings). */
   menuItem?: boolean;
+  /** Focus target on close when the menuitem is gone (the menu's own button). */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
 }
 
 const BUTTON_CLASS =
@@ -23,7 +25,7 @@ interface ScanResult {
   commentUrl: string | null;
 }
 
-export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProps) {
+export function PRScanButton({ owner, repo, menuItem = false, fallbackFocusRef }: PRScanButtonProps) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [prNumber, setPrNumber] = useState('');
@@ -48,6 +50,7 @@ export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProp
     initialFocus: () => inputRef.current,
     onEscape: () => setOpen(false),
     returnFocusRef: triggerRef,
+    fallbackFocusRef,
     lockScroll: true,
   });
 

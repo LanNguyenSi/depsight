@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
+import { initialFocusTarget } from '@/components/dialog-focus';
 import { useDialogFocus } from '@/components/useDialogFocus';
 
 interface ConfirmModalProps {
@@ -32,7 +33,7 @@ export function ConfirmModal({
   useDialogFocus({
     open,
     rootRef: dialogRef,
-    initialFocus: () => (destructive ? cancelRef.current : confirmRef.current),
+    initialFocus: () => (initialFocusTarget(destructive) === 'cancel' ? cancelRef.current : confirmRef.current),
     onEscape: onCancel,
   });
 
