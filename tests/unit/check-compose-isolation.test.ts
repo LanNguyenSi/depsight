@@ -1114,9 +1114,10 @@ describeIfCompose('check-compose-isolation guard', () => {
       });
     });
 
-    // `make prod` runs docker compose without -f: compose prefers a compose.yaml over
+    // A docker compose command without -f (typed by hand or written in a script; the make
+    // prod and make prod-down targets pin -f docker-compose.yml) prefers a compose.yaml over
     // docker-compose.yml and merges an override file over it, and the guard reads neither.
-    describe('compose files that docker compose reads without -f', () => {
+    describe('compose files that a docker compose command without -f prefers or merges', () => {
       const IMPLICIT = [
         'compose.yaml',
         'compose.yml',
@@ -1132,7 +1133,7 @@ describeIfCompose('check-compose-isolation guard', () => {
         fs.writeFileSync(path.join(dir, name), 'services: {}\n');
         const result = runGuard(dir);
         expectFailure(result, name, [
-          'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
+          'exists in the repo root: docker compose without -f (a command typed by hand or written in a script; the make prod and make prod-down targets pin -f docker-compose.yml) prefers or merges it, and this check never reads it',
         ]);
         expect(result.stderr).toContain('compose isolation check failed (1)');
       });
@@ -1140,7 +1141,7 @@ describeIfCompose('check-compose-isolation guard', () => {
 
     describe('implicit compose files that a plain existence test misses', () => {
       const message =
-        'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it';
+        'exists in the repo root: docker compose without -f (a command typed by hand or written in a script; the make prod and make prod-down targets pin -f docker-compose.yml) prefers or merges it, and this check never reads it';
 
       it('fails on a dangling symlink named like an override file', () => {
         const dir = fixture(null);
