@@ -13,7 +13,8 @@
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
 //
 // It also fails when a compose.y(a)ml, docker-compose.yaml or an override file sits in the
-// repo root, because docker compose without -f (make prod) prefers or merges them.
+// repo root, because a docker compose command without -f (typed by hand or in a script; the
+// make prod and make prod-down targets pin -f docker-compose.yml) prefers or merges them.
 //
 // It resolves each file with `docker compose config --format json`, so it judges the
 // same document Docker would run, interpolation included, and a second time with
@@ -51,7 +52,9 @@ const SENTINEL = 'sentinel-pw-0f3a';
 const SENTINEL_PROJECT = 'guard-sentinel-project';
 // What `docker compose` without -f reads from the working directory, in the order
 // it looks (compose.yaml before docker-compose.yml, and an override merged over the
-// result). `make prod` runs it that way, so none of them may exist next to the shipped files.
+// result). A `docker compose` command typed by hand or written in a script runs it that
+// way (the make prod and make prod-down targets pin `-f docker-compose.yml`), so none of
+// them may exist next to the shipped files.
 const IMPLICIT_COMPOSE_FILES = [
   'compose.yaml',
   'compose.yml',
@@ -640,10 +643,11 @@ makefile.split('\n').forEach((line, index) => {
   }
 });
 
-// `make prod` runs docker compose without -f: a compose.yaml (preferred over
-// docker-compose.yml) or an override file (merged over it) in the repo root decides what
-// runs and is never read by this check. Failing on their presence is the choice over
-// checking them: no shipped target needs one. The directory is listed once and compared in
+// A `docker compose` command without -f (typed by hand or written in a script; the make prod
+// and make prod-down targets pin `-f docker-compose.yml`) reads a compose.yaml (preferred over
+// docker-compose.yml) or an override file (merged over it) from the repo root, so one there
+// decides what runs and is never read by this check. Failing on their presence is the choice
+// over checking them: no shipped target needs one. The directory is listed once and compared in
 // lower case, so a dangling symlink (existsSync would follow it and say no) and a case
 // variant (Docker-Compose.Override.yml, which compose merges on a case-insensitive
 // filesystem) are found too; the entry is named as found.
@@ -652,7 +656,7 @@ for (const entry of readdirSync(dir)) {
   if (implicit.has(entry.toLowerCase())) {
     fail(
       entry,
-      'exists in the repo root: docker compose without -f (make prod) prefers or merges it, and this check never reads it',
+      'exists in the repo root: docker compose without -f (a command typed by hand or written in a script; the make prod and make prod-down targets pin -f docker-compose.yml) prefers or merges it, and this check never reads it',
     );
   }
 }
