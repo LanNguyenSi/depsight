@@ -278,7 +278,7 @@ const FLOOR_ALLOWLIST = [
   {
     file: 'components/AppShell.tsx',
     contains: "t['user.menu']",
-    reason: 'user menu button: avatar plus py-1, measured 32 px high',
+    reason: 'user menu button: avatar plus py-1, measured 34 px high',
   },
   {
     file: 'components/AppShell.tsx',
@@ -349,7 +349,12 @@ describe('every interactive element has a 24 px floor (generic scan)', () => {
   });
 
   it('gives every button, link and select a floor class or an allowlist entry', () => {
-    expect(tags.filter((t) => !FLOOR.test(t.text) && !allowed(t)).map((t) => t.where)).toEqual([]);
+    const offenders = tags.filter((t) => !FLOOR.test(t.text) && !allowed(t)).map((t) => t.where);
+    expect(
+      offenders,
+      'these controls have no 24 px floor class: add min-h-6 (or h-6/size-6 or larger, or py-1.5 or larger) to the tag, ' +
+        'or add a FLOOR_ALLOWLIST entry with the size you measured in the browser',
+    ).toEqual([]);
   });
 
   it('has no stale allowlist entry (each one matches exactly one tag without a floor class)', () => {
