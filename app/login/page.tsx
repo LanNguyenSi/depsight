@@ -15,7 +15,7 @@ export default async function LoginPage() {
     process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-950">
+    <main className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 w-full max-w-sm overflow-y-auto max-h-[90vh]">
         <div className="text-center mb-8">
           <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center mx-auto mb-4">
@@ -93,6 +93,6 @@ export default async function LoginPage() {
           </Link>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

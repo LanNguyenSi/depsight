@@ -116,7 +116,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
       <div className="px-4 py-3 border-b border-gray-800">
         <h3 className="text-sm font-medium text-gray-400">{t['overview.repoComparison']}</h3>
       </div>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" role="region" aria-label={t['overview.comparisonScrollLabel']} tabIndex={0}>
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>
@@ -204,6 +204,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
           </div>
         )}
       </div>
+      <p className="px-4 py-2 text-xs text-gray-500 sm:hidden">{t['overview.scrollHint']}</p>
       {repos.length > PAGE_SIZE && (
         <div className="px-4 py-3 border-t border-gray-800">
           <Pagination
