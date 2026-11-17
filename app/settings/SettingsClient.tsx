@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { useLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
@@ -38,6 +38,12 @@ const LOCALES: Locale[] = ['de', 'en'];
 
 export function SettingsClient() {
   const { t, locale, setLocale } = useLocale();
+  const webhookNameId = useId();
+  const webhookUrlId = useId();
+  const webhookSecretId = useId();
+  const slackUrlId = useId();
+  const slackChannelId = useId();
+  const slackSeverityId = useId();
 
   // --- API tokens state ---
   const [tokens, setTokens] = useState<TokenRow[]>([]);
@@ -378,11 +384,12 @@ export function SettingsClient() {
           )}
 
           {/* Create form */}
-          <form onSubmit={createToken} className="flex gap-2">
+          <form onSubmit={createToken} className="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              aria-label={t['token.nameLabel']}
               placeholder={t['token.namePlaceholder']}
               maxLength={100}
               className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none"
@@ -463,8 +470,9 @@ export function SettingsClient() {
           <form onSubmit={createWebhook} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className={labelCls}>{t['settings.webhooks.name']}</label>
+                <label htmlFor={webhookNameId} className={labelCls}>{t['settings.webhooks.name']}</label>
                 <input
+                  id={webhookNameId}
                   type="text"
                   value={webhookName}
                   onChange={(e) => setWebhookName(e.target.value)}
@@ -474,8 +482,9 @@ export function SettingsClient() {
                 />
               </div>
               <div>
-                <label className={labelCls}>{t['settings.webhooks.url']}</label>
+                <label htmlFor={webhookUrlId} className={labelCls}>{t['settings.webhooks.url']}</label>
                 <input
+                  id={webhookUrlId}
                   type="url"
                   value={webhookUrl}
                   onChange={(e) => setWebhookUrl(e.target.value)}
@@ -485,8 +494,9 @@ export function SettingsClient() {
               </div>
             </div>
             <div>
-              <label className={labelCls}>{t['settings.webhooks.secret']}</label>
+              <label htmlFor={webhookSecretId} className={labelCls}>{t['settings.webhooks.secret']}</label>
               <input
+                id={webhookSecretId}
                 type="password"
                 value={webhookSecret}
                 onChange={(e) => setWebhookSecret(e.target.value)}
@@ -580,8 +590,9 @@ export function SettingsClient() {
 
           <form onSubmit={saveSlack} className="space-y-3">
             <div>
-              <label className={labelCls}>{t['settings.slack.webhookUrl']}</label>
+              <label htmlFor={slackUrlId} className={labelCls}>{t['settings.slack.webhookUrl']}</label>
               <input
+                id={slackUrlId}
                 type="url"
                 value={slackWebhookUrl}
                 onChange={(e) => setSlackWebhookUrl(e.target.value)}
@@ -590,8 +601,9 @@ export function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelCls}>{t['settings.slack.channel']}</label>
+              <label htmlFor={slackChannelId} className={labelCls}>{t['settings.slack.channel']}</label>
               <input
+                id={slackChannelId}
                 type="text"
                 value={slackChannel}
                 onChange={(e) => setSlackChannel(e.target.value)}
@@ -600,8 +612,9 @@ export function SettingsClient() {
               />
             </div>
             <div>
-              <label className={labelCls}>{t['settings.slack.minSeverity']}</label>
+              <label htmlFor={slackSeverityId} className={labelCls}>{t['settings.slack.minSeverity']}</label>
               <select
+                id={slackSeverityId}
                 value={slackMinSeverity}
                 onChange={(e) =>
                   setSlackMinSeverity(e.target.value as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW')

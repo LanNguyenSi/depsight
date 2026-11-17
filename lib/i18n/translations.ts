@@ -68,6 +68,7 @@ const de = {
   'settings.slack.saveError': 'Slack-Konfiguration konnte nicht gespeichert werden.',
   'settings.slack.removeError': 'Slack-Konfiguration konnte nicht entfernt werden.',
   'settings.slack.loadError': 'Slack-Konfiguration konnte nicht geladen werden.',
+  'token.nameLabel': 'Token-Name',
   'token.namePlaceholder': 'Name (z. B. claude-desktop)',
   'token.scope': 'Berechtigung',
   'token.scopeRead': 'Nur lesen',
@@ -308,6 +309,9 @@ const de = {
   'policy.error.save': 'Fehler beim Speichern',
   'policy.error.unknown': 'Unbekannter Fehler',
   'policy.delete': 'Löschen',
+  'policy.enable': 'Aktivieren',
+  'policy.disable': 'Deaktivieren',
+  'policy.toggleLabel': 'Policy {name} aktivieren oder deaktivieren',
 
   // Overview
   'overview.teamHealth': 'Team Health Overview',
@@ -342,6 +346,7 @@ const de = {
   'ci.health.title': 'CI Health',
   'ci.health.sync': 'Sync',
   'ci.health.syncing': 'Synchronisiere…',
+  'ci.health.period': 'Zeitraum',
   'ci.health.period.1d': 'Letzter Tag',
   'ci.health.period.7d': 'Letzte 7 Tage',
   'ci.health.period.30d': 'Letzte 30 Tage',
@@ -467,6 +472,7 @@ const en = {
   'settings.slack.saveError': 'Could not save Slack config.',
   'settings.slack.removeError': 'Could not remove Slack config.',
   'settings.slack.loadError': 'Could not load Slack config.',
+  'token.nameLabel': 'Token name',
   'token.namePlaceholder': 'Name (e.g. claude-desktop)',
   'token.scope': 'Scope',
   'token.scopeRead': 'Read only',
@@ -707,6 +713,9 @@ const en = {
   'policy.error.save': 'Failed to save',
   'policy.error.unknown': 'Unknown error',
   'policy.delete': 'Delete',
+  'policy.enable': 'Enable',
+  'policy.disable': 'Disable',
+  'policy.toggleLabel': 'Enable or disable policy {name}',
 
   // Overview
   'overview.teamHealth': 'Team Health Overview',
@@ -741,6 +750,7 @@ const en = {
   'ci.health.title': 'CI Health',
   'ci.health.sync': 'Sync',
   'ci.health.syncing': 'Syncing…',
+  'ci.health.period': 'Period',
   'ci.health.period.1d': 'Last day',
   'ci.health.period.7d': 'Last 7 days',
   'ci.health.period.30d': 'Last 30 days',
