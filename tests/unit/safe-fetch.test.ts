@@ -7,7 +7,7 @@
 // and trailing ']' before the literal-IP check. The "literal bracketed IPv6"
 // describe block below exercises that synchronous branch directly, with no
 // DNS mock involved — a DNS lookup there would indicate the strip regressed.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,13 @@ vi.mock('https', () => {
 // ---------------------------------------------------------------------------
 // Imports AFTER mocks
 // ---------------------------------------------------------------------------
-import { assertPublicUrl, safeFetch, SsrfBlockedError, pinnedLookup } from '@/lib/net/safe-fetch';
+import {
+  assertPublicUrl,
+  safeFetch,
+  SsrfBlockedError,
+  SafeFetchLimitError,
+  pinnedLookup,
+} from '@/lib/net/safe-fetch';
 
 // ---------------------------------------------------------------------------
 // Helpers — fake HTTP response/request for transport tests
@@ -550,5 +556,145 @@ describe('pinnedLookup — DNS-pinning behaviour (exercised via safeFetch)', () 
       lookup('example.com', { all: true }, (_e, a) => resolve(a));
     });
     expect(addrs).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DNS lookup bound (stub resolver, fake timers, no network)
+// ---------------------------------------------------------------------------
+describe('DNS lookup bound', () => {
+  beforeEach(() => {
+    dnsLookupMock.mockReset();
+    httpRequestMock.mockReset();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Capture the settled outcome without leaving a rejection unhandled. */
+  function track<T>(p: Promise<T>): { outcome: () => { ok: boolean; value: unknown } | null } {
+    let out: { ok: boolean; value: unknown } | null = null;
+    p.then(
+      (value) => (out = { ok: true, value }),
+      (value) => (out = { ok: false, value }),
+    );
+    return { outcome: () => out };
+  }
+
+  it('assertPublicUrl rejects with a SafeFetchLimitError of kind timeout when the resolver never answers', async () => {
+    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const t = track(assertPublicUrl('https://slow.example', { dnsTimeoutMs: 500 }));
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(t.outcome()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const out = t.outcome();
+    expect(out?.ok).toBe(false);
+    expect(out?.value).toBeInstanceOf(SafeFetchLimitError);
+    expect((out?.value as SafeFetchLimitError).kind).toBe('timeout');
+    expect(out?.value).not.toBeInstanceOf(SsrfBlockedError);
+    expect((out?.value as Error).message).toBe('DNS lookup timed out after 500 ms');
+  });
+
+  it('assertPublicUrl bounds the lookup at the 15 s default when no bound is given', async () => {
+    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const t = track(assertPublicUrl('https://slow.example'));
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(t.outcome()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.outcome()?.value).toBeInstanceOf(SafeFetchLimitError);
+  });
+
+  it('safeFetch fails within its timeout budget on a resolver that never answers, and never dials', async () => {
+    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const t = track(safeFetch('https://slow.example/hook', undefined, { timeoutMs: 800 }));
+
+    await vi.advanceTimersByTimeAsync(800);
+
+    const out = t.outcome();
+    expect(out?.ok).toBe(false);
+    expect(out?.value).toBeInstanceOf(SafeFetchLimitError);
+    expect((out?.value as SafeFetchLimitError).kind).toBe('timeout');
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('defaults the bound to the 15 s total when no limit is given', async () => {
+    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const t = track(safeFetch('https://slow.example/hook'));
+
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(t.outcome()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.outcome()?.value).toBeInstanceOf(SafeFetchLimitError);
+  });
+
+  it('the lookup time counts against the total: the request timer only gets the remainder', async () => {
+    dnsLookupMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve([{ address: '93.184.216.34', family: 4 }]), 600),
+        ),
+    );
+    const req = new EventEmitter() as EventEmitter & {
+      write: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+      destroy: ReturnType<typeof vi.fn>;
+    };
+    req.write = vi.fn();
+    req.end = vi.fn();
+    req.destroy = vi.fn();
+    httpsRequestMock.mockReturnValue(req); // connects, never answers
+
+    const t = track(safeFetch('https://slow.example/hook', undefined, { timeoutMs: 1000 }));
+
+    await vi.advanceTimersByTimeAsync(600);
+    expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(399);
+    expect(t.outcome()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const out = t.outcome();
+    expect(out?.ok).toBe(false);
+    expect((out?.value as SafeFetchLimitError).kind).toBe('timeout');
+    expect((out?.value as Error).message).toBe('Request timed out after 1000 ms');
+    expect(req.destroy).toHaveBeenCalled();
+  });
+
+  it('normal resolution is unchanged and leaves no pending timer behind', async () => {
+    dnsLookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+
+    const result = await assertPublicUrl('https://example.com', { dnsTimeoutMs: 500 });
+
+    expect(result.addresses).toEqual(['93.184.216.34']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a resolver error inside the bound is still a SsrfBlockedError, not a limit error', async () => {
+    dnsLookupMock.mockRejectedValue(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
+
+    const p = assertPublicUrl('https://example.invalid', { dnsTimeoutMs: 500 });
+    await expect(p).rejects.toBeInstanceOf(SsrfBlockedError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('IP-literal hosts are still blocked synchronously, without a lookup or a timer', async () => {
+    await expect(assertPublicUrl('http://127.0.0.1/', { dnsTimeoutMs: 500 })).rejects.toBeInstanceOf(
+      SsrfBlockedError,
+    );
+    expect(dnsLookupMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a hostname resolving to a private address is still blocked after a slow-but-in-time lookup', async () => {
+    dnsLookupMock.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve([{ address: '10.0.0.1', family: 4 }]), 100)),
+    );
+    const p = assertPublicUrl('https://rebind.example', { dnsTimeoutMs: 500 });
+    const t = track(p);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(t.outcome()?.value).toBeInstanceOf(SsrfBlockedError);
   });
 });
