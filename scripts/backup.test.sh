@@ -536,10 +536,14 @@ OVERRIDE_LABEL="depsight /srv/depsight/docker-compose.yml,/srv/depsight/docker-c
   rc=0; out_text="$(env PATH="$FAKE_BIN:$PATH" "$GUARD" --other-prod 2>&1)" || rc=$?
   r1=$rc
   rc=0; out_text="$(env PATH="$FAKE_BIN:$PATH" "$GUARD" --other-prod "$SELF_FILE" 2>&1)" || rc=$?
-  if [ "$r1" -eq 2 ] && [ "$rc" -eq 2 ]; then
-    pass "(p6b2) guard: --other-prod without a file name or without a compose file refuses"
+  r2=$rc
+  # an empty name must not silently fall back to default mode (which would let a
+  # stack from both production files pass)
+  rc=0; out_text="$(env PATH="$FAKE_BIN:$PATH" DOCKER_HOST=unix:///nonexistent DOCKER_CONTEXT=default FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL" "$GUARD" --other-prod "" "$SELF_FILE" 2>&1)" || rc=$?
+  if [ "$r1" -eq 2 ] && [ "$r2" -eq 2 ] && [ "$rc" -eq 2 ] && grep -q "usage:" <<< "$out_text"; then
+    pass "(p6b2) guard: --other-prod without a file name, with an empty name or without a compose file refuses"
   else
-    fail "(p6b2) guard --other-prod usage: $r1/$rc"
+    fail "(p6b2) guard --other-prod usage: $r1/$r2/$rc $out_text"
   fi
 }
 
