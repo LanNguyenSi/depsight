@@ -24,7 +24,7 @@ export default async function LoginPage() {
             </svg>
           </div>
           <h1 className="text-xl font-bold text-white">depsight</h1>
-          <p className="text-gray-500 text-sm mt-1">{t['login.subtitle']}</p>
+          <p className="text-gray-400 text-sm mt-1">{t['login.subtitle']}</p>
         </div>
         <div className="space-y-4">
           {hasGitHub && (
@@ -51,7 +51,7 @@ export default async function LoginPage() {
                 <div className="w-full border-t border-gray-800" />
               </div>
               <div className="relative flex justify-center text-xs">
-                <span className="px-2 bg-gray-900 text-gray-600">{t['login.dev.separator']}</span>
+                <span className="px-2 bg-gray-900 text-gray-400">{t['login.dev.separator']}</span>
               </div>
             </div>
           )}
@@ -76,7 +76,7 @@ export default async function LoginPage() {
                 type="text"
                 placeholder="dev"
                 defaultValue="dev"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-white text-sm placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors"
               />
               <button
                 type="submit"
@@ -88,7 +88,7 @@ export default async function LoginPage() {
           )}
         </div>
         <div className="mt-6 text-center">
-          <Link href="/" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+          <Link href="/" className="inline-flex items-center min-h-6 text-xs text-gray-400 hover:text-gray-200 transition-colors">
             {t['login.back']}
           </Link>
         </div>

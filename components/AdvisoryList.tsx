@@ -49,7 +49,11 @@ const SEVERITY_CHIP_STYLES: Record<FilterSeverity, string> = {
 
 // Neutral badge, matching the existing UNKNOWN/status tag styling elsewhere
 // (SeverityBadge, DependencyTable) — source is informational, not a risk axis.
-const SOURCE_BADGE_STYLE = 'text-gray-500 bg-gray-800 border-gray-700';
+const SOURCE_BADGE_STYLE = 'text-gray-400 bg-gray-800 border-gray-700';
+
+// A filter chip that is switched off: muted by colour, not by opacity, so its
+// label keeps the contrast of regular secondary text.
+const INACTIVE_CHIP_STYLE = 'text-gray-400 bg-gray-900 border-gray-700';
 
 export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
   const { t } = useLocale();
@@ -124,9 +128,9 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
 
   if (advisories.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
+      <div className="text-center py-8 text-gray-400">
         <p className="text-sm font-medium text-emerald-400">{t['advisory.empty']}</p>
-        <p className="text-xs mt-1 text-gray-600">{t['advisory.emptyDesc']}</p>
+        <p className="text-xs mt-1 text-gray-400">{t['advisory.emptyDesc']}</p>
       </div>
     );
   }
@@ -141,7 +145,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
             <button
               key={s}
               onClick={() => toggleSeverity(s)}
-              className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-medium transition-opacity ${SEVERITY_CHIP_STYLES[s]} ${active ? '' : 'opacity-30'}`}
+              className={`inline-flex items-center min-h-6 px-2 rounded border text-[10px] font-medium transition-colors ${active ? SEVERITY_CHIP_STYLES[s] : INACTIVE_CHIP_STYLE}`}
             >
               {severityLabel(s)}
             </button>
@@ -151,7 +155,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
           <button
             onClick={() => setHideIgnored((v) => !v)}
             aria-pressed={hideIgnored}
-            className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-medium text-gray-400 bg-gray-900 border-gray-700 transition-opacity ${hideIgnored ? '' : 'opacity-50'}`}
+            className={`inline-flex items-center min-h-6 px-2 rounded border text-[10px] font-medium transition-colors ${hideIgnored ? 'text-gray-200 bg-gray-800 border-gray-600' : INACTIVE_CHIP_STYLE}`}
           >
             {t['advisory.hideIgnored']}
           </button>
@@ -161,7 +165,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t['filter.search']}
-          className="ml-auto min-w-0 w-48 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-600 transition-colors"
+          className="ml-auto min-w-0 w-48 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1 text-xs text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-600 transition-colors"
         />
       </div>
 
@@ -173,7 +177,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
 
       {/* Results */}
       {filtered.length === 0 ? (
-        <div className="text-center py-8 text-gray-600 text-sm">{t['filter.noMatches']}</div>
+        <div className="text-center py-8 text-gray-400 text-sm">{t['filter.noMatches']}</div>
       ) : (
         <div className="space-y-2">
           {filtered.map((advisory) => {
@@ -182,7 +186,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
             return (
             <div
               key={advisory.id}
-              className={`bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-700 transition-colors ${state?.status === 'IGNORED' ? 'opacity-50' : ''}`}
+              className={`bg-gray-900 rounded-lg border border-gray-800 p-4 hover:border-gray-700 transition-colors ${state?.status === 'IGNORED' ? 'border-dashed' : ''}`}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -194,7 +198,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                       {sourceLabel(advisory.source)}
                     </span>
                     <span className="font-mono text-sm text-gray-300">{advisory.packageName}</span>
-                    <span className="text-xs text-gray-600">{advisory.ecosystem}</span>
+                    <span className="text-xs text-gray-400">{advisory.ecosystem}</span>
                     {state && (
                       <span
                         title={[
@@ -213,13 +217,13 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                     )}
                   </div>
                   <p className="mt-1.5 text-sm text-gray-400 line-clamp-2">{advisory.summary}</p>
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
                     {advisory.cveId && <span>{advisory.cveId}</span>}
-                    <span className="text-gray-700">{advisory.ghsaId}</span>
+                    <span className="text-gray-400">{advisory.ghsaId}</span>
                     {advisory.vulnerableRange && (
                       <span>
                         {t['advisory.affected']}{' '}
-                        <span className="text-gray-500">{advisory.vulnerableRange}</span>
+                        <span className="text-gray-400">{advisory.vulnerableRange}</span>
                       </span>
                     )}
                     {advisory.fixedVersion && (
@@ -235,7 +239,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                       href={advisory.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                      className="inline-flex items-center min-h-6 text-xs text-blue-400 hover:text-blue-300 transition-colors"
                     >
                       {t['advisory.details']}
                     </a>
@@ -246,7 +250,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                         <button
                           disabled={pending}
                           onClick={() => changeState(advisory, 'ACKNOWLEDGED')}
-                          className="text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors"
+                          className="inline-flex items-center min-h-6 px-1 text-gray-400 hover:text-gray-300 disabled:opacity-40 transition-colors"
                         >
                           {t['advisory.action.acknowledge']}
                         </button>
@@ -255,7 +259,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                         <button
                           disabled={pending}
                           onClick={() => changeState(advisory, 'IGNORED')}
-                          className="text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors"
+                          className="inline-flex items-center min-h-6 px-1 text-gray-400 hover:text-gray-300 disabled:opacity-40 transition-colors"
                         >
                           {t['advisory.action.ignore']}
                         </button>
@@ -264,7 +268,7 @@ export function AdvisoryList({ advisories, repoId }: AdvisoryListProps) {
                         <button
                           disabled={pending}
                           onClick={() => changeState(advisory, null)}
-                          className="text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors"
+                          className="inline-flex items-center min-h-6 px-1 text-gray-400 hover:text-gray-300 disabled:opacity-40 transition-colors"
                         >
                           {t['advisory.action.reopen']}
                         </button>

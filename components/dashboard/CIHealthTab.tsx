@@ -139,7 +139,7 @@ export function CIHealthTab({ repoId }: Props) {
             value={period}
             onChange={(e) => setPeriod(parseInt(e.target.value) as Period)}
             aria-label={t['ci.health.period']}
-            className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300"
+            className="min-h-6 text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300"
           >
             <option value={1}>{t['ci.health.period.1d']}</option>
             <option value={7}>{t['ci.health.period.7d']}</option>
@@ -148,7 +148,7 @@ export function CIHealthTab({ repoId }: Props) {
           <button
             onClick={() => void handleSync()}
             disabled={syncing}
-            className="text-xs px-3 py-1 rounded bg-blue-600/20 text-blue-400 border border-blue-600/40 hover:bg-blue-600/30 transition-colors disabled:opacity-50"
+            className="min-h-6 text-xs px-3 py-1 rounded bg-blue-600/20 text-blue-400 border border-blue-600/40 hover:bg-blue-600/30 transition-colors disabled:opacity-50"
           >
             {syncing ? t['ci.health.syncing'] : t['ci.health.sync']}
           </button>
@@ -162,13 +162,13 @@ export function CIHealthTab({ repoId }: Props) {
       )}
 
       {loading && (
-        <div className="py-8 text-center text-xs text-gray-500">{t['ci.health.loading']}</div>
+        <div className="py-8 text-center text-xs text-gray-400">{t['ci.health.loading']}</div>
       )}
 
       {!loading && analytics && analytics.failRates.length === 0 && (
         <div className="py-8 text-center">
-          <p className="text-sm text-gray-500">{t['ci.health.empty']}</p>
-          <p className="text-xs text-gray-600 mt-1">
+          <p className="text-sm text-gray-400">{t['ci.health.empty']}</p>
+          <p className="text-xs text-gray-400 mt-1">
             {t['ci.health.empty.hint']}
           </p>
         </div>
@@ -179,19 +179,19 @@ export function CIHealthTab({ repoId }: Props) {
           {/* Summary row */}
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
-              <div className="text-xs text-gray-500 mb-1">{t['ci.health.failRate']}</div>
+              <div className="text-xs text-gray-400 mb-1">{t['ci.health.failRate']}</div>
               <div className={`text-lg font-bold ${overallFailRate > 20 ? 'text-red-400' : overallFailRate > 10 ? 'text-yellow-400' : 'text-green-400'}`}>
                 {isNaN(overallFailRate) ? '—' : `${Math.round(overallFailRate * 10) / 10}%`}
               </div>
             </div>
             <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
-              <div className="text-xs text-gray-500 mb-1">{t['ci.health.buildTimeP50']}</div>
+              <div className="text-xs text-gray-400 mb-1">{t['ci.health.buildTimeP50']}</div>
               <div className="text-lg font-bold text-gray-200">
                 {formatDuration(avgBuildTime)}
               </div>
             </div>
             <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
-              <div className="text-xs text-gray-500 mb-1">{t['ci.health.flakyJobs']}</div>
+              <div className="text-xs text-gray-400 mb-1">{t['ci.health.flakyJobs']}</div>
               <div className={`text-lg font-bold ${flakyCount > 0 ? 'text-yellow-400' : 'text-green-400'}`}>
                 {flakyCount}
               </div>
@@ -200,7 +200,7 @@ export function CIHealthTab({ repoId }: Props) {
 
           {/* Workflows */}
           <div>
-            <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">{t['ci.health.workflows']}</div>
+            <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">{t['ci.health.workflows']}</div>
             <div className="space-y-1">
               {analytics.failRates.map((wf) => {
                 const bt = analytics.buildTimes.find((b) => b.workflowId === wf.workflowId);
@@ -212,10 +212,10 @@ export function CIHealthTab({ repoId }: Props) {
                     <span className={`text-xs tabular-nums ${wf.failRatePct > 20 ? 'text-red-400' : wf.failRatePct > 10 ? 'text-yellow-400' : 'text-gray-400'}`}>
                       {interpolate(t['ci.health.failPct'], { pct: wf.failRatePct })}
                     </span>
-                    <span className="text-xs tabular-nums text-gray-500">
+                    <span className="text-xs tabular-nums text-gray-400">
                       P50: {formatDuration(bt?.overall.p50 ?? null)}
                     </span>
-                    <span className="text-xs tabular-nums text-gray-600">
+                    <span className="text-xs tabular-nums text-gray-400">
                       P95: {formatDuration(bt?.overall.p95 ?? null)}
                     </span>
                   </div>
@@ -234,8 +234,8 @@ export function CIHealthTab({ repoId }: Props) {
                 {analytics.flakyJobs.map((job, i) => (
                   <div key={i} className="flex items-center gap-2 py-1.5 text-xs">
                     <span className="text-yellow-400 font-mono">{job.jobName}</span>
-                    <span className="text-gray-600">({job.workflowName})</span>
-                    <span className="text-gray-500 ml-auto">
+                    <span className="text-gray-400">({job.workflowName})</span>
+                    <span className="text-gray-400 ml-auto">
                       {job.signal === 'sha-retry'
                         ? interpolate(t['ci.health.shaRetry'], { count: job.shaRetryCount })
                         : interpolate(t['ci.health.flakyFailPct'], { pct: job.failRatePct })}

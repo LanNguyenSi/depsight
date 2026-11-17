@@ -28,13 +28,13 @@ export function ForkScanSelect({ row, forksDefault, busy, labels, onChange }: Pr
   const state = forkControlState(row);
   return (
     <>
-      <label className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+      <label className="mt-1 flex max-w-full flex-col items-start gap-1.5 text-xs text-gray-400 sm:flex-row sm:items-center">
         <span>{labels.title}</span>
         <select
           value={row.scanForks === null ? 'default' : String(row.scanForks)}
           disabled={busy || state.selectDisabled}
           onChange={(e) => onChange(e.target.value === 'default' ? null : e.target.value === 'true')}
-          className="rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
+          className="min-h-6 min-w-0 max-w-full rounded border border-gray-800 bg-gray-950 px-1.5 py-0.5 text-xs text-gray-300 disabled:opacity-50"
         >
           <option value="default">{forksDefault ? labels.defaultOn : labels.defaultOff}</option>
           <option value="true" disabled={state.scanDisabled}>
@@ -44,7 +44,7 @@ export function ForkScanSelect({ row, forksDefault, busy, labels, onChange }: Pr
         </select>
       </label>
       {state.note === 'publicScanIgnored' && <div className="text-xs text-amber-400">{labels.publicNote}</div>}
-      {state.note === 'noSecret' && <div className="text-xs text-gray-600">{labels.noSecretNote}</div>}
+      {state.note === 'noSecret' && <div className="text-xs text-gray-400">{labels.noSecretNote}</div>}
     </>
   );
 }

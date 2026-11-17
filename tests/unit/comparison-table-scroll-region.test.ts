@@ -37,8 +37,8 @@ describe('RepoComparisonTable scroll region', () => {
 
   it('shows a more-columns hint that is hidden from the sm breakpoint up', () => {
     const de = render('de');
-    expect(de).toContain('<p class="px-4 py-2 text-xs text-gray-500 sm:hidden">Mehr Spalten durch seitliches Scrollen.</p>');
+    expect(de).toContain('<p class="px-4 py-2 text-xs text-gray-400 sm:hidden">Mehr Spalten durch seitliches Scrollen.</p>');
     const en = render('en');
-    expect(en).toContain('<p class="px-4 py-2 text-xs text-gray-500 sm:hidden">Scroll right to see more columns.</p>');
+    expect(en).toContain('<p class="px-4 py-2 text-xs text-gray-400 sm:hidden">Scroll right to see more columns.</p>');
   });
 });

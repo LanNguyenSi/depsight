@@ -6,7 +6,14 @@ import { useLocale, interpolate } from '@/lib/i18n';
 interface PRScanButtonProps {
   owner: string;
   repo: string;
+  /** Render the trigger as a row of the surrounding `role="menu"` (same look as its siblings). */
+  menuItem?: boolean;
 }
+
+const BUTTON_CLASS =
+  'px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700';
+const MENU_ITEM_CLASS =
+  'w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors';
 
 interface ScanResult {
   commented: boolean;
@@ -14,7 +21,7 @@ interface ScanResult {
   commentUrl: string | null;
 }
 
-export function PRScanButton({ owner, repo }: PRScanButtonProps) {
+export function PRScanButton({ owner, repo, menuItem = false }: PRScanButtonProps) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [prNumber, setPrNumber] = useState('');
@@ -61,7 +68,8 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
           setResult(null);
           setError(null);
         }}
-        className="px-3 py-1.5 bg-gray-800 text-gray-300 text-xs font-medium rounded-md hover:bg-gray-700 transition-colors border border-gray-700"
+        role={menuItem ? 'menuitem' : undefined}
+        className={menuItem ? MENU_ITEM_CLASS : BUTTON_CLASS}
       >
         {t['prScan.button']}
       </button>
@@ -76,7 +84,7 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-base font-semibold text-white mb-1">{t['prScan.title']}</h3>
-            <p className="text-sm text-gray-500 mb-4">
+            <p className="text-sm text-gray-400 mb-4">
               {interpolate(t['prScan.desc'], { owner, repo })}
             </p>
 
@@ -90,7 +98,7 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
                 value={prNumber}
                 onChange={(e) => setPrNumber(e.target.value)}
                 placeholder={t['prScan.placeholder']}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors"
                 onKeyDown={(e) => e.key === 'Enter' && void handleScan()}
               />
             </div>
@@ -113,13 +121,13 @@ export function PRScanButton({ owner, repo }: PRScanButtonProps) {
                     href={result.commentUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 text-xs mt-1 block transition-colors"
+                    className="text-blue-400 hover:text-blue-300 text-xs mt-1 flex items-center min-h-6 transition-colors"
                   >
                     {t['prScan.viewComment']}
                   </a>
                 )}
                 {!result.commented && (
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-gray-400 mt-1">
                     {t['prScan.noComment']}
                   </p>
                 )}

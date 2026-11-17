@@ -25,12 +25,12 @@ export function RepoTabButton({
       className={`px-4 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
         active
           ? 'text-blue-400 border-blue-400'
-          : 'text-gray-500 border-transparent hover:text-gray-300'
+          : 'text-gray-400 border-transparent hover:text-gray-300'
       }`}
     >
       {label}
       {count !== undefined && count > 0 && (
-        <span className="ml-1.5 text-gray-600 tabular-nums">{count}</span>
+        <span className="ml-1.5 text-gray-400 tabular-nums">{count}</span>
       )}
     </button>
   );

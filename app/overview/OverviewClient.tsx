@@ -133,7 +133,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
                     className="w-full flex items-center justify-between py-1.5 px-2 -mx-2 rounded hover:bg-gray-800/50 transition-colors text-left"
                   >
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-600 w-4 tabular-nums">{i + 1}.</span>
+                      <span className="text-xs text-gray-400 w-4 tabular-nums">{i + 1}.</span>
                       <span className="text-sm text-gray-300 truncate max-w-[180px]">{repo.fullName}</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -164,7 +164,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
                       className="w-full flex items-center justify-between py-1.5 px-2 -mx-2 rounded hover:bg-gray-800/50 transition-colors text-left"
                     >
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-600 w-4 tabular-nums">{i + 1}.</span>
+                        <span className="text-xs text-gray-400 w-4 tabular-nums">{i + 1}.</span>
                         <span className="text-sm text-gray-300 truncate max-w-[180px]">{repo.fullName}</span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -174,13 +174,13 @@ export function OverviewClient({ data }: OverviewClientProps) {
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <span className="text-xs text-gray-500 w-8 text-right tabular-nums">{pct}%</span>
+                        <span className="text-xs text-gray-400 w-8 text-right tabular-nums">{pct}%</span>
                       </div>
                     </button>
                   );
                 })}
                 {mostOutdated.length === 0 && (
-                  <p className="text-sm text-gray-600">{t['overview.noDepsScans']}</p>
+                  <p className="text-sm text-gray-400">{t['overview.noDepsScans']}</p>
                 )}
               </div>
             </div>

@@ -31,7 +31,7 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
 
   if (history.length === 0) {
     return (
-      <div className="flex items-center justify-center h-32 text-gray-600 text-sm">
+      <div className="flex items-center justify-center h-32 text-gray-400 text-sm">
         {t['timeline.empty']}
       </div>
     );
@@ -83,7 +83,7 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
                   <div className="font-medium text-gray-300 mb-1.5">{d.fullDate}</div>
                   <div className="space-y-1">
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">{t['timeline.riskScore']}</span>
+                      <span className="text-gray-400">{t['timeline.riskScore']}</span>
                       <span className={`font-bold tabular-nums ${
                         d.riskScore >= 70 ? 'text-red-400' :
                         d.riskScore >= 40 ? 'text-orange-400' :
@@ -91,15 +91,15 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
                       }`}>{d.riskScore}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">{t['timeline.cves']}</span>
+                      <span className="text-gray-400">{t['timeline.cves']}</span>
                       <span className="text-gray-300 tabular-nums">{d.cveCount}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">{t['timeline.critical']}</span>
+                      <span className="text-gray-400">{t['timeline.critical']}</span>
                       <span className="text-red-400 tabular-nums">{d.critical}</span>
                     </div>
                     <div className="flex justify-between gap-6">
-                      <span className="text-gray-500">{t['timeline.high']}</span>
+                      <span className="text-gray-400">{t['timeline.high']}</span>
                       <span className="text-orange-400 tabular-nums">{d.high}</span>
                     </div>
                   </div>
@@ -121,7 +121,7 @@ export function RiskTimeline({ history, height = 200 }: RiskTimelineProps) {
           />
         </LineChart>
       </ResponsiveContainer>
-      <div className="flex justify-center gap-6 mt-3 text-[10px] text-gray-600">
+      <div className="flex justify-center gap-6 mt-3 text-[10px] text-gray-400">
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-px bg-red-400/50 inline-block" /> {t['timeline.legendCritical']}
         </span>

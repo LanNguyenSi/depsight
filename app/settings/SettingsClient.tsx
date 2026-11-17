@@ -317,7 +317,7 @@ export function SettingsClient() {
   };
 
   const inputCls =
-    'w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none';
+    'w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-400 focus:border-gray-600 focus:outline-none';
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
 
   return (
@@ -329,7 +329,7 @@ export function SettingsClient() {
         <section className="space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-gray-200">{t['settings.language']}</h2>
-            <p className="text-xs text-gray-500">{t['settings.languageDesc']}</p>
+            <p className="text-xs text-gray-400">{t['settings.languageDesc']}</p>
           </div>
           <div className="flex gap-2">
             {LOCALES.map((loc) => (
@@ -353,7 +353,7 @@ export function SettingsClient() {
         <section className="space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-200">{t['settings.tokens']}</h2>
-            <p className="text-xs text-gray-500">{t['settings.tokensDesc']}</p>
+            <p className="text-xs text-gray-400">{t['settings.tokensDesc']}</p>
           </div>
 
           {/* Reveal-once box */}
@@ -376,7 +376,7 @@ export function SettingsClient() {
               <button
                 type="button"
                 onClick={() => setRevealed(null)}
-                className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                className="inline-flex items-center min-h-6 text-xs text-gray-400 hover:text-gray-200 transition-colors"
               >
                 {t['token.done']}
               </button>
@@ -392,7 +392,7 @@ export function SettingsClient() {
               aria-label={t['token.nameLabel']}
               placeholder={t['token.namePlaceholder']}
               maxLength={100}
-              className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none"
+              className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-400 focus:border-gray-600 focus:outline-none"
             />
             <select
               value={scope}
@@ -421,7 +421,7 @@ export function SettingsClient() {
               {t['token.listTitle']}
             </h3>
             {tokens.length === 0 ? (
-              <p className="text-xs text-gray-600">{t['token.empty']}</p>
+              <p className="text-xs text-gray-400">{t['token.empty']}</p>
             ) : (
               <ul className="divide-y divide-gray-800 rounded-lg border border-gray-800">
                 {tokens.map((tk) => (
@@ -438,7 +438,7 @@ export function SettingsClient() {
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-600">
+                      <div className="text-xs text-gray-400">
                         {t['token.created']} {formatDate(tk.createdAt)} · {t['token.lastUsed']}{' '}
                         {formatDate(tk.lastUsedAt)}
                       </div>
@@ -447,7 +447,7 @@ export function SettingsClient() {
                       <button
                         type="button"
                         onClick={() => setRevokeConfirmId(tk.id)}
-                        className="shrink-0 text-xs text-red-400 hover:text-red-300 transition-colors"
+                        className="shrink-0 inline-flex items-center min-h-6 px-1 text-xs text-red-400 hover:text-red-300 transition-colors"
                       >
                         {t['token.revoke']}
                       </button>
@@ -463,7 +463,7 @@ export function SettingsClient() {
         <section className="space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-200">{t['settings.webhooks.title']}</h2>
-            <p className="text-xs text-gray-500">{t['settings.webhooks.desc']}</p>
+            <p className="text-xs text-gray-400">{t['settings.webhooks.desc']}</p>
           </div>
 
           {/* Create form */}
@@ -512,13 +512,13 @@ export function SettingsClient() {
                 {webhookEventOptions.map((ev) => (
                   <label
                     key={ev.value}
-                    className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"
+                    className="flex items-center gap-2 min-h-6 text-sm text-gray-300 cursor-pointer"
                   >
                     <input
                       type="checkbox"
                       checked={webhookEvents.includes(ev.value)}
                       onChange={() => toggleWebhookEvent(ev.value)}
-                      className="accent-blue-600"
+                      className="size-4 accent-blue-600"
                     />
                     {ev.label}
                   </label>
@@ -545,9 +545,9 @@ export function SettingsClient() {
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
               {t['settings.webhooks.listTitle']}
             </h3>
-            <p className="text-xs text-gray-600">{t['settings.webhooks.noDelete']}</p>
+            <p className="text-xs text-gray-400">{t['settings.webhooks.noDelete']}</p>
             {webhooks.length === 0 ? (
-              <p className="text-xs text-gray-600">{t['settings.webhooks.empty']}</p>
+              <p className="text-xs text-gray-400">{t['settings.webhooks.empty']}</p>
             ) : (
               <ul className="divide-y divide-gray-800 rounded-lg border border-gray-800">
                 {webhooks.map((wh) => (
@@ -558,7 +558,7 @@ export function SettingsClient() {
                         className={`text-[10px] uppercase tracking-wide border rounded px-1 py-0.5 shrink-0 ${
                           wh.enabled
                             ? 'text-emerald-400 border-emerald-900/60'
-                            : 'text-gray-500 border-gray-800'
+                            : 'text-gray-400 border-gray-800'
                         }`}
                       >
                         {wh.enabled
@@ -566,8 +566,8 @@ export function SettingsClient() {
                           : t['settings.webhooks.disabled']}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 truncate">{wh.url}</div>
-                    <div className="text-xs text-gray-600">
+                    <div className="text-xs text-gray-400 truncate">{wh.url}</div>
+                    <div className="text-xs text-gray-400">
                       {wh.events.map((id) => webhookEventOptions.find((o) => o.value === id)?.label ?? id).join(', ')}
                     </div>
                   </li>
@@ -581,7 +581,7 @@ export function SettingsClient() {
         <section className="space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-200">{t['settings.slack.title']}</h2>
-            <p className="text-xs text-gray-500">{t['settings.slack.desc']}</p>
+            <p className="text-xs text-gray-400">{t['settings.slack.desc']}</p>
           </div>
 
           {slackLoadError && (
@@ -628,12 +628,12 @@ export function SettingsClient() {
                 ))}
               </select>
             </div>
-            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+            <label className="flex items-center gap-2 min-h-6 text-sm text-gray-300 cursor-pointer">
               <input
                 type="checkbox"
                 checked={slackEnabled}
                 onChange={(e) => setSlackEnabled(e.target.checked)}
-                className="accent-blue-600"
+                className="size-4 accent-blue-600"
               />
               {t['settings.slack.enabled']}
             </label>
