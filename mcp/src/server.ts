@@ -31,7 +31,7 @@ export const TOOL_REGISTRARS = [
 export function createServer(config: Config): McpServer {
   const server = new McpServer({
     name: "depsight",
-    version: "0.7.0",
+    version: "0.7.1",
   });
 
   const client = new DepsightClient(config);
