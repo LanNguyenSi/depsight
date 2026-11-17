@@ -139,7 +139,7 @@ export function CIHealthTab({ repoId }: Props) {
             value={period}
             onChange={(e) => setPeriod(parseInt(e.target.value) as Period)}
             aria-label={t['ci.health.period']}
-            className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300"
+            className="min-h-6 text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300"
           >
             <option value={1}>{t['ci.health.period.1d']}</option>
             <option value={7}>{t['ci.health.period.7d']}</option>
@@ -148,7 +148,7 @@ export function CIHealthTab({ repoId }: Props) {
           <button
             onClick={() => void handleSync()}
             disabled={syncing}
-            className="text-xs px-3 py-1 rounded bg-blue-600/20 text-blue-400 border border-blue-600/40 hover:bg-blue-600/30 transition-colors disabled:opacity-50"
+            className="min-h-6 text-xs px-3 py-1 rounded bg-blue-600/20 text-blue-400 border border-blue-600/40 hover:bg-blue-600/30 transition-colors disabled:opacity-50"
           >
             {syncing ? t['ci.health.syncing'] : t['ci.health.sync']}
           </button>

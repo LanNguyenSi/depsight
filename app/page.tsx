@@ -73,7 +73,7 @@ export default async function HomePage() {
               href="https://github.com/LanNguyenSi/depsight"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-gray-200 transition-colors"
+              className="inline-flex items-center justify-center min-h-6 min-w-6 hover:text-gray-200 transition-colors"
               aria-label="GitHub"
             >
               <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">

@@ -2,8 +2,9 @@
 // 24 px floor (Tailwind spacing 6 = 1.5rem); the controls below were 16-23 px
 // before. Rendered markup is checked where a component renders on its own;
 // the dashboard shell needs its whole data layer, so its source is read.
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+// The last describe block scans every interactive element in the sources.
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,7 @@ import { LocaleProvider } from '@/lib/i18n';
 import { AdvisoryList } from '@/components/AdvisoryList';
 import { DependencyTable } from '@/components/DependencyTable';
 import { PolicyList } from '@/components/PolicyList';
+import { PRScanButton } from '@/components/PRScanButton';
 import { ForkScanSelect } from '@/components/settings/ForkScanSelect';
 import { SecretRowActions } from '@/components/settings/SecretRowActions';
 import { SettingsClient } from '@/app/settings/SettingsClient';
@@ -194,7 +196,11 @@ describe('settings touch targets', () => {
     expect(select).toContain('min-h-6');
     expect(select).toContain('min-w-0');
     expect(select).toContain('max-w-full');
-    expect(html.match(/<label\b[^>]*>/)![0]).toContain('max-w-full');
+    const label = html.match(/<label\b[^>]*>/)![0];
+    expect(label).toContain('max-w-full');
+    // below sm the label text sits above the select instead of squeezing it
+    expect(label).toContain('flex-col');
+    expect(label).toContain('sm:flex-row');
   });
 
   it('wraps every checkbox in a 24 px label and sizes the box to 16 px', () => {
@@ -209,6 +215,24 @@ describe('settings touch targets', () => {
   });
 });
 
+describe('PR scan trigger inside the actions menu', () => {
+  const render = (menuItem?: boolean) =>
+    withLocale(createElement(PRScanButton, { owner: 'o', repo: 'r', ...(menuItem === undefined ? {} : { menuItem }) }));
+
+  it('is a menuitem row with the sibling look when rendered for the menu', () => {
+    const tag = render(true).match(/<button\b[^>]*>/)![0];
+    expect(tag).toContain('role="menuitem"');
+    expect(tag).toContain('w-full text-left px-4 py-2.5 text-sm');
+  });
+
+  it('keeps the plain button without a role for every other caller', () => {
+    const tag = render().match(/<button\b[^>]*>/)![0];
+    expect(tag).not.toContain('role=');
+    expect(tag).toContain('px-3 py-1.5');
+    expect(render(false).match(/<button\b[^>]*>/)![0]).not.toContain('role=');
+  });
+});
+
 describe('dashboard controls', () => {
   const src = readFileSync(resolve(ROOT, 'app/dashboard/DashboardClient.tsx'), 'utf8');
 
@@ -218,5 +242,130 @@ describe('dashboard controls', () => {
     expect(src).toContain('inline-flex items-center min-h-6 px-1 text-xs text-gray-400 hover:text-gray-300 disabled:opacity-50');
     expect(src).toContain('inline-flex items-center min-h-6 px-1 text-xs text-red-400 hover:text-red-300');
     expect(src).toContain('md:hidden flex items-center gap-1 min-h-6 text-xs');
+  });
+
+  it('keeps the actions menu owning only menu items: the PR scan wrapper and the divider are presentational', () => {
+    const menu = src.slice(src.indexOf('<div role="menu"'));
+    expect(menu).toContain('<div role="none">\n                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem />');
+    expect(menu).toContain('<div role="separator" className="border-t border-gray-800 my-1" />');
+  });
+});
+
+// Generic scan: every <button>, <a>, <Link> and <select> in app/ and components/
+// must give its className a 24 px floor, so a new or edited control cannot
+// silently drop below WCAG 2.5.8. Parsing: for each opening tag the text up to
+// its closing `>` is cut out (quote- and brace-aware, so `=>` and `>` inside
+// props do not end it) and searched for a floor class token: min-h-6 or
+// larger, h-6 or larger, size-6 or larger, or py-1.5 or larger (12 px of
+// padding plus at least a 15 px line is 27 px). identifiers in `className={...}` are resolved
+// to `const name = '...'` in the same file (a conditional counts as passing when
+// any branch has the floor; the browser check covers the rest). Limits: it reads class text, not
+// the browser (it cannot see a parent that stretches the element, or a class
+// built from pieces at run time), only these four tags are checked (text inputs
+// are 32 px high through py-1.5 and text-sm; the checkbox rule is the render
+// test above), and an element is judged by its own tag, not by a wrapper.
+// Elements that reach 24 px by content are named below with the reason.
+const FLOOR =
+  /(?<![\w:-])(?:min-h-(?:[6-9]|\d{2,})|h-(?:[6-9]|\d{2,})|size-(?:[6-9]|\d{2,})|py-(?:1\.5|[2-9]|\d{2,}|[2-9]\.5))(?![\w.-])/;
+const SCANNED_TAG = /<(?:button|a|Link|select)(?![\w-])/g;
+
+const FLOOR_ALLOWLIST = [
+  {
+    file: 'components/AppShell.tsx',
+    contains: 'href="/overview"',
+    reason: 'logo link: wraps a 28 px logo tile, measured 28 px high',
+  },
+  {
+    file: 'components/AppShell.tsx',
+    contains: "t['user.menu']",
+    reason: 'user menu button: avatar plus py-1, measured 32 px high',
+  },
+  {
+    file: 'components/AppShell.tsx',
+    contains: "t['nav.menu']",
+    reason: 'mobile menu button: p-1.5 around a 20 px icon, measured 32 px',
+  },
+];
+
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (entry.name.endsWith('.tsx')) out.push(full);
+  }
+  return out;
+}
+
+/** Index of the `>` that closes the opening tag that starts before `from`. */
+function tagEnd(src: string, from: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = from; i < src.length; i++) {
+    const c = src[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === '`') quote = c;
+    else if (c === '{') depth++;
+    else if (c === '}') depth--;
+    else if (c === '>' && depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Opening tags of the scanned elements: `file:line` and the tag text. */
+function interactiveTags(): { where: string; file: string; text: string }[] {
+  const out: { where: string; file: string; text: string }[] = [];
+  const files = [...sourceFiles(join(ROOT, 'app')), ...sourceFiles(join(ROOT, 'components'))];
+  for (const full of files) {
+    const src = readFileSync(full, 'utf8');
+    const file = relative(ROOT, full);
+    for (const m of src.matchAll(SCANNED_TAG)) {
+      const end = tagEnd(src, m.index! + m[0].length);
+      let text = src.slice(m.index!, end + 1);
+      const expr = text.match(/className=\{([^}]*)\}/);
+      for (const name of expr ? (expr[1].match(/\b[A-Za-z_]\w*\b/g) ?? []) : []) {
+        const def = src.match(new RegExp(`const ${name}\\s*=\\s*(['"\`])([\\s\\S]*?)\\1`));
+        if (def) text += ` ${def[2]}`;
+      }
+      out.push({ where: `${file}:${src.slice(0, m.index).split('\n').length}`, file, text });
+    }
+  }
+  return out;
+}
+
+const allowed = (t: { file: string; text: string }) =>
+  FLOOR_ALLOWLIST.some((a) => a.file === t.file && t.text.includes(a.contains));
+
+describe('every interactive element has a 24 px floor (generic scan)', () => {
+  const tags = interactiveTags();
+
+  it('finds the elements it is meant to check', () => {
+    expect(tags.length).toBeGreaterThan(60);
+    for (const f of ['components/LicenseList.tsx', 'components/settings/PrWebhookSecrets.tsx', 'app/settings/SettingsClient.tsx']) {
+      expect(tags.some((t) => t.file === f), f).toBe(true);
+    }
+  });
+
+  it('gives every button, link and select a floor class or an allowlist entry', () => {
+    expect(tags.filter((t) => !FLOOR.test(t.text) && !allowed(t)).map((t) => t.where)).toEqual([]);
+  });
+
+  it('has no stale allowlist entry (each one matches exactly one tag without a floor class)', () => {
+    for (const a of FLOOR_ALLOWLIST) {
+      const match = tags.filter((t) => t.file === a.file && t.text.includes(a.contains));
+      expect(match.length, `${a.file} ${a.contains}`).toBe(1);
+      expect(FLOOR.test(match[0].text), `${a.file} ${a.contains} has a floor class already`).toBe(false);
+    }
+  });
+
+  it('recognises floor classes and rejects the ones that are too small', () => {
+    for (const ok of ['min-h-6', 'min-h-11', 'h-6', 'h-10', 'size-6', 'py-1.5', 'py-2', 'py-3']) {
+      expect(FLOOR.test(`x ${ok} y`), ok).toBe(true);
+    }
+    for (const bad of ['min-h-5', 'h-5', 'size-4', 'py-1', 'py-0.5', 'py-1.5x', 'max-h-6', 'h-60x', 'min-h-0', 'md:py-2', 'sm:min-h-6']) {
+      expect(FLOOR.test(`x ${bad} y`), bad).toBe(false);
+    }
   });
 });

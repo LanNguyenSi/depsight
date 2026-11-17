@@ -885,7 +885,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t['dashboard.search']}
-            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-gray-700 transition-colors mb-2"
+            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-700 transition-colors mb-2"
           />
 
           {/* Sort */}
@@ -1040,9 +1040,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                         >
                           {scanningDeps ? t['dashboard.btn.scanning'] : t['dashboard.btn.deps']}
                         </button>
-                        <div className="border-t border-gray-800 my-1" />
-                        <div className="px-2 py-1">
-                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
+                        <div role="separator" className="border-t border-gray-800 my-1" />
+                        <div role="none">
+                          <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} menuItem />
                         </div>
                         <button
                           role="menuitem"

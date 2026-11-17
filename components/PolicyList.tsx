@@ -171,7 +171,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
     }
   };
 
-  const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors';
+  const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 transition-colors';
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1.5';
 
   return (
@@ -196,7 +196,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
       {error && (
         <div className="bg-red-950/50 border border-red-900/50 text-red-400 text-sm rounded-lg px-4 py-3 flex items-center justify-between">
           {error}
-          <button onClick={() => setError(null)} className="text-red-500 hover:text-red-300 ml-3">
+          <button onClick={() => setError(null)} className="inline-flex items-center justify-center min-h-6 min-w-6 text-red-500 hover:text-red-300 ml-3">
             &times;
           </button>
         </div>

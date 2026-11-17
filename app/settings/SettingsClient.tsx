@@ -317,7 +317,7 @@ export function SettingsClient() {
   };
 
   const inputCls =
-    'w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none';
+    'w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-400 focus:border-gray-600 focus:outline-none';
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
 
   return (
@@ -392,7 +392,7 @@ export function SettingsClient() {
               aria-label={t['token.nameLabel']}
               placeholder={t['token.namePlaceholder']}
               maxLength={100}
-              className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:border-gray-600 focus:outline-none"
+              className="flex-1 rounded-md border border-gray-800 bg-gray-900 px-3 py-1.5 text-sm text-gray-200 placeholder-gray-400 focus:border-gray-600 focus:outline-none"
             />
             <select
               value={scope}

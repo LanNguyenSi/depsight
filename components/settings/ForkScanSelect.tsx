@@ -28,7 +28,7 @@ export function ForkScanSelect({ row, forksDefault, busy, labels, onChange }: Pr
   const state = forkControlState(row);
   return (
     <>
-      <label className="mt-1 flex max-w-full items-center gap-1.5 text-xs text-gray-400">
+      <label className="mt-1 flex max-w-full flex-col items-start gap-1.5 text-xs text-gray-400 sm:flex-row sm:items-center">
         <span>{labels.title}</span>
         <select
           value={row.scanForks === null ? 'default' : String(row.scanForks)}

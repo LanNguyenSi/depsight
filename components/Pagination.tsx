@@ -27,7 +27,7 @@ export function Pagination({ page, pageSize, total, onPageChange, compact }: Pag
         <button
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          className="px-2 py-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+          className="min-h-6 px-2 py-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
         >
           {compact ? '‹' : t['pagination.prev']}
         </button>
@@ -52,7 +52,7 @@ export function Pagination({ page, pageSize, total, onPageChange, compact }: Pag
         <button
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
-          className="px-2 py-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
+          className="min-h-6 px-2 py-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 transition-colors"
         >
           {compact ? '›' : t['pagination.next']}
         </button>
