@@ -388,10 +388,10 @@ GUARD="$SCRIPT_DIR/check-running-stack.sh"
 SELF_FILE="$WORKDIR/docker-compose.yml"; : > "$SELF_FILE"
 HOSTED_LABEL="depsight /srv/depsight/docker-compose.traefik.yml"
 SELF_LABEL="depsight /srv/depsight/docker-compose.yml"
-# run_guard [--exact] <file> [VAR=value ...]; sets rc, out_text
+# run_guard [--other-prod] <file> [VAR=value ...]; sets rc, out_text
 run_guard() {
   local mode=()
-  if [ "$1" = --exact ]; then mode=(--exact); shift; fi
+  if [ "$1" = --other-prod ]; then mode=(--other-prod docker-compose.traefik.yml); shift; fi
   local f="$1"; shift
   : > "$FAKE_DOCKER_LOG"
   rc=0
@@ -424,7 +424,7 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
 # and the right command, nothing else is called
 {
   run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
-  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.traefik.yml, not from docker-compose.yml alone" <<< "$out_text" \
+  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.traefik.yml, not from docker-compose.yml;" <<< "$out_text" \
     && grep -q "docker compose -f docker-compose.traefik.yml " <<< "$out_text" \
     && [ "$(wc -l < "$FAKE_DOCKER_LOG" | tr -d ' ')" = 2 ]; then
     pass "(p3) guard: stack from the hosted file refused for the self-hosting file (exit 2, names the live file and the command)"
@@ -437,7 +437,7 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
 {
   HOSTED_FILE="$WORKDIR/docker-compose.traefik.yml"; : > "$HOSTED_FILE"
   run_guard "$HOSTED_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
-  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.yml, not from docker-compose.traefik.yml alone" <<< "$out_text"; then
+  if [ "$rc" -eq 2 ] && grep -q "created from docker-compose.yml, not from docker-compose.traefik.yml;" <<< "$out_text"; then
     pass "(p3b) guard: stack from the self-hosting file refused for the hosted file"
   else
     fail "(p3b) guard reverse mismatch: rc=$rc out=$out_text"
@@ -505,22 +505,41 @@ no_inspect() { ! grep -q '^inspect ' "$FAKE_DOCKER_LOG"; }
   fi
 }
 
-# (p6b) --exact (make prod, prod-down): the label must list the file and nothing else; a
-# stack created from both production files is refused, the same label passes without --exact
+# (p6b) --other-prod docker-compose.traefik.yml (what make prod and prod-down pass): a label that
+# lists the target file is refused when it also lists the other production file; the same
+# label passes in default mode (backup.sh, restore.sh). A stack started with the documented
+# override file (docker-compose.yml plus docker-compose.override.yml) passes in both modes.
 BOTH_LABEL="depsight /srv/depsight/docker-compose.yml,/srv/depsight/docker-compose.traefik.yml"
+OVERRIDE_LABEL="depsight /srv/depsight/docker-compose.yml,/srv/depsight/docker-compose.override.yml"
 {
-  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL"
+  run_guard --other-prod "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL"
   r1=$rc; o1="$out_text"
   run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$BOTH_LABEL"
   r2=$rc
-  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
+  run_guard --other-prod "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$SELF_LABEL"
   r3=$rc
-  run_guard --exact "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
+  run_guard --other-prod "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$HOSTED_LABEL"
   r4=$rc
-  if [ "$r1" -eq 2 ] && grep -q "not from docker-compose.yml alone" <<< "$o1" && [ "$r2" -eq 0 ] && [ "$r3" -eq 0 ] && [ "$r4" -eq 2 ]; then
-    pass "(p6b) guard --exact: both production files refused, the same label passes in default mode, the file alone passes"
+  run_guard --other-prod "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$OVERRIDE_LABEL"
+  r5=$rc
+  run_guard "$SELF_FILE" FAKE_IDS="c1" FAKE_INSPECT_OUT="$OVERRIDE_LABEL"
+  r6=$rc
+  if [ "$r1" -eq 2 ] && grep -q "includes the other production file docker-compose.traefik.yml" <<< "$o1" \
+    && [ "$r2" -eq 0 ] && [ "$r3" -eq 0 ] && [ "$r4" -eq 2 ] && [ "$r5" -eq 0 ] && [ "$r6" -eq 0 ]; then
+    pass "(p6b) guard --other-prod: a stack with both production files is refused, the same label passes in default mode, the file alone and the file with the override file pass"
   else
-    fail "(p6b) guard --exact: $r1/$r2/$r3/$r4"
+    fail "(p6b) guard --other-prod: $r1/$r2/$r3/$r4/$r5/$r6 $o1"
+  fi
+}
+# (p6b2) the option needs a file name
+{
+  rc=0; out_text="$(env PATH="$FAKE_BIN:$PATH" "$GUARD" --other-prod 2>&1)" || rc=$?
+  r1=$rc
+  rc=0; out_text="$(env PATH="$FAKE_BIN:$PATH" "$GUARD" --other-prod "$SELF_FILE" 2>&1)" || rc=$?
+  if [ "$r1" -eq 2 ] && [ "$rc" -eq 2 ]; then
+    pass "(p6b2) guard: --other-prod without a file name or without a compose file refuses"
+  else
+    fail "(p6b2) guard --other-prod usage: $r1/$rc"
   fi
 }
 
@@ -586,7 +605,7 @@ BOTH_LABEL="depsight /srv/depsight/docker-compose.yml,/srv/depsight/docker-compo
   d3="$WORKDIR/q3"
   run_backup "$d3" FAKE_IDS="c1" FAKE_INSPECT_OUT="depsight /srv/depsight/docker-compose.traefik.yml" COMPOSE_GUARD_FORCE=1
   r3=$rc
-  if [ "$r1" -eq 2 ] && [ "$no_dump1" = 1 ] && [ ! -d "$d" ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml alone" <<< "$o1" \
+  if [ "$r1" -eq 2 ] && [ "$no_dump1" = 1 ] && [ ! -d "$d" ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml;" <<< "$o1" \
     && [ "$r2" -eq 0 ] && [ "$(count_sql "$d2")" = 1 ] \
     && [ "$r3" -eq 0 ] && [ "$(count_sql "$d3")" = 1 ]; then
     pass "(q) backup.sh: stack from another file refused before dumping (exit 2, no directory), same file and the override go on"
@@ -658,11 +677,15 @@ if command -v make > /dev/null 2>&1; then
   run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$BOTH_LABEL" -- prod; c=$rc; up_c=0; sent_up && up_c=1
   run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$BOTH_LABEL" -- prod-down; d=$rc; dn_d=0; sent_down && dn_d=1
   run_make FAKE_STOPPED_IDS=c1 FAKE_INSPECT_OUT="depsight /srv/depsight/docker-compose.yml" -- prod; e=$rc
+  # a self-host stack started with the documented override file: prod and prod-down go through
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$OVERRIDE_LABEL" -- prod; f=$rc; up_f=0; sent_up && up_f=1
+  run_make FAKE_IDS=c1 FAKE_INSPECT_OUT="$OVERRIDE_LABEL" -- prod-down; g=$rc; dn_g=0; sent_down && dn_g=1
   if [ "$a" -ne 0 ] && [ "$up_a" = 0 ] && [ "$b" -ne 0 ] && [ "$dn_b" = 0 ] \
-    && [ "$c" -ne 0 ] && [ "$up_c" = 0 ] && [ "$d" -ne 0 ] && [ "$dn_d" = 0 ] && [ "$e" -eq 0 ]; then
-    pass "(r6) make prod and prod-down: a stopped hosted container and a stack from both files are refused, a stopped container of docker-compose.yml passes"
+    && [ "$c" -ne 0 ] && [ "$up_c" = 0 ] && [ "$d" -ne 0 ] && [ "$dn_d" = 0 ] && [ "$e" -eq 0 ] \
+    && [ "$f" -eq 0 ] && [ "$up_f" = 1 ] && [ "$g" -eq 0 ] && [ "$dn_g" = 1 ]; then
+    pass "(r6) make prod and prod-down: a stopped hosted container and a stack from both production files are refused; a stopped container of docker-compose.yml and a stack with docker-compose.override.yml pass"
   else
-    fail "(r6) make stopped/both: $a/$b/$c/$d/$e up=$up_a/$up_c down=$dn_b/$dn_d"
+    fail "(r6) make stopped/both/override: $a/$b/$c/$d/$e/$f/$g up=$up_a/$up_c/$up_f down=$dn_b/$dn_d/$dn_g"
   fi
   # (r5) make backup passes the guard on to backup.sh: refused on a mismatch, FORCE=1 goes on
   run_make BACKUP_DIR="$WORKDIR/r5a" FAKE_IDS=c1 FAKE_INSPECT_OUT="$SELF_LABEL" -- backup; a=$rc; dir_a=0; [ -d "$WORKDIR/r5a" ] && dir_a=1

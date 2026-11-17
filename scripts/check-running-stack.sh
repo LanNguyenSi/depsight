@@ -11,7 +11,7 @@
 # label com.docker.compose.project.config_files (the files given with -f, as
 # absolute paths, comma separated).
 #
-# Usage:   scripts/check-running-stack.sh [--exact] <compose-file>
+# Usage:   scripts/check-running-stack.sh [--other-prod <file-name>] <compose-file>
 #          (called by `make prod`, `make prod-down`, scripts/backup.sh and
 #          scripts/restore.sh before they touch anything)
 #
@@ -27,12 +27,14 @@
 #     start, or a stack that was removed).
 #   - Every examined container is compared by the base names of the files in its
 #     config_files label (the checkout may have moved since the stack was created; the
-#     two files have different names):
-#       default mode (backup.sh, restore.sh, which take one file): the label must list
-#         <file>; a container created from other files only is refused.
-#       --exact (make prod, make prod-down, which pin one file with -f): the label must
-#         list <file> and nothing else, so a stack created from both production files
-#         is refused too.
+#     two files have different names): the label must list <file>, so a container
+#     created from other files only is refused. A stack started with the documented
+#     override file (-f docker-compose.yml -f docker-compose.override.yml) lists
+#     <file> and passes.
+#       --other-prod <file-name> (make prod, make prod-down): the label must in addition
+#         not list that file, the other production file by name, so a stack created
+#         from both production files (the traefik one included) is refused too. make
+#         names docker-compose.traefik.yml for docker-compose.yml.
 #     A refusal names the files the container came from.
 #   - A container without the label (a compose too old to write it) cannot be
 #     attributed to a file: refused too, because the commands guarded here are
@@ -50,17 +52,22 @@
 #                        project.
 #
 # Exit codes:
-#   0  nothing in the project, or every container came from <file> (alone, with
-#      --exact), or the check was skipped by COMPOSE_GUARD_FORCE
+#   0  nothing in the project, or every container came from <file> (with
+#      --other-prod: and none of them is that file), or the check was skipped by
+#      COMPOSE_GUARD_FORCE
 #   2  refused (mismatch, unattributable container, docker could not be asked) or
 #      bad usage
 set -euo pipefail
 
 refuse() { echo "compose guard: $*" >&2; exit 2; }
 
-exact=0
-if [ "${1:-}" = --exact ]; then exact=1; shift; fi
-[ "$#" -eq 1 ] && [ -n "$1" ] || refuse "usage: check-running-stack.sh [--exact] <compose-file>"
+other_prod=""
+if [ "${1:-}" = --other-prod ]; then
+  [ "$#" -ge 2 ] && [ -n "$2" ] || refuse "usage: check-running-stack.sh [--other-prod <file-name>] <compose-file>"
+  other_prod="$2"
+  shift 2
+fi
+[ "$#" -eq 1 ] && [ -n "$1" ] || refuse "usage: check-running-stack.sh [--other-prod <file-name>] <compose-file>"
 file="$1"
 [ -f "$file" ] || refuse "compose file not found: $file"
 want="$(basename -- "$file")"
@@ -85,22 +92,24 @@ while IFS= read -r id; do
     refuse "a container of project '$project' has no com.docker.compose.project.config_files label (written by compose 2.x; an older compose does not), so it cannot be attributed to a compose file; refusing to run $want against it. Set COMPOSE_GUARD_FORCE=1 if you know it belongs to $want"
   fi
   found=0
-  others=0
+  has_other=0
   live_f=""
   live_names=""
   IFS=',' read -r -a paths <<< "$files"
   for p in "${paths[@]}"; do
     b="$(basename -- "$p")"
-    if [ "$b" = "$want" ]; then found=1; else others=1; fi
+    [ "$b" != "$want" ] || found=1
+    [ -z "$other_prod" ] || [ "$b" != "$other_prod" ] || has_other=1
     live_f="${live_f:+$live_f }-f $b"
     live_names="${live_names:+$live_names, }$b"
   done
-  if [ "$found" -eq 0 ] || { [ "$exact" -eq 1 ] && [ "$others" -eq 1 ]; }; then
+  if [ "$found" -eq 0 ] || [ "$has_other" -eq 1 ]; then
     if [ "${#paths[@]}" -eq 1 ]; then
       script_hint="BACKUP_COMPOSE_FILE=${files##*/}"
     else
       script_hint="scripts/backup.sh and scripts/restore.sh take one file: set BACKUP_COMPOSE_FILE to the one that holds the stack's services"
     fi
-    refuse "the containers of project '$project' (running or stopped) were created from $live_names, not from $want alone; a command for $want would recreate or remove them (both files use the project name 'depsight'). Nothing was changed. Run the command against the stack that exists: docker compose $live_f <up -d | down | ...> ($script_hint). Set COMPOSE_GUARD_FORCE=1 (make: FORCE=1 on the command line) only if you mean to replace that stack with $want"
+    if [ "$found" -eq 0 ]; then verdict="not from $want"; else verdict="which includes the other production file $other_prod, so they are not those of $want"; fi
+    refuse "the containers of project '$project' (running or stopped) were created from $live_names, $verdict; a command for $want would recreate or remove them (both files use the project name 'depsight'). Nothing was changed. Run the command against the stack that exists: docker compose $live_f <up -d | down | ...> ($script_hint). Set COMPOSE_GUARD_FORCE=1 (make: FORCE=1 on the command line) only if you mean to replace that stack with $want"
   fi
 done <<< "$ids"

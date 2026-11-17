@@ -83,7 +83,7 @@
 #                            the hosted file's service; set it empty for the self-hosting
 #                            docker-compose.yml, which has none: the step is skipped, the
 #                            script says so, and you apply the schema yourself)
-#   COMPOSE_GUARD_FORCE      set to a non-empty value to skip the check that the running
+#   COMPOSE_GUARD_FORCE      set to 1 or yes to skip the check that the
 #                            stack was created from BACKUP_COMPOSE_FILE (for the rare
 #                            intended case only)
 #   PG_USER / PG_DB          database user and name (default: depsight / depsight); the

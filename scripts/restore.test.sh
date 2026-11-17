@@ -1047,7 +1047,7 @@ REAL_LOAD='*ON_ERROR_STOP=1 -U depsight -d depsight'
   r4=$rc; ok4=0; asked4=0
   if stdin_is_reset_plus_dump; then ok4=1; fi
   if grep -q -E ' ps -a -q$|^inspect ' "$FAKE_DOCKER_LOG"; then asked4=1; fi
-  if [ "$r1" -eq 2 ] && [ "$clean1" = 1 ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml alone" <<< "$o1" \
+  if [ "$r1" -eq 2 ] && [ "$clean1" = 1 ] && grep -q "created from docker-compose.traefik.yml, not from compose.yml;" <<< "$o1" \
     && [ "$r2" -eq 2 ] && [ "$clean2" = 1 ] && grep -q "has no com.docker.compose.project.config_files label" <<< "$o2" \
     && [ "$r3" -eq 0 ] && [ "$ok3" = 1 ] \
     && [ "$r4" -eq 0 ] && [ "$ok4" = 1 ] && [ "$asked4" = 0 ]; then

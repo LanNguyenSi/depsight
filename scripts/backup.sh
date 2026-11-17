@@ -33,7 +33,7 @@
 #   BACKUP_SKIP_ROTATION set to a non-empty value to skip the rotation (scripts/restore.sh
 #                        does this for its pre-restore dump, so that dump can never age
 #                        out the file that is being restored)
-#   COMPOSE_GUARD_FORCE  set to a non-empty value to skip the check that the running
+#   COMPOSE_GUARD_FORCE  set to 1 or yes to skip the check that the
 #                        stack was created from BACKUP_COMPOSE_FILE (see
 #                        scripts/check-running-stack.sh); for the rare intended case only
 #   BACKUP_OFFHOST_HOOK  executable that copies the finished dump off this host;

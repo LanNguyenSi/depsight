@@ -20,12 +20,13 @@ DC_PROD = docker compose -f docker-compose.yml
 # without their Traefik labels and networks (public routes answer 404) and make prod-down would
 # remove them. The helper reads the compose labels Docker recorded on the containers of the
 # project, running or stopped, and refuses, before anything changes, unless they were created
-# from docker-compose.yml alone (--exact: a stack created from both files is refused too; exit 2).
+# from docker-compose.yml (a stack that also uses docker-compose.override.yml passes; a stack
+# whose files include docker-compose.traefik.yml is refused, --other-prod; exit 2).
 # No container, or the same file, passes. FORCE=1 (or yes) on the make command line skips it,
 # for the rare case you mean it: `make prod FORCE=1`; a FORCE in the shell environment is
 # ignored. The same variable is passed on to backup.sh and restore.sh. Recovery after a make
 # prod on the hosted host: docker compose -f docker-compose.traefik.yml up -d
-GUARD_PROD = scripts/check-running-stack.sh --exact docker-compose.yml
+GUARD_PROD = scripts/check-running-stack.sh --other-prod docker-compose.traefik.yml docker-compose.yml
 ifeq ($(origin FORCE),command line)
 ifneq ($(filter 1 yes,$(FORCE)),)
 export COMPOSE_GUARD_FORCE := 1
