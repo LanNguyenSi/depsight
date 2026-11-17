@@ -33,7 +33,7 @@ export function SeverityBreakdown({ counts, riskScore }: SeverityBreakdownProps)
         <h3 className="text-sm font-medium text-gray-400">{t['severity.title']}</h3>
         <div className="text-right">
           <span className={`text-2xl font-bold tabular-nums ${riskColor}`}>{riskScore}</span>
-          <p className="text-[10px] text-gray-600">{t['severity.riskScore']}</p>
+          <p className="text-[10px] text-gray-400">{t['severity.riskScore']}</p>
         </div>
       </div>
 
@@ -44,7 +44,7 @@ export function SeverityBreakdown({ counts, riskScore }: SeverityBreakdownProps)
         <SeverityCount label={t['severity.low']} count={counts.low} color="blue" />
       </div>
 
-      <p className="text-[10px] text-gray-600 mt-2 text-right tabular-nums">{interpolate(t['severity.total'], { count: counts.total })}</p>
+      <p className="text-[10px] text-gray-400 mt-2 text-right tabular-nums">{interpolate(t['severity.total'], { count: counts.total })}</p>
     </div>
   );
 }
@@ -66,7 +66,7 @@ function SeverityCount({ label, count, color }: SeverityCountProps) {
   return (
     <div className={`rounded-md border p-2 text-center ${COLOR_MAP[color]}`}>
       <div className="text-xl font-bold tabular-nums">{count}</div>
-      <div className="text-[10px] opacity-70">{label}</div>
+      <div className="text-[10px]">{label}</div>
     </div>
   );
 }

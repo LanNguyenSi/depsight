@@ -99,7 +99,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
           </div>
           <div className="flex items-center gap-3 sm:gap-4">
             {typeof repoCount === 'number' && (
-              <span className="hidden sm:inline text-xs text-gray-500 tabular-nums">
+              <span className="hidden sm:inline text-xs text-gray-400 tabular-nums">
                 {repoCount} {t['app.repositories']}
               </span>
             )}
@@ -122,7 +122,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
                   </span>
                 )}
                 {login && <span className="hidden sm:inline text-xs font-medium">{login}</span>}
-                <svg viewBox="0 0 20 20" className="w-3 h-3 fill-current text-gray-500">
+                <svg viewBox="0 0 20 20" className="w-3 h-3 fill-current text-gray-400">
                   <path
                     fillRule="evenodd"
                     d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
@@ -201,7 +201,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
               {t['nav.settings']}
             </Link>
             {typeof repoCount === 'number' && (
-              <div className="px-3 py-2 text-xs text-gray-600">{repoCount} {t['app.repositories']}</div>
+              <div className="px-3 py-2 text-xs text-gray-400">{repoCount} {t['app.repositories']}</div>
             )}
           </div>
         )}

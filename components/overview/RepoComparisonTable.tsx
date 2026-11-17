@@ -124,7 +124,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                 <th
                   key={col.key}
                   onClick={() => handleSort(col.key)}
-                  className={`${col.align === 'left' ? 'text-left' : 'text-center'} ${col.key === 'name' ? 'px-4' : 'px-3'} py-2.5 text-[10px] font-semibold text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-300 transition-colors select-none`}
+                  className={`${col.align === 'left' ? 'text-left' : 'text-center'} ${col.key === 'name' ? 'px-4' : 'px-3'} py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-300 transition-colors select-none`}
                 >
                   {col.label}
                   {sortCol === col.key && (
@@ -143,7 +143,7 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
               >
                 <td className="px-4 py-2.5">
                   <div className="font-medium text-gray-300 truncate max-w-[200px]">{repo.fullName}</div>
-                  {repo.language && <div className="text-[10px] text-gray-600">{repo.language}</div>}
+                  {repo.language && <div className="text-[10px] text-gray-400">{repo.language}</div>}
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   <span className={`font-bold text-sm tabular-nums ${healthColor(repo.healthScore)}`}>
@@ -160,26 +160,26 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                   {repo.criticalCount > 0 ? (
                     <span className="text-sm font-semibold text-red-400 tabular-nums">{repo.criticalCount}</span>
                   ) : (
-                    <span className="text-sm text-gray-700">&ndash;</span>
+                    <span className="text-sm text-gray-400">&ndash;</span>
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   {repo.licenseIssues > 0 ? (
                     <span className="text-sm font-semibold text-red-400 tabular-nums">{repo.licenseIssues}</span>
                   ) : (
-                    <span className="text-sm text-gray-700">&ndash;</span>
+                    <span className="text-sm text-gray-400">&ndash;</span>
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-center">
                   {repo.totalDeps > 0 ? (
-                    <span className={`text-sm tabular-nums ${outdatedPercent(repo) > 30 ? 'text-orange-400 font-semibold' : 'text-gray-500'}`}>
+                    <span className={`text-sm tabular-nums ${outdatedPercent(repo) > 30 ? 'text-orange-400 font-semibold' : 'text-gray-400'}`}>
                       {outdatedPercent(repo)}%
                     </span>
                   ) : (
-                    <span className="text-sm text-gray-700">&ndash;</span>
+                    <span className="text-sm text-gray-400">&ndash;</span>
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-xs text-gray-600 tabular-nums">
+                <td className="px-3 py-2.5 text-xs text-gray-400 tabular-nums">
                   {repo.lastScannedAt
                     ? new Date(repo.lastScannedAt).toLocaleDateString('de-DE')
                     : '\u2013'}
@@ -199,12 +199,12 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
           </tbody>
         </table>
         {repos.length === 0 && (
-          <div className="text-center py-8 text-gray-600 text-sm">
+          <div className="text-center py-8 text-gray-400 text-sm">
             {t['overview.noRepos']}
           </div>
         )}
       </div>
-      <p className="px-4 py-2 text-xs text-gray-500 sm:hidden">{t['overview.scrollHint']}</p>
+      <p className="px-4 py-2 text-xs text-gray-400 sm:hidden">{t['overview.scrollHint']}</p>
       {repos.length > PAGE_SIZE && (
         <div className="px-4 py-3 border-t border-gray-800">
           <Pagination

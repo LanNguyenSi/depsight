@@ -46,7 +46,7 @@ const SEVERITY_STYLES: Record<Severity, string> = {
   HIGH: 'bg-orange-950/60 text-orange-400 border-orange-900/50',
   MEDIUM: 'bg-yellow-950/60 text-yellow-400 border-yellow-900/50',
   LOW: 'bg-blue-950/60 text-blue-400 border-blue-900/50',
-  UNKNOWN: 'bg-gray-800 text-gray-500 border-gray-700',
+  UNKNOWN: 'bg-gray-800 text-gray-400 border-gray-700',
 };
 
 const SEVERITY_OPTIONS: Severity[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
@@ -180,7 +180,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-white">{t['policy.title']}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <p className="text-sm text-gray-400 mt-0.5">
             {t['policy.subtitle']}
           </p>
         </div>
@@ -349,8 +349,8 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
       {/* Policy list */}
       {policies.length === 0 ? (
         <div className="text-center py-16 bg-gray-900 rounded-lg border border-gray-800">
-          <p className="text-gray-500 text-sm">{t['policy.empty']}</p>
-          <p className="text-gray-600 text-xs mt-1">
+          <p className="text-gray-400 text-sm">{t['policy.empty']}</p>
+          <p className="text-gray-400 text-xs mt-1">
             {t['policy.emptyDesc']}
           </p>
         </div>
@@ -393,13 +393,13 @@ function PolicyRow({ policy, onToggle, onDelete, t }: PolicyRowProps) {
   return (
     <div
       className={`flex items-center justify-between px-4 py-3 bg-gray-900 rounded-lg border ${
-        policy.enabled ? 'border-gray-800' : 'border-gray-800/50 opacity-50'
+        policy.enabled ? 'border-gray-800' : 'border-gray-800/50 border-dashed'
       } hover:border-gray-700 transition-colors`}
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm text-gray-200 truncate">{policy.name}</span>
+            <span className={`font-medium text-sm truncate ${policy.enabled ? 'text-gray-200' : 'text-gray-400'}`}>{policy.name}</span>
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${POLICY_TYPE_STYLES[policy.type]}`}>
               {policyTypeLabel(policy.type, t)}
             </span>
@@ -407,7 +407,7 @@ function PolicyRow({ policy, onToggle, onDelete, t }: PolicyRowProps) {
               {policy.severity}
             </span>
           </div>
-          <p className="text-xs text-gray-600 mt-0.5">
+          <p className="text-xs text-gray-400 mt-0.5">
             {new Date(policy.createdAt).toLocaleDateString('de-DE')}
           </p>
         </div>
@@ -421,20 +421,20 @@ function PolicyRow({ policy, onToggle, onDelete, t }: PolicyRowProps) {
           aria-checked={policy.enabled}
           aria-label={interpolate(t['policy.toggleLabel'], { name: policy.name })}
           title={policy.enabled ? t['policy.disable'] : t['policy.enable']}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 ${
+          className={`relative inline-flex h-6 w-10 items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 ${
             policy.enabled ? 'bg-blue-600' : 'bg-gray-700'
           }`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-              policy.enabled ? 'translate-x-4' : 'translate-x-1'
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              policy.enabled ? 'translate-x-5' : 'translate-x-1'
             }`}
           />
         </button>
         <button
           onClick={() => onDelete(policy.id)}
           title={t['policy.delete']}
-          className="text-gray-600 hover:text-red-400 transition-colors text-xs"
+          className="inline-flex items-center min-h-6 px-1 text-gray-400 hover:text-red-400 transition-colors text-xs"
         >
           {t['policy.delete']}
         </button>

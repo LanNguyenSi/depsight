@@ -42,7 +42,7 @@ export function SecretRowActions({
           disabled={sealDisabled}
           title={reason}
           onClick={onRotate}
-          className="text-gray-300 hover:text-white disabled:opacity-50 transition-colors"
+          className="inline-flex items-center min-h-6 px-1 text-gray-300 hover:text-white disabled:opacity-50 transition-colors"
         >
           {busy ? labels.working : labels.rotate}
         </button>
@@ -50,7 +50,7 @@ export function SecretRowActions({
           type="button"
           disabled={busy}
           onClick={onRemove}
-          className="text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+          className="inline-flex items-center min-h-6 px-1 text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
         >
           {labels.remove}
         </button>
@@ -63,7 +63,7 @@ export function SecretRowActions({
       disabled={sealDisabled}
       title={reason}
       onClick={onGenerate}
-      className="text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
+      className="inline-flex items-center min-h-6 px-1 text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
     >
       {busy ? labels.working : labels.generate}
     </button>

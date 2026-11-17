@@ -20,7 +20,7 @@ export function Pagination({ page, pageSize, total, onPageChange, compact }: Pag
 
   return (
     <div className={`flex items-center ${compact ? 'justify-between' : 'justify-between'} gap-2 text-xs`}>
-      <span className="text-gray-600 tabular-nums">
+      <span className="text-gray-400 tabular-nums">
         {interpolate(t['pagination.info'], { from, to, total })}
       </span>
       <div className="flex items-center gap-1">
@@ -38,14 +38,14 @@ export function Pagination({ page, pageSize, total, onPageChange, compact }: Pag
             className={`w-7 h-7 rounded tabular-nums transition-colors ${
               p === page
                 ? 'bg-gray-800 text-white'
-                : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800/50'
+                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
             }`}
           >
             {p}
           </button>
         ))}
         {!compact && totalPages > 7 && (
-          <span className="text-gray-600 tabular-nums px-1">
+          <span className="text-gray-400 tabular-nums px-1">
             {page} / {totalPages}
           </span>
         )}

@@ -831,35 +831,35 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
         {/* Sidebar — repo list */}
         <aside className={`w-full md:w-72 md:shrink-0 md:sticky md:top-20 md:max-h-[calc(100vh-6rem)] flex flex-col ${selectedRepo ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
               {t['dashboard.repos']}
             </h2>
             <div className="flex items-center gap-2">
               {scanAllRunning ? (
                 <button
                   onClick={handleCancelScanAll}
-                  className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                  className="inline-flex items-center min-h-6 px-1 text-xs text-red-400 hover:text-red-300 transition-colors"
                 >
                   {interpolate(t['dashboard.scanAllProgress'], {
                     current: scanAllProgress.current,
                     total: scanAllProgress.total,
                   })}{' '}
-                  <span className="text-gray-500">{t['dashboard.scanAllCancel']}</span>
+                  <span className="text-gray-400">{t['dashboard.scanAllCancel']}</span>
                 </button>
               ) : (
                 <button
                   onClick={() => void handleScanAllPreCheck()}
                   disabled={syncing || repos.length === 0 || scanAllChecking}
-                  className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
+                  className="inline-flex items-center min-h-6 px-1 text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50 transition-colors"
                 >
                   {scanAllChecking ? t['dashboard.scanAllChecking'] : t['dashboard.scanAll']}
                 </button>
               )}
-              <span className="text-gray-700">|</span>
+              <span className="text-gray-400">|</span>
               <button
                 onClick={() => void handleSync()}
                 disabled={syncing || scanAllRunning}
-                className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-50 transition-colors"
+                className="inline-flex items-center min-h-6 px-1 text-xs text-gray-400 hover:text-gray-300 disabled:opacity-50 transition-colors"
               >
                 {syncing ? t['dashboard.syncing'] : t['dashboard.sync']}
               </button>
@@ -898,10 +898,10 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
               <button
                 key={key}
                 onClick={() => setSortBy(key)}
-                className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
+                className={`min-h-6 px-2 text-[10px] rounded transition-colors ${
                   sortBy === key
                     ? 'bg-gray-800 text-gray-300'
-                    : 'text-gray-600 hover:text-gray-400'
+                    : 'text-gray-400 hover:text-gray-200'
                 }`}
               >
                 {label}
@@ -912,10 +912,10 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
           {/* Repo list (scrollable) */}
           <div className="overflow-y-auto flex-1 space-y-0.5 -mr-2 pr-2">
             {filteredRepos.length === 0 && repos.length > 0 && (
-              <p className="text-xs text-gray-600 py-4 text-center">{t['dashboard.noMatches']}</p>
+              <p className="text-xs text-gray-400 py-4 text-center">{t['dashboard.noMatches']}</p>
             )}
             {repos.length === 0 && (
-              <p className="text-sm text-gray-600 py-8 text-center">
+              <p className="text-sm text-gray-400 py-8 text-center">
                 {t['dashboard.noRepos']}
               </p>
             )}
@@ -932,7 +932,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                 <div className="font-medium truncate">{repo.fullName}</div>
                 <div className="flex items-center gap-2 mt-0.5">
                   {repo.language && (
-                    <span className="text-xs text-gray-600">{repo.language}</span>
+                    <span className="text-xs text-gray-400">{repo.language}</span>
                   )}
                   {repo.latestScan && (
                     <span className={`text-xs font-medium tabular-nums ${riskColor(repo.latestScan.riskScore)}`}>
@@ -940,7 +940,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     </span>
                   )}
                   {!repo.latestScan && (
-                    <span className="text-xs text-gray-700">{t['dashboard.notScanned']}</span>
+                    <span className="text-xs text-gray-400">{t['dashboard.notScanned']}</span>
                   )}
                 </div>
               </button>
@@ -961,7 +961,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
         {/* Detail panel */}
         <section className={`flex-1 min-w-0 w-full ${!selectedRepo ? 'hidden md:block' : 'block'}`}>
           {!selectedRepo && (
-            <div className="flex items-center justify-center h-64 text-gray-600 text-sm">
+            <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
               {t['dashboard.selectRepo']}
             </div>
           )}
@@ -977,7 +977,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     setSelectedRepoId(null);
                     router.push('/dashboard');
                   }}
-                  className="md:hidden flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
+                  className="md:hidden flex items-center gap-1 min-h-6 text-xs text-gray-400 hover:text-gray-200 mb-2 transition-colors"
                 >
                   <svg viewBox="0 0 20 20" className="w-4 h-4 fill-current"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
                   {t['dashboard.repos']}
@@ -988,7 +988,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                   <div className="min-w-0">
                     <h2 className="text-lg font-semibold text-white truncate">{selectedRepo.fullName}</h2>
                     {selectedRepo.lastScannedAt && (
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-gray-400 mt-0.5">
                         {t['dashboard.lastScanned']}{' '}
                         {new Date(selectedRepo.lastScannedAt).toLocaleString('de-DE')}
                       </p>
@@ -1098,7 +1098,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                 <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 flex items-center justify-between">
                   <div>
                     <p className="text-sm font-medium text-orange-300">{sbomError}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    <p className="text-xs text-gray-400 mt-0.5">
                       {t['dashboard.sbom.notice']}
                     </p>
                   </div>
@@ -1199,7 +1199,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     {loadingHistory && <Loading text={t['dashboard.loading.history']} />}
                     {!loadingHistory && <RiskTimeline history={scanHistory} height={250} />}
                     {!loadingHistory && scanHistory.length === 0 && (
-                      <p className="text-center py-4 text-gray-600 text-xs">
+                      <p className="text-center py-4 text-gray-400 text-xs">
                         {t['dashboard.empty.history']}
                       </p>
                     )}
@@ -1212,7 +1212,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                     : (
                       <div className="rounded-lg border border-gray-700/50 bg-gray-900/40 px-6 py-10 text-center space-y-3">
                         <p className="text-sm font-medium text-gray-300">{t['dashboard.ci.noData']}</p>
-                        <p className="text-xs text-gray-500">{t['dashboard.ci.noData.hint']}</p>
+                        <p className="text-xs text-gray-400">{t['dashboard.ci.noData.hint']}</p>
                         <button
                           type="button"
                           onClick={() => void handleSync()}
@@ -1247,7 +1247,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             </p>
             <div className="max-h-32 overflow-y-auto mb-4 space-y-1">
               {dependabotModal.disabled.map((r) => (
-                <div key={r.repoId} className="text-xs text-gray-500 font-mono truncate">{r.fullName}</div>
+                <div key={r.repoId} className="text-xs text-gray-400 font-mono truncate">{r.fullName}</div>
               ))}
             </div>
             <div className="flex gap-2 justify-end">
@@ -1283,7 +1283,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
 
 function Loading({ text }: { text: string }) {
   return (
-    <div className="flex items-center justify-center py-12 gap-2 text-gray-500 text-sm">
+    <div className="flex items-center justify-center py-12 gap-2 text-gray-400 text-sm">
       <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -1294,7 +1294,7 @@ function Loading({ text }: { text: string }) {
 }
 
 function EmptyState({ text }: { text: string }) {
-  return <div className="text-center py-12 text-gray-600 text-sm">{text}</div>;
+  return <div className="text-center py-12 text-gray-400 text-sm">{text}</div>;
 }
 
 function EcosystemNotice({ label }: { label: string }) {

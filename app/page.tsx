@@ -34,7 +34,7 @@ export default async function HomePage() {
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold text-white tracking-tight mb-4">depsight</h1>
           <p className="text-xl text-gray-400 mb-2">{t['landing.subtitle']}</p>
-          <p className="text-sm text-gray-500 max-w-md mx-auto mb-10">{t['landing.description']}</p>
+          <p className="text-sm text-gray-400 max-w-md mx-auto mb-10">{t['landing.description']}</p>
           <Link
             href="/login"
             className="inline-flex items-center gap-2 px-8 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-500 transition-colors text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
@@ -55,8 +55,8 @@ export default async function HomePage() {
         </div>
 
         <div className="mt-12 text-center">
-          <p className="text-xs text-gray-600 uppercase tracking-widest mb-3">{t['landing.ecosystems']}</p>
-          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-500">
+          <p className="text-xs text-gray-400 uppercase tracking-widest mb-3">{t['landing.ecosystems']}</p>
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-gray-400">
             {['npm', 'Python', 'Go', 'Java', 'Rust', 'PHP'].map((e) => (
               <span key={e} className="font-mono">{e}</span>
             ))}
@@ -65,7 +65,7 @@ export default async function HomePage() {
       </div>
 
       <footer className="border-t border-gray-800 py-6">
-        <div className="max-w-5xl mx-auto px-6 flex items-center justify-between text-xs text-gray-600">
+        <div className="max-w-5xl mx-auto px-6 flex items-center justify-between text-xs text-gray-400">
           <span>depsight</span>
           <div className="flex items-center gap-4">
             <span>{t['landing.footer']}</span>
@@ -73,7 +73,7 @@ export default async function HomePage() {
               href="https://github.com/LanNguyenSi/depsight"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-gray-400 transition-colors"
+              className="hover:text-gray-200 transition-colors"
               aria-label="GitHub"
             >
               <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current">

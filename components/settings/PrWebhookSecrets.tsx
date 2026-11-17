@@ -134,8 +134,8 @@ export function PrWebhookSecrets() {
     <section className="space-y-4">
       <div>
         <h2 className="text-sm font-semibold text-gray-200">{t['settings.prwh.title']}</h2>
-        <p className="text-xs text-gray-500">{t['settings.prwh.desc']}</p>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-400">{t['settings.prwh.desc']}</p>
+        <p className="text-xs text-gray-400 mt-1">
           {t['settings.prwh.payloadUrl']}:{' '}
           <code className="font-mono text-gray-300">{payloadUrl}</code>
         </p>
@@ -162,7 +162,7 @@ export function PrWebhookSecrets() {
           <button
             type="button"
             onClick={() => setRevealed(null)}
-            className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+            className="inline-flex items-center min-h-6 text-xs text-gray-400 hover:text-gray-200 transition-colors"
           >
             {t['token.done']}
           </button>
@@ -178,14 +178,14 @@ export function PrWebhookSecrets() {
       {actionError && <div className="text-xs text-red-400">{t['settings.prwh.actionError']}</div>}
 
       {repos.length === 0 && !loadError ? (
-        <p className="text-xs text-gray-600">{t['settings.prwh.empty']}</p>
+        <p className="text-xs text-gray-400">{t['settings.prwh.empty']}</p>
       ) : (
         <ul className="divide-y divide-gray-800 rounded-lg border border-gray-800">
           {repos.map((repo) => (
             <li key={repo.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
               <div className="min-w-0">
                 <div className="text-sm font-medium text-gray-200 truncate">{repo.fullName}</div>
-                <div className="text-xs text-gray-600">
+                <div className="text-xs text-gray-400">
                   {repo.configured
                     ? `${t['settings.prwh.configured']} · ${t['settings.prwh.rotatedOn']} ${
                         repo.rotatedAt

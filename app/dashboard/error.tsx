@@ -29,7 +29,7 @@ export default function DashboardError({
         <h2 className="text-base font-semibold text-white mb-2">{t['error.title']}</h2>
         <p className="text-sm text-gray-400 mb-6">{t['error.message']}</p>
         {process.env.NODE_ENV !== 'production' && error.message && (
-          <p className="text-xs text-gray-600 font-mono mb-4 truncate">{error.message}</p>
+          <p className="text-xs text-gray-400 font-mono mb-4 truncate">{error.message}</p>
         )}
         <button
           onClick={reset}

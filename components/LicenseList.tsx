@@ -83,14 +83,14 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
               className="inline-flex items-center gap-1 px-2 py-1 bg-gray-800 text-gray-400 text-xs rounded"
             >
               <span className="font-mono">{license}</span>
-              <span className="text-gray-600">&times;{count}</span>
+              <span className="text-gray-400">&times;{count}</span>
             </span>
           ))}
         </div>
         {hasMoreLicenses && (
           <button
             onClick={() => setShowAllLicenses((v) => !v)}
-            className="mt-2 text-[11px] text-blue-400 hover:text-blue-300 transition-colors"
+            className="mt-2 inline-flex items-center min-h-6 text-[11px] text-blue-400 hover:text-blue-300 transition-colors"
           >
             {showAllLicenses ? t['filter.showLess'] : t['filter.showAll']}
           </button>
@@ -108,7 +108,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
 
       {/* No-match state */}
       {noMatches && (
-        <div className="text-center py-8 text-gray-600 text-sm">{t['filter.noMatches']}</div>
+        <div className="text-center py-8 text-gray-400 text-sm">{t['filter.noMatches']}</div>
       )}
 
       {/* Policy violations */}
@@ -142,7 +142,7 @@ export function LicenseList({ licenses, summary, conflictCount }: LicenseListPro
       {/* Compatible */}
       {filteredCompatible.length > 0 && (
         <div>
-          <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">
+          <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">
             {interpolate(t['license.compatible'], { count: filteredCompatible.length })}
           </h4>
           <div className="space-y-1 max-h-64 overflow-y-auto">
@@ -174,7 +174,7 @@ function LicenseRow({ entry }: { entry: LicenseEntry }) {
       <div className="flex items-center gap-2">
         <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
         <span className="font-mono text-gray-300">{entry.packageName}</span>
-        <span className="text-gray-600 text-xs">{entry.version}</span>
+        <span className="text-gray-400 text-xs">{entry.version}</span>
       </div>
       <span className={`font-mono text-xs px-1.5 py-0.5 rounded border ${licenseColor}`}>
         {entry.license}
