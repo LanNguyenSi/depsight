@@ -80,6 +80,8 @@ export function OverviewClient({ data }: OverviewClientProps) {
   return (
     <AppShell repoCount={aggregate.totalRepos}>
       <div className="space-y-6">
+        <h1 className="text-lg font-semibold text-white">{t['nav.overview']}</h1>
+
         <div className="flex items-center justify-end">
           <button
             onClick={() => void handleSync()}

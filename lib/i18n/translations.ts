@@ -335,7 +335,9 @@ const de = {
   'overview.col.outdated': 'Veraltet',
   'overview.col.scanned': 'Gescannt',
   'overview.noRepos': 'Keine Repos gefunden — bitte erst synchronisieren.',
-  'overview.unscannedNotice': '{count} von {total} Repos wurden noch nicht gescannt.',
+  'overview.unscannedNotice': 'Noch nicht gescannt: {count} von {total} Repos.',
+  'overview.comparisonScrollLabel': 'Repository Vergleich, seitlich scrollbar',
+  'overview.scrollHint': 'Mehr Spalten durch seitliches Scrollen.',
   'overview.unscannedAction': 'Im Dashboard alle scannen',
 
   // CI Health
@@ -734,7 +736,9 @@ const en = {
   'overview.col.outdated': 'Outdated',
   'overview.col.scanned': 'Scanned',
   'overview.noRepos': 'No repos found — please sync first.',
-  'overview.unscannedNotice': '{count} of {total} repos have not been scanned yet.',
+  'overview.unscannedNotice': 'Not scanned yet: {count} of {total} repos.',
+  'overview.comparisonScrollLabel': 'Repository comparison, scrollable to the right',
+  'overview.scrollHint': 'Scroll right to see more columns.',
   'overview.unscannedAction': 'Scan all in dashboard',
 
   // CI Health
