@@ -165,7 +165,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
       )}
 
       {/* Table */}
-      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-x-auto">
+      <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-x-auto" role="region" aria-label={t['deps.tableScrollLabel']} tabIndex={0}>
         <table className="w-full text-sm">
           <thead className="border-b border-gray-800">
             <tr>

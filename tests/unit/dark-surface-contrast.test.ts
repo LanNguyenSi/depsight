@@ -79,7 +79,7 @@ describe('dark surface contrast', () => {
 
   it('has no light surface, so the rules above have no legitimate exception', () => {
     // The one white element is the 16 px knob of the policy switch.
-    expect(hits(LIGHT_SURFACE)).toEqual(['components/PolicyList.tsx:429 bg-white']);
+    expect(hits(LIGHT_SURFACE)).toEqual(['components/PolicyList.tsx:438 bg-white']);
   });
 
   it('detects the classes it forbids (the scan is not inert)', () => {

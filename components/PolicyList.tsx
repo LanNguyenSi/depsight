@@ -186,7 +186,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
         </div>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 transition-colors"
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
         >
           {showForm ? t['policy.cancel'] : t['policy.new']}
         </button>
@@ -208,8 +208,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
           <h2 className="text-sm font-medium text-gray-400 mb-4">{t['policy.create']}</h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className={labelCls}>{t['policy.form.name']}</label>
+              <label htmlFor="policy-form-name" className={labelCls}>{t['policy.form.name']}</label>
               <input
+                id="policy-form-name"
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -221,8 +222,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className={labelCls}>{t['policy.form.type']}</label>
+                <label htmlFor="policy-form-type" className={labelCls}>{t['policy.form.type']}</label>
                 <select
+                  id="policy-form-type"
                   value={form.type}
                   onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as PolicyType }))}
                   className={inputCls}
@@ -233,8 +235,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
                 </select>
               </div>
               <div>
-                <label className={labelCls}>{t['policy.form.severity']}</label>
+                <label htmlFor="policy-form-severity" className={labelCls}>{t['policy.form.severity']}</label>
                 <select
+                  id="policy-form-severity"
                   value={form.severity}
                   onChange={(e) => setForm((f) => ({ ...f, severity: e.target.value as Severity }))}
                   className={inputCls}
@@ -248,8 +251,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             {form.type === 'LICENSE_DENY' && (
               <div>
-                <label className={labelCls}>{t['policy.form.deniedLicenses']}</label>
+                <label htmlFor="policy-form-denied-licenses" className={labelCls}>{t['policy.form.deniedLicenses']}</label>
                 <textarea
+                  id="policy-form-denied-licenses"
                   value={form.deniedLicenses}
                   onChange={(e) => setForm((f) => ({ ...f, deniedLicenses: e.target.value }))}
                   placeholder={t['policy.form.deniedExample']}
@@ -261,8 +265,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             {form.type === 'LICENSE_ALLOW_ONLY' && (
               <div>
-                <label className={labelCls}>{t['policy.form.allowedLicenses']}</label>
+                <label htmlFor="policy-form-allowed-licenses" className={labelCls}>{t['policy.form.allowedLicenses']}</label>
                 <textarea
+                  id="policy-form-allowed-licenses"
                   value={form.allowedLicenses}
                   onChange={(e) => setForm((f) => ({ ...f, allowedLicenses: e.target.value }))}
                   placeholder={t['policy.form.allowedExample']}
@@ -274,8 +279,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             {form.type === 'CVE_MIN_SEVERITY' && (
               <div>
-                <label className={labelCls}>{t['policy.form.minSeverity']}</label>
+                <label htmlFor="policy-form-min-severity" className={labelCls}>{t['policy.form.minSeverity']}</label>
                 <select
+                  id="policy-form-min-severity"
                   value={form.minSeverity}
                   onChange={(e) => setForm((f) => ({ ...f, minSeverity: e.target.value as Severity }))}
                   className={inputCls}
@@ -289,8 +295,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
 
             {form.type === 'DEPENDENCY_MAX_AGE' && (
               <div>
-                <label className={labelCls}>{t['policy.form.maxAge']}</label>
+                <label htmlFor="policy-form-max-age" className={labelCls}>{t['policy.form.maxAge']}</label>
                 <input
+                  id="policy-form-max-age"
                   type="number"
                   min={1}
                   value={form.maxAgeDays}
@@ -304,8 +311,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
             {form.type === 'DEPENDENCY_MIN_VERSION' && (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className={labelCls}>{t['policy.form.minVersionPackage']}</label>
+                  <label htmlFor="policy-form-min-version-package" className={labelCls}>{t['policy.form.minVersionPackage']}</label>
                   <input
+                    id="policy-form-min-version-package"
                     type="text"
                     value={form.minVersionPackage}
                     onChange={(e) => setForm((f) => ({ ...f, minVersionPackage: e.target.value }))}
@@ -314,8 +322,9 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
                   />
                 </div>
                 <div>
-                  <label className={labelCls}>{t['policy.form.minVersion']}</label>
+                  <label htmlFor="policy-form-min-version" className={labelCls}>{t['policy.form.minVersion']}</label>
                   <input
+                    id="policy-form-min-version"
                     type="text"
                     value={form.minVersion}
                     onChange={(e) => setForm((f) => ({ ...f, minVersion: e.target.value }))}
@@ -337,7 +346,7 @@ export function PolicyList({ initialPolicies }: PolicyListProps) {
               <button
                 type="submit"
                 disabled={saving}
-                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-500 disabled:opacity-50 transition-colors"
+                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 {saving ? t['policy.form.saving'] : t['policy.form.save']}
               </button>

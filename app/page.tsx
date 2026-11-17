@@ -37,7 +37,7 @@ export default async function HomePage() {
           <p className="text-sm text-gray-400 max-w-md mx-auto mb-10">{t['landing.description']}</p>
           <Link
             href="/login"
-            className="inline-flex items-center gap-2 px-8 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-500 transition-colors text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
+            className="inline-flex items-center gap-2 px-8 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             {t['landing.cta']}
           </Link>

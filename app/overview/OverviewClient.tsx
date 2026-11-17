@@ -86,7 +86,7 @@ export function OverviewClient({ data }: OverviewClientProps) {
           <button
             onClick={() => void handleSync()}
             disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-50 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             <svg viewBox="0 0 16 16" className={`w-4 h-4 fill-current ${syncing ? 'animate-spin' : ''}`}>
               <path d="M13.65 2.35a8 8 0 10.7 10.3l-1.5-.86a6 6 0 11-.52-7.72L10.5 6H15V1.5l-1.35.85z" />

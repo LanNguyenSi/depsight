@@ -54,7 +54,7 @@ export function ActionsMenuTrigger({
       onClick={onClick}
       aria-haspopup="menu"
       aria-expanded={open}
-      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-500 transition-colors"
+      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
     >
       {label}
       <svg viewBox="0 0 20 20" className={`w-3.5 h-3.5 fill-current transition-transform ${open ? 'rotate-180' : ''}`}>
