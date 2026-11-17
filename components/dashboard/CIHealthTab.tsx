@@ -138,6 +138,7 @@ export function CIHealthTab({ repoId }: Props) {
           <select
             value={period}
             onChange={(e) => setPeriod(parseInt(e.target.value) as Period)}
+            aria-label={t['ci.health.period']}
             className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300"
           >
             <option value={1}>{t['ci.health.period.1d']}</option>

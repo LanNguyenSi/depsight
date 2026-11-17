@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import semverValid from 'semver/functions/valid';
-import { useLocale } from '@/lib/i18n';
+import { useLocale, interpolate } from '@/lib/i18n';
 import type { Translations } from '@/lib/i18n';
 import { ConfirmModal } from '@/components/ConfirmModal';
 
@@ -415,9 +415,13 @@ function PolicyRow({ policy, onToggle, onDelete, t }: PolicyRowProps) {
 
       <div className="flex items-center gap-3 ml-4 shrink-0">
         <button
+          type="button"
           onClick={() => onToggle(policy)}
-          title={policy.enabled ? 'Deaktivieren' : 'Aktivieren'}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+          role="switch"
+          aria-checked={policy.enabled}
+          aria-label={interpolate(t['policy.toggleLabel'], { name: policy.name })}
+          title={policy.enabled ? t['policy.disable'] : t['policy.enable']}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 ${
             policy.enabled ? 'bg-blue-600' : 'bg-gray-700'
           }`}
         >
