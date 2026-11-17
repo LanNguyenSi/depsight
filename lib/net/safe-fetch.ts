@@ -258,9 +258,10 @@ export class SafeFetchLimitError extends Error {
  *
  * The target is user-controlled, so the exchange is bounded: the response body
  * may not exceed `maxResponseBytes` and the whole request (connect, headers,
- * body, plus the DNS lookup before them) may not take longer than `timeoutMs`. Either limit rejects with a
- * SafeFetchLimitError and destroys the socket, so a receiver that streams
- * forever or trickles bytes cannot pin a socket or memory.
+ * body, plus the DNS lookup before them) may not take longer than
+ * `timeoutMs`. Either limit rejects with a SafeFetchLimitError and destroys
+ * the socket, so a receiver that streams forever or trickles bytes cannot pin
+ * a socket or memory.
  */
 export function safeFetch(
   input: string,
