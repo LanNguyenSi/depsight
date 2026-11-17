@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEscapeKey, nextFocusIndex } from '@/components/dialog-focus';
+import { isEscapeKey, nextFocusIndex, restoreTarget } from '@/components/dialog-focus';
 
 describe('isEscapeKey', () => {
   it('closes on Escape', () => {
@@ -53,5 +53,22 @@ describe('nextFocusIndex', () => {
   it('a single control cycles to itself in both directions', () => {
     expect(nextFocusIndex(0, 1, false)).toBe(0);
     expect(nextFocusIndex(0, 1, true)).toBe(0);
+  });
+});
+
+describe('restoreTarget', () => {
+  it('returns the previous element when it is still in the document', () => {
+    const previous = { focus: () => undefined } as unknown as Element;
+    expect(restoreTarget(previous, true)).toBe(previous);
+  });
+
+  it('returns null when the previous element was detached from the document', () => {
+    const previous = { focus: () => undefined } as unknown as Element;
+    expect(restoreTarget(previous, false)).toBeNull();
+  });
+
+  it('returns null when there was no previous element', () => {
+    expect(restoreTarget(null, true)).toBeNull();
+    expect(restoreTarget(null, false)).toBeNull();
   });
 });

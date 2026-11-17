@@ -1014,8 +1014,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       onClick={() => setActionsOpen((v) => !v)}
                     />
                     {actionsOpen && (
-                      <div className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
+                      <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleCveScan(selectedRepo); }}
                           disabled={scanning}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1023,6 +1024,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           {scanning ? t['dashboard.btn.scanning'] : t['dashboard.btn.cveScan']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleLicenseScan(selectedRepo); }}
                           disabled={scanningLicense}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1030,6 +1032,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           {scanningLicense ? t['dashboard.btn.scanning'] : t['dashboard.btn.license']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleDepsScan(selectedRepo); }}
                           disabled={scanningDeps}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"
@@ -1041,12 +1044,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                           <PRScanButton owner={selectedRepo.owner} repo={selectedRepo.name} />
                         </div>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleSbomDownload(selectedRepo); }}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
                         >
                           {t['dashboard.actions.sbomExport']}
                         </button>
                         <button
+                          role="menuitem"
                           onClick={() => { setActionsOpen(false); void handleBundleExport(selectedRepo); }}
                           disabled={exportingBundle}
                           className="w-full text-left px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 transition-colors"

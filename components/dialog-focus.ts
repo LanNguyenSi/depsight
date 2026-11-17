@@ -21,6 +21,21 @@ export function nextFocusIndex(current: number, count: number, shiftKey: boolean
   return (current + 1) % count;
 }
 
+/**
+ * Where to move focus when a dialog closes: the element that had focus
+ * before the dialog opened (`previous`), or `null` meaning the body, when
+ * there was no previous element or it is no longer in the document (for
+ * example the list row that held it re-rendered). `isConnected` is the
+ * detached check the caller reads from the DOM.
+ */
+export function restoreTarget<T extends Element>(
+  previous: T | null,
+  isConnected: boolean,
+): T | null {
+  if (!previous) return null;
+  return isConnected ? previous : null;
+}
+
 /** Elements Tab can reach, used to build the focus list of a dialog. */
 export const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

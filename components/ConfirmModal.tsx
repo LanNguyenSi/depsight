@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { FOCUSABLE_SELECTOR, isEscapeKey, nextFocusIndex } from '@/components/dialog-focus';
+import { FOCUSABLE_SELECTOR, isEscapeKey, nextFocusIndex, restoreTarget } from '@/components/dialog-focus';
 
 interface ConfirmModalProps {
   open: boolean;
@@ -61,8 +61,9 @@ export function ConfirmModal({
       window.removeEventListener('keydown', onKeyDown);
       // Return focus to the element that opened the dialog; if it is gone
       // from the document (the list row re-rendered), fall back to body.
-      if (previouslyFocused && document.contains(previouslyFocused)) {
-        previouslyFocused.focus();
+      const target = restoreTarget(previouslyFocused, previouslyFocused?.isConnected ?? false);
+      if (target) {
+        target.focus();
       } else {
         document.body.focus();
       }
