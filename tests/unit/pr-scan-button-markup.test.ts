@@ -44,6 +44,8 @@ describe('PRScanButton', () => {
     expect(hook).toContain('lockScroll ? lockBodyScroll(document.body.style) : null');
     expect(hook).toContain('restoreScroll?.()');
     expect(hook).toContain('returnFocusTarget(opener, previouslyFocused, fallback)');
+    expect(hook).toContain('const fallback = fallbackFocusRef?.current ?? null;');
+    expect(hook).toContain('active: document.activeElement,');
     expect(hook).toContain("window.addEventListener('keydown', onKeyDown, true)");
     expect(hook).toContain("window.removeEventListener('keydown', onKeyDown, true)");
   });
