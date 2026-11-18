@@ -106,8 +106,26 @@ function isBlockedIp(ip: string): boolean {
 }
 
 /**
+ * Cap on concurrent `dns.lookup` calls for user-configured host names.
+ *
+ * `dns.lookup` runs getaddrinfo on the libuv threadpool (4 threads by
+ * default) and an abandoned call holds its thread until the system resolver
+ * gives up, which can exceed the DNS bound below. Keeping fewer user-host
+ * lookups in flight than the pool has threads means slow user hosts can
+ * never occupy the whole pool; a caller that arrives while the cap is full
+ * is rejected immediately (kind `dns_busy`) instead of queueing on the pool.
+ * Deliberately below 4 (the default `UV_THREADPOOL_SIZE`), which this app
+ * does not raise.
+ */
+export const MAX_CONCURRENT_DNS_LOOKUPS = 2;
+
+let dnsLookupsInFlight = 0;
+
+/**
  * Validate that `input` is a safe public http(s) URL and return its resolved
- * public IP addresses. Throws SsrfBlockedError on any violation.
+ * public IP addresses. Throws SsrfBlockedError on any violation, or
+ * SafeFetchLimitError (`timeout` or `dns_busy`) when the host name lookup
+ * misses its bound or the lookup cap is full.
  */
 export async function assertPublicUrl(
   input: string,
@@ -155,8 +173,29 @@ export async function assertPublicUrl(
   // getaddrinfo call keeps its pool slot until the system resolver gives up
   // (resolv.conf timeout and attempts); nothing here cancels it. What the bound
   // guarantees is that no delivery waits on it, or retains anything for it,
-  // beyond dnsTimeoutMs.
+  // beyond dnsTimeoutMs. The concurrency cap below bounds how many of those
+  // abandoned calls can exist at once, which is what protects the pool.
+  //
+  // A malformed URL, a non-http(s) scheme or a blocked IP literal has already
+  // rejected above, so the cap only ever refuses hostname lookups and never
+  // masks a synchronous block.
   const dnsTimeoutMs = options?.dnsTimeoutMs ?? SAFE_FETCH_TIMEOUT_MS;
+  if (dnsLookupsInFlight >= MAX_CONCURRENT_DNS_LOOKUPS) {
+    throw new SafeFetchLimitError(
+      'dns_busy',
+      `Already ${MAX_CONCURRENT_DNS_LOOKUPS} host name lookups in flight`,
+    );
+  }
+  dnsLookupsInFlight += 1;
+  let slotHeld = true;
+  // Idempotent: whichever settle path reaches it first releases, and a path
+  // that already released (the lookup settling on its own) makes the second
+  // call a no-op, so the counter cannot drift.
+  const release = (): void => {
+    if (!slotHeld) return;
+    slotHeld = false;
+    dnsLookupsInFlight -= 1;
+  };
   let timer: NodeJS.Timeout | undefined;
   let resolved: string[];
   try {
@@ -169,10 +208,21 @@ export async function assertPublicUrl(
         dnsTimeoutMs,
       );
     });
-    const records = await Promise.race([dns.lookup(hostname, { all: true }), timeout]);
+    const lookup = dns.lookup(hostname, { all: true });
+    // Release on the lookup's own settle, not when the race timer fires: the
+    // abandoned getaddrinfo call still holds its libuv pool thread until the
+    // system resolver gives up, so releasing at the timeout would let slow
+    // hosts pile up on the pool anyway. The handlers also consume a late
+    // settle, so an already-abandoned lookup cannot cause an unhandled
+    // rejection, and a late answer is dropped (nothing dials on it).
+    void lookup.then(release, release);
+    const records = await Promise.race([lookup, timeout]);
     resolved = records.map((r) => r.address);
   } catch (err) {
     if (err instanceof SafeFetchLimitError) throw err;
+    // The lookup itself failed inside the bound (or dns.lookup threw
+    // synchronously): it is a resolution failure, not a resource limit.
+    release();
     throw new SsrfBlockedError('Could not resolve URL host');
   } finally {
     clearTimeout(timer);
@@ -240,15 +290,21 @@ export interface SafeFetchLimits {
   timeoutMs?: number;
 }
 
-/** A delivery stopped by a safeFetch resource limit (response size or total time). */
+/** A delivery or URL check stopped by a safeFetch resource limit (response size, total time, or the host name lookup cap). */
 export class SafeFetchLimitError extends Error {
-  readonly kind: 'response_too_large' | 'timeout';
-  constructor(kind: 'response_too_large' | 'timeout', message: string) {
+  readonly kind: 'response_too_large' | 'timeout' | 'dns_busy';
+  constructor(kind: 'response_too_large' | 'timeout' | 'dns_busy', message: string) {
     super(message);
     this.name = 'SafeFetchLimitError';
     this.kind = kind;
   }
 }
+
+/** Save-route answer for a URL whose host name lookup missed its bound. */
+export const DNS_UNREACHABLE_MESSAGE = 'Host did not resolve in time';
+
+/** Save-route answer for a URL check refused because the lookup cap is full. */
+export const DNS_BUSY_MESSAGE = 'Too many host checks in progress, try again';
 
 /**
  * SSRF-safe outbound fetch for user-supplied URLs. Validates the URL, resolves

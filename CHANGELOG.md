@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Concurrent user-host DNS lookups are capped:** a webhook or Slack host whose DNS answers slowly keeps its `getaddrinfo` call (and one libuv threadpool thread of the default 4) until the system resolver gives up, which can exceed the 15 second bound the lookup is raced against, and an unbounded number of such slow hosts could be configured and checked at once (deliveries run in parallel, and every save looks up the URL), filling the pool that the rest of the process shares. `assertPublicUrl` now takes one of at most `MAX_CONCURRENT_DNS_LOOKUPS` (2) semaphore slots around the lookup of a user-configured host and releases it only when the lookup itself settles, not when the bound fires (the abandoned call keeps its thread either way), so a check that arrives while the cap is full is refused at once with `SafeFetchLimitError` (new kind `dns_busy`) without calling `dns.lookup`. A late lookup answer after the bound is dropped: nothing dials on it. `POST /api/webhooks` and `POST /api/slack` answer the two cases distinctly: `Host did not resolve in time` for a DNS timeout and `Too many host checks in progress, try again` for a full cap, where both previously read `Invalid URL format` / `Invalid webhookUrl format`; malformed and SSRF-blocked URLs keep their messages. `tests/unit/safe-fetch-dns-cap.test.ts` pins the cap, the release on each settle path (success, error, and the late settle after a timeout), and the precedence of a malformed URL or blocked IP literal over a full cap.
+
 ## [0.11.0] - 2026-11-17
 
 ### Security

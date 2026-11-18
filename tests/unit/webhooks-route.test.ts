@@ -19,15 +19,15 @@ const { authMock, assertPublicUrlMock, webhookConfigFindMany, webhookConfigCreat
 // Module mocks
 // ---------------------------------------------------------------------------
 vi.mock('@/lib/auth', () => ({ auth: authMock }));
-vi.mock('@/lib/net/safe-fetch', () => ({
-  assertPublicUrl: assertPublicUrlMock,
-  SsrfBlockedError: class SsrfBlockedError extends Error {
-    constructor(msg: string) {
-      super(msg);
-      this.name = 'SsrfBlockedError';
-    }
-  },
-}));
+// Only assertPublicUrl is replaced; the error classes and the route-facing
+// messages come from the real module so the route's instanceof checks and
+// message constants are the production ones.
+vi.mock('@/lib/net/safe-fetch', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/net/safe-fetch')>(
+    '@/lib/net/safe-fetch',
+  );
+  return { ...actual, assertPublicUrl: assertPublicUrlMock };
+});
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     webhookConfig: {
@@ -184,6 +184,62 @@ describe('POST /api/webhooks', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toBe('URL resolves to a non-public address');
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 Host did not resolve in time when assertPublicUrl rejects with a DNS timeout', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    const { SafeFetchLimitError, DNS_UNREACHABLE_MESSAGE, DNS_BUSY_MESSAGE } =
+      await import('@/lib/net/safe-fetch');
+    assertPublicUrlMock.mockRejectedValue(
+      new SafeFetchLimitError('timeout', 'DNS lookup timed out after 15000 ms'),
+    );
+
+    const res = await POST(
+      makePostRequest({ name: 'Slow Hook', url: 'https://slow.example/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(DNS_UNREACHABLE_MESSAGE);
+    expect(body.error).toBe('Host did not resolve in time');
+    // Distinct from the cap-full message.
+    expect(body.error).not.toBe(DNS_BUSY_MESSAGE);
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 Too many host checks in progress when assertPublicUrl rejects with dns_busy', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    const { SafeFetchLimitError, DNS_UNREACHABLE_MESSAGE, DNS_BUSY_MESSAGE } =
+      await import('@/lib/net/safe-fetch');
+    assertPublicUrlMock.mockRejectedValue(
+      new SafeFetchLimitError('dns_busy', 'Already 2 host name lookups in flight'),
+    );
+
+    const res = await POST(
+      makePostRequest({ name: 'Busy Hook', url: 'https://busy.example/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(DNS_BUSY_MESSAGE);
+    expect(body.error).toBe('Too many host checks in progress, try again');
+    // Distinct from the DNS timeout message.
+    expect(body.error).not.toBe(DNS_UNREACHABLE_MESSAGE);
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 Invalid URL format when assertPublicUrl rejects with a non-SSRF, non-limit error', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockRejectedValue(new Error('some unexpected failure'));
+
+    const res = await POST(
+      makePostRequest({ name: 'Bad Hook', url: 'not-a-url', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Invalid URL format');
     expect(webhookConfigCreate).not.toHaveBeenCalled();
   });
 
