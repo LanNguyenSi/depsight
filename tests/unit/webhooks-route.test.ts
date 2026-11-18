@@ -281,7 +281,7 @@ describe('POST /api/webhooks', () => {
     const body = await res.json() as { webhook: object };
     expect(body.webhook).toMatchObject({ id: 'wh-new', name: 'My Hook' });
 
-    expect(assertPublicUrlMock).toHaveBeenCalledWith('https://example.com/hook');
+    expect(assertPublicUrlMock).toHaveBeenCalledWith('https://example.com/hook', { waitForSlot: false });
     expect(webhookConfigCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ userId: 'user-1', name: 'My Hook', url: 'https://example.com/hook' }),

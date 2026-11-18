@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await assertPublicUrl(webhookUrl); // validate format + reject non-public/internal targets (SSRF)
+    await assertPublicUrl(webhookUrl, { waitForSlot: false }); // save route: refuse at once when the lookup cap is full (SSRF check)
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return NextResponse.json({ error: err.message }, { status: 400 });

@@ -1,8 +1,10 @@
 // Tests for the user-host DNS lookup cap in lib/net/safe-fetch.ts.
-// The cap is module-level state, so every test re-imports the module with
-// vi.resetModules() to start from an empty semaphore. dns.lookup is mocked;
+// The counter and the FIFO wait queue live on globalThis (one shared state
+// object for the whole process), so every test resets them through the
+// exported test helper after re-importing the module. dns.lookup is mocked;
 // http/https are mocked so a dial would be visible as a call.
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
 
 const { dnsLookupMock, httpRequestMock, httpsRequestMock } = vi.hoisted(() => ({
   dnsLookupMock: vi.fn(),
@@ -27,10 +29,16 @@ vi.mock('https', () => {
 
 type SafeFetchModule = typeof import('@/lib/net/safe-fetch');
 
-/** A fresh module instance, so the lookup semaphore starts empty. */
+/**
+ * A fresh module instance with the process-wide lookup state reset to empty
+ * (the state itself lives on globalThis, so re-importing alone would share
+ * it with any earlier copy).
+ */
 async function freshModule(): Promise<SafeFetchModule> {
   vi.resetModules();
-  return await import('@/lib/net/safe-fetch');
+  const mod = await import('@/lib/net/safe-fetch');
+  mod.resetDnsLookupStateForTests();
+  return mod;
 }
 
 /**
@@ -83,6 +91,34 @@ async function drainCap(pending: Map<string, { reject: (e: Error) => void }>): P
 }
 
 const PUBLIC = [{ address: '93.184.216.34', family: 4 }];
+
+/** Persistent https.request fake answering every request with a tiny 200. */
+function dialWith200(): void {
+  httpsRequestMock.mockImplementation((_options: unknown, callback: (res: EventEmitter) => void) => {
+    const req = new EventEmitter() as EventEmitter & {
+      write: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+    };
+    req.write = vi.fn();
+    req.end = vi.fn();
+    const res = new EventEmitter() as EventEmitter & {
+      statusCode: number;
+      statusMessage: string;
+      headers: Record<string, string>;
+    };
+    res.statusCode = 200;
+    res.statusMessage = 'OK';
+    res.headers = { 'content-length': '2' };
+    process.nextTick(() => {
+      callback(res);
+      process.nextTick(() => {
+        res.emit('data', Buffer.from('ok'));
+        res.emit('end');
+      });
+    });
+    return req;
+  });
+}
 
 afterEach(() => {
   dnsLookupMock.mockReset();
@@ -363,5 +399,201 @@ describe('user-host DNS lookup cap: precedence', () => {
     dnsLookupMock.mockResolvedValue(PUBLIC);
     const result = await mod.assertPublicUrl('https://example.com');
     expect(result.addresses).toEqual(['93.184.216.34']);
+  });
+});
+
+describe('delivery-mode wait queue (waitForSlot: true)', () => {
+  it('a third delivery waits for a slot and proceeds when one frees', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending); // slow1 + slow2 hold both slots
+    dialWith200();
+
+    const t3 = track(mod.safeFetch('https://w3.example/hook', undefined, { timeoutMs: 5000 }));
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2); // it is waiting, not refused, not dialing
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(1);
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+
+    pending.get('slow1.example')!.resolve(PUBLIC); // a slot frees
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(3); // the slot went to the waiter
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(0);
+    expect(t3.outcome()).toBeNull(); // its own lookup is still parked
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+
+    pending.get('w3.example')!.resolve(PUBLIC);
+    await flush();
+    expect(t3.outcome()?.ok).toBe(true);
+    expect(httpsRequestMock).toHaveBeenCalledTimes(1); // it dialed exactly once
+    pending.get('slow2.example')!.reject(new Error('cleanup'));
+    await flush();
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+  });
+
+  it('a waiter that cannot get a slot within its budget rejects with kind timeout', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending);
+
+    const err = await mod
+      .safeFetch('https://w.example/hook', undefined, { timeoutMs: 50 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(mod.SafeFetchLimitError);
+    expect((err as InstanceType<typeof mod.SafeFetchLimitError>).kind).toBe('timeout');
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2); // it never got to look up
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(0);
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+
+    await drainCap(pending);
+  });
+
+  it('slots go to waiters in FIFO order', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending);
+
+    const t1 = track(
+      mod.assertPublicUrl('https://w1.example', { dnsTimeoutMs: 5000, waitForSlot: true }),
+    );
+    const t2 = track(
+      mod.assertPublicUrl('https://w2.example', { dnsTimeoutMs: 5000, waitForSlot: true }),
+    );
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2);
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(2);
+
+    pending.get('slow1.example')!.resolve(PUBLIC); // first release
+    await flush();
+    const looked = dnsLookupMock.mock.calls.map((c) => c[0]);
+    expect(looked).toContain('w1.example'); // the head of the queue got the slot
+    expect(looked).not.toContain('w2.example'); // not the waiter behind it
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(1);
+
+    pending.get('slow2.example')!.resolve(PUBLIC); // second release
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(4); // now w2 is served too
+
+    pending.get('w1.example')!.resolve(PUBLIC);
+    pending.get('w2.example')!.resolve(PUBLIC);
+    await flush();
+    expect(t1.outcome()?.ok).toBe(true);
+    expect(t2.outcome()?.ok).toBe(true);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+  });
+
+  it('a waiter beyond the queue cap is refused with dns_busy without queueing', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending);
+
+    const waiters = Array.from({ length: mod.MAX_QUEUED_DNS_LOOKUPS }, (_, i) =>
+      track(
+        mod.assertPublicUrl(`https://q${i}.example`, {
+          dnsTimeoutMs: 60_000,
+          waitForSlot: true,
+        }),
+      ),
+    );
+    await flush();
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(mod.MAX_QUEUED_DNS_LOOKUPS);
+
+    const err = await mod
+      .assertPublicUrl('https://overflow.example', { dnsTimeoutMs: 60_000, waitForSlot: true })
+      .catch((e) => e);
+    expect((err as InstanceType<typeof mod.SafeFetchLimitError>).kind).toBe('dns_busy');
+    expect((err as Error).message).toBe(
+      `Already ${mod.MAX_QUEUED_DNS_LOOKUPS} host name lookups queued`,
+    );
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(mod.MAX_QUEUED_DNS_LOOKUPS); // refused before queueing
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2);
+
+    // Drain: every release grants the head of the queue, so the releases
+    // cascade one wave of admissions per flush until everyone is served.
+    for (let i = 0; i <= mod.MAX_QUEUED_DNS_LOOKUPS; i += 1) {
+      for (const p of [...pending.values()]) p.resolve(PUBLIC);
+      await flush();
+    }
+    expect(waiters.every((w) => w.outcome()?.ok === true)).toBe(true);
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(0);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+  });
+
+  it('a waiter that timed out left the queue and never takes a slot later', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending);
+
+    const err = await mod
+      .assertPublicUrl('https://gone.example', { dnsTimeoutMs: 50, waitForSlot: true })
+      .catch((e) => e);
+    expect((err as InstanceType<typeof mod.SafeFetchLimitError>).kind).toBe('timeout');
+    expect(mod.dnsLookupQueueLengthForTests()).toBe(0);
+
+    // The held lookups settle now: with the timed-out waiter gone, the
+    // releases free the counter instead of handing slots to a dead waiter.
+    await drainCap(pending);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2); // gone.example never looked up
+
+    dnsLookupMock.mockResolvedValueOnce(PUBLIC);
+    const result = await mod.assertPublicUrl('https://next.example'); // route mode
+    expect(result.addresses).toEqual(['93.184.216.34']);
+  });
+});
+
+describe('the cap counter cannot go negative', () => {
+  it('the double release of a lookup that failed inside the bound is a no-op', async () => {
+    const mod = await freshModule();
+    // Two lookups fail inside the bound: the catch path releases and the
+    // lookup's own rejection handler reaches release a second time.
+    dnsLookupMock.mockRejectedValue(new Error('ENOTFOUND'));
+    await expect(
+      mod.assertPublicUrl('https://f1.example', { dnsTimeoutMs: 5000 }),
+    ).rejects.toBeInstanceOf(mod.SsrfBlockedError);
+    await expect(
+      mod.assertPublicUrl('https://f2.example', { dnsTimeoutMs: 5000 }),
+    ).rejects.toBeInstanceOf(mod.SsrfBlockedError);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2);
+
+    // Fill the cap with two parked lookups (calls 3 and 4). Without the
+    // idempotence guard the counter would sit at -2 here, so the third check
+    // below would be admitted and look up a fifth time.
+    const pending = deferredResolver();
+    await fillCap(mod, pending);
+    const err = await mod
+      .assertPublicUrl('https://fifth.example', { dnsTimeoutMs: 5000 })
+      .catch((e) => e);
+    expect((err as InstanceType<typeof mod.SafeFetchLimitError>).kind).toBe('dns_busy');
+    expect(dnsLookupMock).toHaveBeenCalledTimes(4); // not a fifth time
+
+    await drainCap(pending);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+  });
+});
+
+describe('the lookup state is process-wide (globalThis)', () => {
+  it('two module copies share one counter; either copy can reset it', async () => {
+    const mod1 = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod1, pending);
+
+    vi.resetModules();
+    const mod2 = await import('@/lib/net/safe-fetch');
+    expect(mod2.dnsLookupsInFlightForTests()).toBe(2); // mod1's lookups are visible to mod2
+
+    const err = await mod2
+      .assertPublicUrl('https://third.example', { dnsTimeoutMs: 5000 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(mod2.SafeFetchLimitError);
+    expect((err as InstanceType<typeof mod2.SafeFetchLimitError>).kind).toBe('dns_busy');
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2); // refused by the other copy's lookups
+
+    mod2.resetDnsLookupStateForTests(); // reset through either copy resets both
+    expect(mod1.dnsLookupsInFlightForTests()).toBe(0);
+    pending.get('slow1.example')?.reject(new Error('cleanup'));
+    pending.get('slow2.example')?.reject(new Error('cleanup'));
+    await flush();
   });
 });

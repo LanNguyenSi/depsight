@@ -20,11 +20,19 @@ vi.mock('@/lib/prisma', () => ({
 
 vi.mock('@/lib/net/safe-fetch', () => ({
   safeFetch: safeFetchMock,
-  // Minimal stub — deliverWebhook only uses instanceof check in the catch path
+  // Minimal stubs — failedDelivery only uses instanceof checks in the catch path
   SsrfBlockedError: class SsrfBlockedError extends Error {},
+  SafeFetchLimitError: class SafeFetchLimitError extends Error {
+    kind: string;
+    constructor(kind: string, message: string) {
+      super(message);
+      this.kind = kind;
+    }
+  },
 }));
 
 import { notifyScanCompleted, notifyForScan } from '@/lib/alerts/notifier';
+import { SafeFetchLimitError } from '@/lib/net/safe-fetch';
 import type { Advisory } from '@prisma/client';
 
 describe('notifyScanCompleted', () => {
@@ -495,5 +503,73 @@ describe('notifier: a delivery stopped by a safeFetch limit', () => {
     ).resolves.toBeUndefined();
 
     expect(safeFetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('notifier: failed-delivery logging', () => {
+  const adv = (severity: string) =>
+    ({
+      id: `adv-${severity}`,
+      ghsaId: `GHSA-${severity}`,
+      cveId: null,
+      severity,
+      summary: `${severity} issue`,
+      packageName: `pkg-${severity}`,
+      fixedVersion: null,
+      url: null,
+    }) as unknown as Advisory;
+
+  beforeEach(() => {
+    webhookConfigFindMany.mockReset();
+    slackConfigFindUnique.mockReset();
+    safeFetchMock.mockReset();
+  });
+
+  it('logs a failed webhook delivery with the destination host and the error kind, never the URL or the secret', async () => {
+    webhookConfigFindMany.mockResolvedValue([
+      { url: 'https://down.example.com/some/path?token=hunter2', secret: null, events: ['scan.completed'] },
+    ]);
+    safeFetchMock.mockRejectedValue(new SafeFetchLimitError('dns_busy', 'Already 64 host name lookups queued'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-1', 'cve', {}, []);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0].join(' ');
+      expect(line).toContain('down.example.com');
+      expect(line).toContain('dns_busy');
+      expect(line).not.toContain('hunter2');
+      expect(line).not.toContain('/some/path');
+      expect(line).not.toContain('https://');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('logs a failed Slack delivery with the host and the kind, and a successful one not at all', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+    slackConfigFindUnique.mockResolvedValue({
+      enabled: true,
+      webhookUrl: 'https://hooks.slack.example/T000/B000/ZZZsecrettoken',
+      channel: null,
+      minSeverity: 'HIGH',
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      safeFetchMock.mockRejectedValue(new SafeFetchLimitError('timeout', 'No free host name lookup slot within 1 ms'));
+      await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-1', 40, [adv('HIGH')]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0].join(' ');
+      expect(line).toContain('hooks.slack.example');
+      expect(line).toContain('timeout');
+      expect(line).not.toContain('ZZZsecrettoken');
+      expect(line).not.toContain('T000');
+
+      warn.mockClear();
+      safeFetchMock.mockResolvedValue({ ok: true });
+      await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-2', 40, [adv('HIGH')]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
