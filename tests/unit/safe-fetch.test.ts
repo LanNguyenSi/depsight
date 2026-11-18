@@ -582,8 +582,24 @@ describe('DNS lookup bound', () => {
     return { outcome: () => out };
   }
 
+  /**
+   * A resolver that does not answer. `giveUp()` ends the call the way a real
+   * resolver eventually does (well after the bound already fired), which
+   * releases the lookup's semaphore slot; without it the slot would leak into
+   * later tests in this file.
+   */
+  function neverAnsweringResolver(): { giveUp: () => void } {
+    let giveUp!: () => void;
+    dnsLookupMock.mockReturnValue(
+      new Promise((_resolve, reject) => {
+        giveUp = () => reject(new Error('resolver gave up'));
+      }),
+    );
+    return { giveUp };
+  }
+
   it('assertPublicUrl rejects with a SafeFetchLimitError of kind timeout when the resolver never answers', async () => {
-    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const r = neverAnsweringResolver();
     const t = track(assertPublicUrl('https://slow.example', { dnsTimeoutMs: 500 }));
 
     await vi.advanceTimersByTimeAsync(499);
@@ -596,20 +612,22 @@ describe('DNS lookup bound', () => {
     expect((out?.value as SafeFetchLimitError).kind).toBe('timeout');
     expect(out?.value).not.toBeInstanceOf(SsrfBlockedError);
     expect((out?.value as Error).message).toBe('DNS lookup timed out after 500 ms');
+    r.giveUp();
   });
 
   it('assertPublicUrl bounds the lookup at the 15 s default when no bound is given', async () => {
-    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const r = neverAnsweringResolver();
     const t = track(assertPublicUrl('https://slow.example'));
 
     await vi.advanceTimersByTimeAsync(14_999);
     expect(t.outcome()).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     expect(t.outcome()?.value).toBeInstanceOf(SafeFetchLimitError);
+    r.giveUp();
   });
 
   it('safeFetch fails within its timeout budget on a resolver that never answers, and never dials', async () => {
-    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const r = neverAnsweringResolver();
     const t = track(safeFetch('https://slow.example/hook', undefined, { timeoutMs: 800 }));
 
     await vi.advanceTimersByTimeAsync(800);
@@ -619,16 +637,18 @@ describe('DNS lookup bound', () => {
     expect(out?.value).toBeInstanceOf(SafeFetchLimitError);
     expect((out?.value as SafeFetchLimitError).kind).toBe('timeout');
     expect(httpsRequestMock).not.toHaveBeenCalled();
+    r.giveUp();
   });
 
   it('defaults the bound to the 15 s total when no limit is given', async () => {
-    dnsLookupMock.mockReturnValue(new Promise(() => {}));
+    const r = neverAnsweringResolver();
     const t = track(safeFetch('https://slow.example/hook'));
 
     await vi.advanceTimersByTimeAsync(14_999);
     expect(t.outcome()).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     expect(t.outcome()?.value).toBeInstanceOf(SafeFetchLimitError);
+    r.giveUp();
   });
 
   it('the lookup time counts against the total: the request timer only gets the remainder', async () => {

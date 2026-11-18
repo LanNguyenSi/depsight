@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { Advisory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { safeFetch, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { safeFetch, SafeFetchLimitError, SsrfBlockedError } from '@/lib/net/safe-fetch';
 import { SEVERITY_RANK, severityValue } from '@/lib/severity';
 
 export type NotificationEvent =
@@ -53,6 +53,9 @@ function signPayload(secret: string, body: string): string {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
+// A failed delivery is logged by failedDelivery() with the destination host
+// and the error kind only, never the URL: the path of a webhook or Slack
+// endpoint can itself be a secret, so it must not reach the log.
 async function deliverWebhook(
   url: string,
   secret: string | null,
@@ -73,10 +76,7 @@ async function deliverWebhook(
     const res = await safeFetch(url, { method: 'POST', headers, body });
     return { ok: res.ok, status: res.status };
   } catch (err) {
-    if (err instanceof SsrfBlockedError) {
-      return { ok: false, error: 'blocked: non-public webhook URL' };
-    }
-    return { ok: false, error: err instanceof Error ? err.message : 'fetch failed' };
+    return failedDelivery('webhook', url, err, 'blocked: non-public webhook URL');
   }
 }
 
@@ -133,6 +133,9 @@ function buildSlackMessage(payload: CVENotificationPayload): object {
   };
 }
 
+// Slack failures are logged like webhook failures (host and error kind, never
+// the URL), and the returned error keeps the shape callers already handle:
+// logging is all a failed Slack delivery gains.
 async function deliverSlack(
   webhookUrl: string,
   channel: string | null,
@@ -149,10 +152,7 @@ async function deliverSlack(
     });
     return { ok: res.ok };
   } catch (err) {
-    if (err instanceof SsrfBlockedError) {
-      return { ok: false, error: 'blocked: non-public Slack URL' };
-    }
-    return { ok: false, error: err instanceof Error ? err.message : 'fetch failed' };
+    return failedDelivery('slack', webhookUrl, err, 'blocked: non-public Slack URL');
   }
 }
 
@@ -269,4 +269,36 @@ export async function notifyScanCompleted(
   await Promise.allSettled(
     subscribers.map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
   );
+}
+
+// ─── Failed-delivery logging ─────────────────────────────────────────────────
+
+/**
+ * Log one failed delivery and build its `ok: false` result. The log carries
+ * the destination host and the error kind only, never the full URL: a Slack
+ * posting URL (or a webhook URL with a token in its path) is itself a secret.
+ */
+function failedDelivery(
+  channel: 'webhook' | 'slack',
+  url: string,
+  err: unknown,
+  blockedMessage: string,
+): { ok: boolean; error: string } {
+  let kind = 'error';
+  if (err instanceof SafeFetchLimitError) {
+    kind = err.kind;
+  } else if (err instanceof SsrfBlockedError) {
+    kind = 'ssrf_blocked';
+  }
+  let host = 'unknown host';
+  try {
+    host = new URL(url).host;
+  } catch {
+    // An unparseable destination is still logged, just without any of it.
+  }
+  console.warn(`Failed ${channel} delivery to ${host} (kind: ${kind})`);
+  if (err instanceof SsrfBlockedError) {
+    return { ok: false, error: blockedMessage };
+  }
+  return { ok: false, error: err instanceof Error ? err.message : 'fetch failed' };
 }

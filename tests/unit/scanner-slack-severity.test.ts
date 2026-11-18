@@ -40,6 +40,13 @@ vi.mock('@/lib/cve/merge', () => ({ mergeCveAdvisories: vi.fn().mockReturnValue(
 vi.mock('@/lib/net/safe-fetch', () => ({
   safeFetch: safeFetchMock,
   SsrfBlockedError: class SsrfBlockedError extends Error {},
+  SafeFetchLimitError: class SafeFetchLimitError extends Error {
+    kind: string;
+    constructor(kind: string, message: string) {
+      super(message);
+      this.kind = kind;
+    }
+  },
 }));
 vi.mock('@/lib/alerts/post-scan', () => ({ runPostScanHooks: vi.fn().mockResolvedValue(undefined) }));
 

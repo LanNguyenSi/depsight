@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { assertPublicUrl, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import {
+  assertPublicUrl,
+  DNS_BUSY_MESSAGE,
+  DNS_UNREACHABLE_MESSAGE,
+  SafeFetchLimitError,
+  SsrfBlockedError,
+} from '@/lib/net/safe-fetch';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
 
 export const dynamic = 'force-dynamic';
@@ -39,10 +45,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await assertPublicUrl(webhookUrl); // validate format + reject non-public/internal targets (SSRF)
+    await assertPublicUrl(webhookUrl, { waitForSlot: false }); // save route: refuse at once when the lookup cap is full (SSRF check)
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    if (err instanceof SafeFetchLimitError && err.kind === 'timeout') {
+      return NextResponse.json({ error: DNS_UNREACHABLE_MESSAGE }, { status: 400 });
+    }
+    if (err instanceof SafeFetchLimitError && err.kind === 'dns_busy') {
+      return NextResponse.json({ error: DNS_BUSY_MESSAGE }, { status: 400 });
     }
     return NextResponse.json({ error: 'Invalid webhookUrl format' }, { status: 400 });
   }
