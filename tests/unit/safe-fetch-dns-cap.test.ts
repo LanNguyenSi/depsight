@@ -5,6 +5,7 @@
 // http/https are mocked so a dial would be visible as a call.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { dnsLookupsInFlightForTests } from '@/lib/net/safe-fetch';
 
 const { dnsLookupMock, httpRequestMock, httpsRequestMock } = vi.hoisted(() => ({
   dnsLookupMock: vi.fn(),
@@ -125,6 +126,10 @@ afterEach(() => {
   httpRequestMock.mockReset();
   httpsRequestMock.mockReset();
   vi.useRealTimers();
+});
+
+afterEach(() => {
+  expect(dnsLookupsInFlightForTests()).toBe(0); // no slot leaks out of a test
 });
 
 describe('user-host DNS lookup cap', () => {
@@ -448,6 +453,42 @@ describe('delivery-mode wait queue (waitForSlot: true)', () => {
     await drainCap(pending);
   });
 
+  it('a delivery that gets its slot late keeps one budget: its lookup times out at the delivery bound, not a fresh one', async () => {
+    const mod = await freshModule();
+    const pending = deferredResolver();
+    await fillCap(mod, pending); // slow1 + slow2 hold both slots
+
+    const startedAt = Date.now();
+    const t = track(mod.safeFetch('https://late-w.example/hook', undefined, { timeoutMs: 200 }));
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(2); // it is waiting for a slot
+
+    await new Promise((r) => setTimeout(r, 150)); // most of the budget spent waiting
+    pending.get('slow1.example')!.resolve(PUBLIC); // a slot frees late
+    await flush();
+    expect(dnsLookupMock).toHaveBeenCalledTimes(3); // the waiter got the slot and looked up
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+
+    // One budget covers queue wait and lookup: the lookup runs with only the
+    // ~50 ms left of the delivery's 200 ms, so the delivery rejects with kind
+    // timeout at about timeoutMs from its start, not a fresh 200 ms after the
+    // grant (which is what arming the lookup with dnsTimeoutMs would do).
+    while (t.outcome() === null && Date.now() - startedAt < 250) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const elapsed = Date.now() - startedAt;
+    expect(t.outcome()).not.toBeNull();
+    expect((t.outcome()?.value as InstanceType<typeof mod.SafeFetchLimitError>).kind).toBe(
+      'timeout',
+    );
+    expect(elapsed).toBeLessThan(260);
+    expect(httpsRequestMock).not.toHaveBeenCalled(); // nothing dialled on the timed-out lookup
+
+    pending.get('late-w.example')!.reject(new Error('cleanup')); // the abandoned lookup settles
+    await drainCap(pending);
+    expect(mod.dnsLookupsInFlightForTests()).toBe(0);
+  });
+
   it('slots go to waiters in FIFO order', async () => {
     const mod = await freshModule();
     const pending = deferredResolver();
@@ -590,10 +631,15 @@ describe('the lookup state is process-wide (globalThis)', () => {
     expect((err as InstanceType<typeof mod2.SafeFetchLimitError>).kind).toBe('dns_busy');
     expect(dnsLookupMock).toHaveBeenCalledTimes(2); // refused by the other copy's lookups
 
-    mod2.resetDnsLookupStateForTests(); // reset through either copy resets both
-    expect(mod1.dnsLookupsInFlightForTests()).toBe(0);
+    // Settle the two held lookups before the reset: resetting while they are
+    // in flight would leave their late releases decrementing a counter that
+    // the reset already zeroed, driving it to -2.
     pending.get('slow1.example')?.reject(new Error('cleanup'));
     pending.get('slow2.example')?.reject(new Error('cleanup'));
     await flush();
+    expect(mod1.dnsLookupsInFlightForTests()).toBe(0);
+
+    mod2.resetDnsLookupStateForTests(); // reset through either copy resets both
+    expect(mod1.dnsLookupsInFlightForTests()).toBe(0);
   });
 });

@@ -279,6 +279,10 @@ describe('POST /api/slack', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { config: object };
     expect(body.config).toMatchObject({ id: 'slack-1' });
+    // Save route: refuse at once when the lookup cap is full, never queue.
+    expect(assertPublicUrlMock).toHaveBeenCalledWith('https://hooks.slack.com/x', {
+      waitForSlot: false,
+    });
     expect(slackConfigUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: 'user-1' },

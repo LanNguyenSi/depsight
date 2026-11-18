@@ -32,7 +32,7 @@ vi.mock('@/lib/net/safe-fetch', () => ({
 }));
 
 import { notifyScanCompleted, notifyForScan } from '@/lib/alerts/notifier';
-import { SafeFetchLimitError } from '@/lib/net/safe-fetch';
+import { SafeFetchLimitError, SsrfBlockedError } from '@/lib/net/safe-fetch';
 import type { Advisory } from '@prisma/client';
 
 describe('notifyScanCompleted', () => {
@@ -539,6 +539,26 @@ describe('notifier: failed-delivery logging', () => {
       expect(line).toContain('dns_busy');
       expect(line).not.toContain('hunter2');
       expect(line).not.toContain('/some/path');
+      expect(line).not.toContain('https://');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('logs a delivery whose safeFetch rejects with SsrfBlockedError with kind ssrf_blocked, never the URL path', async () => {
+    webhookConfigFindMany.mockResolvedValue([
+      { url: 'https://private.example.com/some/path?token=hunter2', secret: null, events: ['scan.completed'] },
+    ]);
+    safeFetchMock.mockRejectedValue(new SsrfBlockedError('URL resolves to a non-public address'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-1', 'cve', {}, []);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0].join(' ');
+      expect(line).toContain('ssrf_blocked');
+      expect(line).toContain('private.example.com');
+      expect(line).not.toContain('/some/path');
+      expect(line).not.toContain('hunter2');
       expect(line).not.toContain('https://');
     } finally {
       warn.mockRestore();
