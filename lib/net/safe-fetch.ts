@@ -123,8 +123,27 @@ function isBlockedIp(ip: string): boolean {
  *    within it rejects with kind `timeout`. A waiter beyond
  *    `MAX_QUEUED_DNS_LOOKUPS` rejects with kind `dns_busy` so an outage
  *    cannot grow the queue without bound.
+ *
+ * The cap is shared by every user, so a caller may name an owner (alert
+ * deliveries name the user whose webhook or Slack target it is). One owner
+ * holds at most `MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER` slots at once, which
+ * is below the cap: a user whose hosts park their lookups (a resolver that
+ * never answers, or just very many webhooks) can never take every slot, so
+ * another user's delivery always finds one free unless other users hold the
+ * rest. An owner's further callers wait in the same FIFO queue, and a
+ * released slot goes to the first waiter whose owner is under its limit,
+ * preferring one of a different owner than the lookup that just released
+ * it, so a queue full of one user's deliveries does not keep the slot away
+ * from the others. A caller without an owner (the save routes) is bound by
+ * the global cap only, and its queue position and refusal behave as before.
  */
 export const MAX_CONCURRENT_DNS_LOOKUPS = 2;
+
+/**
+ * Cap on the lookup slots one owner may hold at once. Must stay below
+ * `MAX_CONCURRENT_DNS_LOOKUPS`, or an owner could still take every slot.
+ */
+export const MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER = 1;
 
 /** Cap on how many deliveries may queue for a lookup slot at once. */
 export const MAX_QUEUED_DNS_LOOKUPS = 64;
@@ -136,13 +155,60 @@ export const MAX_QUEUED_DNS_LOOKUPS = 64;
 const DNS_LOOKUP_STATE_KEY = Symbol.for('depsight.safeFetch.dnsLookups');
 
 interface DnsWaiter {
+  owner: string | undefined;
   grant: () => void;
   fail: (err: Error) => void;
 }
 
 interface DnsLookupState {
   inFlight: number;
+  /** Slots held per owner (entries only while above zero); owner-less lookups are not counted. */
+  heldByOwner: Map<string, number>;
   queued: DnsWaiter[];
+}
+
+function heldBy(state: DnsLookupState, owner: string | undefined): number {
+  return owner === undefined ? 0 : (state.heldByOwner.get(owner) ?? 0);
+}
+
+function takeOwnerSlot(state: DnsLookupState, owner: string | undefined): void {
+  if (owner !== undefined) state.heldByOwner.set(owner, heldBy(state, owner) + 1);
+}
+
+function dropOwnerSlot(state: DnsLookupState, owner: string | undefined): void {
+  if (owner === undefined) return;
+  const left = heldBy(state, owner) - 1;
+  if (left > 0) state.heldByOwner.set(owner, left);
+  else state.heldByOwner.delete(owner);
+}
+
+/** Whether a caller of `owner` may take a slot now, as far as its owner limit goes. */
+function ownerHasRoom(state: DnsLookupState, owner: string | undefined): boolean {
+  return owner === undefined || heldBy(state, owner) < MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER;
+}
+
+/**
+ * Remove and return the waiter a freed slot goes to: the first one whose
+ * owner is under its limit and differs from the owner that just released,
+ * else the first one under its limit (FIFO), else none. Owner-less waiters
+ * never count as the releasing owner.
+ */
+function takeNextWaiter(
+  state: DnsLookupState,
+  releasedBy: string | undefined,
+): DnsWaiter | undefined {
+  let firstEligible = -1;
+  for (let i = 0; i < state.queued.length; i += 1) {
+    const w = state.queued[i];
+    if (!ownerHasRoom(state, w.owner)) continue;
+    if (firstEligible < 0) firstEligible = i;
+    if (releasedBy === undefined || w.owner !== releasedBy) {
+      firstEligible = i;
+      break;
+    }
+  }
+  if (firstEligible < 0) return undefined;
+  return state.queued.splice(firstEligible, 1)[0];
 }
 
 function dnsLookupState(): DnsLookupState {
@@ -151,7 +217,7 @@ function dnsLookupState(): DnsLookupState {
   };
   let state = g[DNS_LOOKUP_STATE_KEY];
   if (!state) {
-    state = { inFlight: 0, queued: [] };
+    state = { inFlight: 0, heldByOwner: new Map(), queued: [] };
     g[DNS_LOOKUP_STATE_KEY] = state;
   }
   return state;
@@ -164,7 +230,11 @@ function dnsLookupState(): DnsLookupState {
  * within `timeoutMs`, and rejects with kind `dns_busy` without queueing when
  * the queue is already at its cap.
  */
-function waitForDnsSlot(state: DnsLookupState, timeoutMs: number): Promise<void> {
+function waitForDnsSlot(
+  state: DnsLookupState,
+  timeoutMs: number,
+  owner: string | undefined,
+): Promise<void> {
   if (state.queued.length >= MAX_QUEUED_DNS_LOOKUPS) {
     return Promise.reject(
       new SafeFetchLimitError(
@@ -175,7 +245,7 @@ function waitForDnsSlot(state: DnsLookupState, timeoutMs: number): Promise<void>
   }
   let waiter!: DnsWaiter;
   const slot = new Promise<void>((resolve, reject) => {
-    waiter = { grant: resolve, fail: reject };
+    waiter = { owner, grant: resolve, fail: reject };
     state.queued.push(waiter);
   });
   const timer = setTimeout(() => {
@@ -197,12 +267,18 @@ function waitForDnsSlot(state: DnsLookupState, timeoutMs: number): Promise<void>
 export function resetDnsLookupStateForTests(): void {
   const state = dnsLookupState();
   state.inFlight = 0;
+  state.heldByOwner = new Map();
   state.queued = [];
 }
 
 /** Test helper: lookups currently holding one of the cap's slots. */
 export function dnsLookupsInFlightForTests(): number {
   return dnsLookupState().inFlight;
+}
+
+/** Test helper: lookup slots currently held by `owner`. */
+export function dnsLookupsHeldByOwnerForTests(owner: string): number {
+  return heldBy(dnsLookupState(), owner);
 }
 
 /** Test helper: waiters currently queued for a slot. */
@@ -217,11 +293,13 @@ export function dnsLookupQueueLengthForTests(): number {
  * misses its bound, its wait for a slot misses its budget, or the wait queue
  * is full. `waitForSlot` selects what happens while the cap is full: the
  * save routes pass `false` (refuse at once), `safeFetch` passes `true`
- * (wait in the FIFO queue within the delivery's own budget).
+ * (wait in the FIFO queue within the delivery's own budget). `owner` names
+ * whose lookup this is and applies the per-owner slot limit (see
+ * `MAX_CONCURRENT_DNS_LOOKUPS`); without it only the global cap applies.
  */
 export async function assertPublicUrl(
   input: string,
-  options?: { dnsTimeoutMs?: number; waitForSlot?: boolean },
+  options?: { dnsTimeoutMs?: number; waitForSlot?: boolean; owner?: string },
 ): Promise<{ url: URL; addresses: string[] }> {
   let url: URL;
   try {
@@ -273,22 +351,27 @@ export async function assertPublicUrl(
   // masks a synchronous block.
   const dnsTimeoutMs = options?.dnsTimeoutMs ?? SAFE_FETCH_TIMEOUT_MS;
   const waitForSlot = options?.waitForSlot ?? false;
+  const owner = options?.owner;
   const state = dnsLookupState();
   // One budget for the whole host name phase (queue wait plus lookup): for a
   // delivery that is the `timeoutMs` safeFetch passes in, and the request
   // timer there only gets what is left of it.
   const dnsDeadline = Date.now() + dnsTimeoutMs;
-  if (state.inFlight < MAX_CONCURRENT_DNS_LOOKUPS) {
+  if (state.inFlight < MAX_CONCURRENT_DNS_LOOKUPS && ownerHasRoom(state, owner)) {
     state.inFlight += 1;
+    takeOwnerSlot(state, owner);
   } else if (!waitForSlot) {
     throw new SafeFetchLimitError(
       'dns_busy',
-      `Already ${MAX_CONCURRENT_DNS_LOOKUPS} host name lookups in flight`,
+      state.inFlight < MAX_CONCURRENT_DNS_LOOKUPS
+        ? `Already ${MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER} host name lookups in flight for this owner`
+        : `Already ${MAX_CONCURRENT_DNS_LOOKUPS} host name lookups in flight`,
     );
   } else {
-    // A release hands its slot straight to the head of the queue without
-    // decrementing, so when this resolves the slot is already held here.
-    await waitForDnsSlot(state, Math.max(1, dnsDeadline - Date.now()));
+    // A release hands its slot straight to a waiter without decrementing the
+    // global counter (the owner counts are moved by the release), so when
+    // this resolves the slot is already held here.
+    await waitForDnsSlot(state, Math.max(1, dnsDeadline - Date.now()), owner);
   }
   let slotHeld = true;
   // Idempotent: whichever settle path reaches it first releases, and a path
@@ -298,8 +381,10 @@ export async function assertPublicUrl(
   const release = (): void => {
     if (!slotHeld) return;
     slotHeld = false;
-    const next = state.queued.shift();
+    dropOwnerSlot(state, owner);
+    const next = takeNextWaiter(state, owner);
     if (next) {
+      takeOwnerSlot(state, next.owner);
       next.grant();
     } else {
       state.inFlight -= 1;
@@ -401,6 +486,12 @@ export interface SafeFetchLimits {
   maxResponseBytes?: number;
   /** Abort the request when it has not completed after this many milliseconds. */
   timeoutMs?: number;
+  /**
+   * Whose delivery this is (an alert delivery passes its user id). Applies
+   * the per-owner limit on host name lookup slots, see
+   * `MAX_CONCURRENT_DNS_LOOKUPS`; without it only the global cap applies.
+   */
+  dnsOwner?: string;
 }
 
 /** A delivery or URL check stopped by a safeFetch resource limit (response size, total time, or the host name lookup cap and its wait queue). */
@@ -444,7 +535,11 @@ export function safeFetch(
   // dns_busy, it waits) counts against `timeoutMs` and the request timer
   // below only gets what is left of it.
   const startedAt = Date.now();
-  return assertPublicUrl(input, { dnsTimeoutMs: timeoutMs, waitForSlot: true }).then(({ url, addresses }) => {
+  return assertPublicUrl(input, {
+    dnsTimeoutMs: timeoutMs,
+    waitForSlot: true,
+    owner: limits?.dnsOwner,
+  }).then(({ url, addresses }) => {
     const requestTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
     const transport = url.protocol === 'https:' ? https : http;
     const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;

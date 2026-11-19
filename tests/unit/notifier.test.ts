@@ -72,6 +72,7 @@ describe('notifyScanCompleted', () => {
     expect(safeFetchMock).toHaveBeenCalledWith(
       'https://hooks.example.com/scan',
       expect.objectContaining({ method: 'POST' }),
+      { dnsOwner: 'user-1' },
     );
 
     // Verify the cve-only subscriber was NOT called
@@ -185,6 +186,7 @@ describe('notifyForScan', () => {
     expect(safeFetchMock).toHaveBeenCalledWith(
       'https://hooks.example.com/cve-critical',
       expect.objectContaining({ method: 'POST' }),
+      { dnsOwner: 'user-1' },
     );
 
     // The scan.completed-only webhook must NOT have been called
@@ -252,6 +254,8 @@ describe('notifyForScan', () => {
     const slack = callsTo(SLACK_URL);
     expect(slack).toHaveLength(1);
     expect(JSON.stringify(bodyOf(slack[0]))).toContain('pkg-MEDIUM');
+    // The Slack delivery names its user as the owner of the host name lookup.
+    expect(slack[0][2]).toEqual({ dnsOwner: 'user-1' });
   });
 
   it('does not deliver a MEDIUM-only scan to Slack when minSeverity is HIGH', async () => {

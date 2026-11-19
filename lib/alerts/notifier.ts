@@ -53,10 +53,15 @@ function signPayload(secret: string, body: string): string {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
+// Every delivery names its user as the owner of its host name lookups, so one
+// user's hosts cannot take every shared lookup slot (see
+// MAX_CONCURRENT_DNS_LOOKUPS in lib/net/safe-fetch.ts).
+//
 // A failed delivery is logged by failedDelivery() with the destination host
 // and the error kind only, never the URL: the path of a webhook or Slack
 // endpoint can itself be a secret, so it must not reach the log.
 async function deliverWebhook(
+  userId: string,
   url: string,
   secret: string | null,
   payload: NotificationPayload,
@@ -73,7 +78,7 @@ async function deliverWebhook(
   }
 
   try {
-    const res = await safeFetch(url, { method: 'POST', headers, body });
+    const res = await safeFetch(url, { method: 'POST', headers, body }, { dnsOwner: userId });
     return { ok: res.ok, status: res.status };
   } catch (err) {
     return failedDelivery('webhook', url, err, 'blocked: non-public webhook URL');
@@ -137,6 +142,7 @@ function buildSlackMessage(payload: CVENotificationPayload): object {
 // the URL), and the returned error keeps the shape callers already handle:
 // logging is all a failed Slack delivery gains.
 async function deliverSlack(
+  userId: string,
   webhookUrl: string,
   channel: string | null,
   payload: CVENotificationPayload,
@@ -145,11 +151,15 @@ async function deliverSlack(
   const body = JSON.stringify({ ...message, ...(channel ? { channel } : {}) });
 
   try {
-    const res = await safeFetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
+    const res = await safeFetch(
+      webhookUrl,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      },
+      { dnsOwner: userId },
+    );
     return { ok: res.ok };
   } catch (err) {
     return failedDelivery('slack', webhookUrl, err, 'blocked: non-public Slack URL');
@@ -208,7 +218,7 @@ export async function notifyForScan(
     await Promise.allSettled(
       webhooks
         .filter((wh) => wh.events.includes(event))
-        .map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
+        .map((wh) => deliverWebhook(userId, wh.url, wh.secret, payload)),
     );
   }
 
@@ -230,7 +240,7 @@ export async function notifyForScan(
       const slackAdvisories = newAdvisories
         .filter((a) => severityValue(a.severity) >= listFloor)
         .sort((a, b) => severityValue(b.severity) - severityValue(a.severity));
-      await deliverSlack(slack.webhookUrl, slack.channel, buildPayload(event, slackAdvisories));
+      await deliverSlack(userId, slack.webhookUrl, slack.channel, buildPayload(event, slackAdvisories));
     }
   }
 }
@@ -267,7 +277,7 @@ export async function notifyScanCompleted(
   };
 
   await Promise.allSettled(
-    subscribers.map((wh) => deliverWebhook(wh.url, wh.secret, payload)),
+    subscribers.map((wh) => deliverWebhook(userId, wh.url, wh.secret, payload)),
   );
 }
 
