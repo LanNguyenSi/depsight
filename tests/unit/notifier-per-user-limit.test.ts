@@ -34,7 +34,8 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-import { notifyScanCompleted } from '@/lib/alerts/notifier';
+import type { Advisory } from '@prisma/client';
+import { notifyForScan, notifyScanCompleted } from '@/lib/alerts/notifier';
 import {
   MAX_CONCURRENT_DNS_LOOKUPS,
   dnsLookupsHeldByOwnerForTests,
@@ -75,11 +76,11 @@ function dialWith200(): void {
   );
 }
 
-/** Hosts of user A (`a-<n>.example.com`) park until settled; every other host resolves at once. */
+/** Hosts of users A and C (`a-<n>`, `c-<n>`) park until settled; every other host resolves at once. */
 function parkUserAHosts(): Map<string, Parked> {
   const pending = new Map<string, Parked>();
   dnsLookupMock.mockImplementation((hostname: string) => {
-    if (hostname.startsWith('a-')) {
+    if (hostname.startsWith('a-') || hostname.startsWith('c-')) {
       return new Promise((resolve, reject) => {
         pending.set(hostname, { resolve, reject });
       });
@@ -130,6 +131,7 @@ afterEach(() => {
   expect(dnsLookupsInFlightForTests()).toBe(0); // no slot leaks out of a test
   expect(dnsLookupsHeldByOwnerForTests('user-a')).toBe(0);
   expect(dnsLookupsHeldByOwnerForTests('user-b')).toBe(0);
+  expect(dnsLookupsHeldByOwnerForTests('user-c')).toBe(0);
 });
 
 describe('alert delivery of two users against the shared DNS lookup slots', () => {
@@ -160,13 +162,13 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
       await vi.advanceTimersByTimeAsync(0);
     }
     await aDone;
-    // 63 of A's 65 hooks got a place in the wait queue after the first took the
-    // slot (queue cap 64: one more is refused with dns_busy), none was dropped
-    // silently: every refusal is logged.
+    // The first of A's hooks took the slot and 32 more got a place in the wait
+    // queue (the per-owner share of it), the other 33 were refused with
+    // dns_busy. None was dropped silently: every refusal is logged.
     const aDialed = dialedHosts().filter((h) => h.startsWith('a-'));
     const refused = warn.mock.calls.filter((c) => String(c[0]).includes('dns_busy'));
     expect(aDialed.length + refused.length).toBe(66);
-    expect(refused.length).toBe(1);
+    expect(refused.length).toBe(33);
   });
 
   it('each of A deliveries that never gets a lookup ends in a logged timeout, none is lost silently', async () => {
@@ -179,13 +181,102 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
     await aDone;
     expect(httpsRequestMock).not.toHaveBeenCalled();
     const kinds = warn.mock.calls.map((c) => String(c[0]));
-    // 1 parked lookup (timeout), 64 queued waiters (timeout), 1 over the queue cap (dns_busy).
-    expect(kinds.filter((m) => m.includes('kind: timeout'))).toHaveLength(65);
-    expect(kinds.filter((m) => m.includes('kind: dns_busy'))).toHaveLength(1);
+    // 1 parked lookup (timeout), 32 queued waiters (timeout), 33 over A's queue share (dns_busy).
+    expect(kinds.filter((m) => m.includes('kind: timeout'))).toHaveLength(33);
+    expect(kinds.filter((m) => m.includes('kind: dns_busy'))).toHaveLength(33);
     expect(kinds.every((m) => /a-\d+\.example\.com/.test(m))).toBe(true);
 
     // The abandoned lookup still holds A's slot until it settles, then it is released.
     expect(dnsLookupsHeldByOwnerForTests('user-a')).toBe(1);
+    for (const p of pending.values()) p.resolve(PUBLIC);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('user B with two deliveries of one event is dialed twice while A holds its slot and a full share of the queue', async () => {
+    const pending = parkUserAHosts();
+    dialWith200();
+    webhooksByUser({ 'user-a': hooksOf('a', 66), 'user-b': hooksOf('b', 2) });
+
+    const aDone = notify('user-a');
+    await vi.advanceTimersByTimeAsync(0);
+    const bDone = notify('user-b');
+    await vi.advanceTimersByTimeAsync(0);
+    await bDone;
+    expect(dialedHosts().sort()).toEqual(['b-0.example.com', 'b-1.example.com']);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('b-'))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await aDone;
+    for (const p of pending.values()) p.resolve(PUBLIC);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('user B with one webhook on cve.high and scan.completed is dialed for both concurrent notifications', async () => {
+    const pending = parkUserAHosts();
+    dialWith200();
+    webhooksByUser({
+      'user-a': hooksOf('a', 66),
+      'user-b': [
+        {
+          url: 'https://b-0.example.com/deliver',
+          secret: null,
+          events: ['cve.high', 'scan.completed'],
+          enabled: true,
+        },
+      ],
+    });
+
+    const aDone = notify('user-a');
+    await vi.advanceTimersByTimeAsync(0);
+    const advisory = {
+      ghsaId: 'GHSA-1',
+      cveId: null,
+      severity: 'HIGH',
+      summary: 's',
+      packageName: 'pkg',
+      fixedVersion: null,
+      url: null,
+    } as unknown as Advisory;
+    const bDone = Promise.all([
+      notifyForScan('user-b', 'repo-1', 'acme/web', 'scan-1', 40, [advisory]),
+      notify('user-b'),
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    await bDone;
+    expect(dialedHosts()).toEqual(['b-0.example.com', 'b-0.example.com']);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('b-'))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await aDone;
+    for (const p of pending.values()) p.resolve(PUBLIC);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('user B with one webhook waits for a slot (is not refused) while A holds one and a third user C holds the other', async () => {
+    const pending = parkUserAHosts();
+    dialWith200();
+    webhooksByUser({
+      'user-a': hooksOf('a', 66),
+      'user-b': hooksOf('b', 1),
+      'user-c': hooksOf('c', 1),
+    });
+
+    const aDone = notify('user-a');
+    await vi.advanceTimersByTimeAsync(0);
+    const cDone = notify('user-c');
+    await vi.advanceTimersByTimeAsync(0);
+    const bDone = notify('user-b');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(httpsRequestMock).not.toHaveBeenCalled(); // both slots held, B waits
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('b-0'))).toBe(false); // not refused
+
+    pending.get('c-0.example.com')!.resolve(PUBLIC); // C's lookup answers, its slot goes to B
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all([bDone, cDone]);
+    expect(dialedHosts()).toContain('b-0.example.com');
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await aDone;
     for (const p of pending.values()) p.resolve(PUBLIC);
     await vi.advanceTimersByTimeAsync(0);
   });

@@ -8,6 +8,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   MAX_CONCURRENT_DNS_LOOKUPS,
   MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER,
+  MAX_QUEUED_DNS_LOOKUPS,
+  MAX_QUEUED_DNS_LOOKUPS_PER_OWNER,
   SafeFetchLimitError,
   assertPublicUrl,
   dnsLookupQueueLengthForTests,
@@ -66,10 +68,116 @@ afterEach(() => {
   expect(dnsLookupsHeldByOwnerForTests('b')).toBe(0);
 });
 
+/** Settle every parked lookup until nothing is left, so no slot or timer outlives the test. */
+async function drain(pending: Map<string, Parked>): Promise<void> {
+  for (let i = 0; i < 80; i += 1) {
+    for (const p of pending.values()) p.resolve(PUBLIC);
+    pending.clear();
+    await flush();
+  }
+}
+
 describe('per-owner DNS lookup limit', () => {
   it('the per-owner limit is a named constant below the global cap', () => {
     expect(MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER).toBe(1);
     expect(MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER).toBeLessThan(MAX_CONCURRENT_DNS_LOOKUPS);
+  });
+
+  it('the per-owner queue share is a named constant below the queue cap', () => {
+    expect(MAX_QUEUED_DNS_LOOKUPS_PER_OWNER).toBe(32);
+    expect(MAX_QUEUED_DNS_LOOKUPS_PER_OWNER).toBeLessThan(MAX_QUEUED_DNS_LOOKUPS);
+  });
+
+  it('an owner over its queue share is refused with dns_busy, another owner still queues', async () => {
+    const pending = parkedResolver();
+    track(assertPublicUrl('https://a-hold.example', { ...wait, owner: 'a' }));
+    for (let i = 0; i < MAX_QUEUED_DNS_LOOKUPS_PER_OWNER; i += 1) {
+      track(assertPublicUrl(`https://a-q${i}.example`, { ...wait, owner: 'a' }));
+    }
+    expect(dnsLookupQueueLengthForTests()).toBe(MAX_QUEUED_DNS_LOOKUPS_PER_OWNER);
+
+    const over = await assertPublicUrl('https://a-over.example', { ...wait, owner: 'a' }).catch(
+      (e) => e,
+    );
+    expect(over).toBeInstanceOf(SafeFetchLimitError);
+    expect((over as SafeFetchLimitError).kind).toBe('dns_busy');
+    expect((over as SafeFetchLimitError).message).toContain('for this owner');
+    expect(dnsLookupQueueLengthForTests()).toBe(MAX_QUEUED_DNS_LOOKUPS_PER_OWNER); // not queued
+
+    // The queue is only half full, so another owner finds places in it.
+    track(assertPublicUrl('https://c-hold.example', { ...wait, owner: 'c' }));
+    const b = track(assertPublicUrl('https://b1.example', { ...wait, owner: 'b' }));
+    expect(dnsLookupQueueLengthForTests()).toBe(MAX_QUEUED_DNS_LOOKUPS_PER_OWNER + 1);
+    expect(b.outcome()).toBeNull(); // queued, not refused
+    await drain(pending);
+    expect(b.outcome()?.ok).toBe(true);
+  });
+
+  it('callers without an owner are not bound by the owner queue share', async () => {
+    const pending = parkedResolver();
+    track(assertPublicUrl('https://x1.example', wait));
+    track(assertPublicUrl('https://x2.example', wait));
+    const waiting = MAX_QUEUED_DNS_LOOKUPS_PER_OWNER + 8;
+    const all = Array.from({ length: waiting }, (_, i) =>
+      track(assertPublicUrl(`https://xq${i}.example`, wait)),
+    );
+    expect(dnsLookupQueueLengthForTests()).toBe(waiting);
+    expect(all.every((t) => t.outcome() === null)).toBe(true); // none refused
+    await drain(pending);
+    expect(all.every((t) => t.outcome()?.ok === true)).toBe(true);
+  });
+
+  it('a waiter of an owner that left the queue gives its share back', async () => {
+    vi.useFakeTimers();
+    parkedResolver();
+    track(assertPublicUrl('https://a-hold.example', { ...wait, dnsTimeoutMs: 60_000, owner: 'a' }));
+    const quick = Array.from({ length: MAX_QUEUED_DNS_LOOKUPS_PER_OWNER }, (_, i) =>
+      track(assertPublicUrl(`https://a-q${i}.example`, { ...wait, dnsTimeoutMs: 1000, owner: 'a' })),
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(quick.every((t) => (t.outcome()?.value as SafeFetchLimitError)?.kind === 'timeout')).toBe(true);
+    expect(dnsLookupQueueLengthForTests()).toBe(0);
+    const again = track(assertPublicUrl('https://a-again.example', { ...wait, owner: 'a' }));
+    expect(dnsLookupQueueLengthForTests()).toBe(1); // queued, not refused
+    expect(again.outcome()).toBeNull();
+    resetDnsLookupStateForTests();
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
+
+  it('a state left on globalThis without owner counts (older shape) is upgraded, not thrown on', async () => {
+    const pending = parkedResolver();
+    const g = globalThis as Record<symbol, unknown>;
+    g[Symbol.for('depsight.safeFetch.dnsLookups')] = { inFlight: 0, queued: [] };
+    const a1 = track(assertPublicUrl('https://a1.example', { ...wait, owner: 'a' }));
+    expect(dnsLookupMock).toHaveBeenCalledTimes(1);
+    expect(dnsLookupsHeldByOwnerForTests('a')).toBe(1);
+    pending.get('a1.example')!.resolve(PUBLIC);
+    await flush();
+    expect(a1.outcome()?.ok).toBe(true);
+  });
+
+  it('a hand-off never grants a waiter whose owner already holds its limit', async () => {
+    const pending = parkedResolver();
+    track(assertPublicUrl('https://a1.example', { ...wait, owner: 'a' }));
+    track(assertPublicUrl('https://b1.example', { ...wait, owner: 'b' }));
+    track(assertPublicUrl('https://b2.example', { ...wait, owner: 'b' }));
+    pending.get('a1.example')!.resolve(PUBLIC);
+    await flush();
+    expect(dnsLookupsHeldByOwnerForTests('b')).toBe(1);
+    expect(dnsLookupMock.mock.calls.map((c) => c[0])).not.toContain('b2.example');
+    await drain(pending);
+  });
+
+  it('an owner-less release serves the first waiting owner-less caller before an owned one', async () => {
+    const pending = parkedResolver();
+    track(assertPublicUrl('https://x1.example', wait));
+    track(assertPublicUrl('https://x2.example', wait));
+    track(assertPublicUrl('https://x3.example', wait));
+    track(assertPublicUrl('https://a1.example', { ...wait, owner: 'a' }));
+    pending.get('x1.example')!.resolve(PUBLIC);
+    await flush();
+    expect(dnsLookupMock.mock.calls.map((c) => c[0]).slice(-1)).toEqual(['x3.example']);
+    await drain(pending);
   });
 
   it('one owner takes one slot, its second caller queues, another owner takes the free slot', async () => {

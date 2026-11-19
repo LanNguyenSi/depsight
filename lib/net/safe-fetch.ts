@@ -134,8 +134,16 @@ function isBlockedIp(ip: string): boolean {
  * released slot goes to the first waiter whose owner is under its limit,
  * preferring one of a different owner than the lookup that just released
  * it, so a queue full of one user's deliveries does not keep the slot away
- * from the others. A caller without an owner (the save routes) is bound by
- * the global cap only, and its queue position and refusal behave as before.
+ * from the others. An owner may also hold at most
+ * `MAX_QUEUED_DNS_LOOKUPS_PER_OWNER` places in the wait queue, so one user
+ * with very many parked deliveries cannot fill the shared queue and get
+ * everybody else refused with `dns_busy`; its deliveries beyond that share
+ * are refused the same way (logged by the notifier). Trade-off: a user with
+ * more than `MAX_QUEUED_DNS_LOOKUPS_PER_OWNER` + 1 deliveries waiting for a
+ * lookup at the same moment, in this process, loses the excess even when
+ * the hosts would have resolved quickly. A caller without an owner (the
+ * save routes) is bound by the global cap only, and its queue position and
+ * refusal behave as before.
  */
 export const MAX_CONCURRENT_DNS_LOOKUPS = 2;
 
@@ -147,6 +155,12 @@ export const MAX_CONCURRENT_DNS_LOOKUPS_PER_OWNER = 1;
 
 /** Cap on how many deliveries may queue for a lookup slot at once. */
 export const MAX_QUEUED_DNS_LOOKUPS = 64;
+
+/**
+ * Cap on the queue places one owner may hold at once: half of the queue, so
+ * one owner can never fill it and other owners always find places.
+ */
+export const MAX_QUEUED_DNS_LOOKUPS_PER_OWNER = 32;
 
 // The counter and the queue live on globalThis under one shared symbol so
 // every copy of this module in the process shares one cap: the production
@@ -220,6 +234,9 @@ function dnsLookupState(): DnsLookupState {
     state = { inFlight: 0, heldByOwner: new Map(), queued: [] };
     g[DNS_LOOKUP_STATE_KEY] = state;
   }
+  // A state object left on globalThis by a module copy from before the owner
+  // limit existed has no owner counts; give it the map instead of throwing.
+  state.heldByOwner ??= new Map();
   return state;
 }
 
@@ -228,13 +245,24 @@ function dnsLookupState(): DnsLookupState {
  * the slot to this waiter (the counter is not decremented on a hand-off, the
  * slot moved directly), rejects with kind `timeout` when no slot frees
  * within `timeoutMs`, and rejects with kind `dns_busy` without queueing when
- * the queue is already at its cap.
+ * the queue is already at its cap or the owner is at its share of it.
  */
 function waitForDnsSlot(
   state: DnsLookupState,
   timeoutMs: number,
   owner: string | undefined,
 ): Promise<void> {
+  if (
+    owner !== undefined &&
+    state.queued.filter((w) => w.owner === owner).length >= MAX_QUEUED_DNS_LOOKUPS_PER_OWNER
+  ) {
+    return Promise.reject(
+      new SafeFetchLimitError(
+        'dns_busy',
+        `Already ${MAX_QUEUED_DNS_LOOKUPS_PER_OWNER} host name lookups queued for this owner`,
+      ),
+    );
+  }
   if (state.queued.length >= MAX_QUEUED_DNS_LOOKUPS) {
     return Promise.reject(
       new SafeFetchLimitError(
