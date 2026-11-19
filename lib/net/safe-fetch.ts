@@ -158,7 +158,9 @@ export const MAX_QUEUED_DNS_LOOKUPS = 64;
 
 /**
  * Cap on the queue places one owner may hold at once: half of the queue, so
- * one owner can never fill it and other owners always find places.
+ * one owner can never fill it. Two or more owners at their share can still
+ * fill it while they hold both slots; other owners are then refused with
+ * `dns_busy`.
  */
 export const MAX_QUEUED_DNS_LOOKUPS_PER_OWNER = 32;
 
