@@ -5,6 +5,7 @@ import {
   ecosystemPrecedence,
   type Ecosystem,
   type EcosystemInfo,
+  type ObservedLockfilePaths,
 } from '@/lib/ecosystem';
 import {
   type FetchedManifest,
@@ -903,7 +904,7 @@ async function collectDeps(
   // instead of blindly guessing every co-located candidate. `undefined`/null
   // (e.g. when the tree walk fell back to a root-only probe) preserves the
   // pre-task blind-probe behaviour.
-  observedLockfilePaths?: { npm: string[]; yarn: string[] } | null,
+  observedLockfilePaths?: ObservedLockfilePaths | null,
   // Further facts of the same tree walk (foreign lockfile kinds, manifest cap),
   // used only by the narrow npm override. `undefined`/null means the walk was
   // incomplete: the narrow override then does nothing.
@@ -964,7 +965,13 @@ async function collectDeps(
     }
 
     case 'php': {
-      const phpDeps = await collectPhpDepsResolved(octokit, owner, repo, manifestPaths);
+      const phpDeps = await collectPhpDepsResolved(
+        octokit,
+        owner,
+        repo,
+        manifestPaths,
+        observedLockfilePaths?.composer ?? null,
+      );
       return phpDeps.filter(({ version }) => /\d/.test(version));
     }
 

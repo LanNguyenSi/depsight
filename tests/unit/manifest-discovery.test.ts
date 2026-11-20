@@ -149,6 +149,30 @@ describe('selectLockfilePaths', () => {
     expect(yarn).toEqual(['yarn.lock']);
   });
 
+  it('finds composer.lock files, nested ones included, in their own list', () => {
+    const { npm, yarn, composer } = selectLockfilePaths([
+      blob('composer.json'),
+      blob('composer.lock'),
+      blob('services/api/composer.lock'),
+      blob('package-lock.json'),
+    ]);
+    expect(composer).toEqual(['composer.lock', 'services/api/composer.lock']);
+    expect(npm).toEqual(['package-lock.json']);
+    expect(yarn).toEqual([]);
+  });
+
+  it('excludes composer.lock in vendored / build / fixture directories and ignores other names', () => {
+    const { composer } = selectLockfilePaths([
+      blob('vendor/acme/lib/composer.lock'),
+      blob('node_modules/x/composer.lock'),
+      blob('dist/composer.lock'),
+      blob('composer.lock.bak'),
+      blob('Composer.lock'),
+      blob('app/composer.lock'),
+    ]);
+    expect(composer).toEqual(['app/composer.lock']);
+  });
+
   it('ignores tree entries that are not blobs', () => {
     const { npm, yarn } = selectLockfilePaths([
       { path: 'packages', type: 'tree' },
@@ -731,7 +755,7 @@ describe('detectEcosystem', () => {
     // task c2ddfe93: a successful, untruncated walk found no lockfiles here,
     // so observedLockfilePaths is non-null but empty — a downstream caller
     // knows for certain zero lockfiles exist, rather than not knowing at all.
-    expect(info.observedLockfilePaths).toEqual({ npm: [], yarn: [] });
+    expect(info.observedLockfilePaths).toEqual({ npm: [], yarn: [], composer: [] });
   });
 
   it('captures observed npm/yarn lockfile paths from the SAME tree walk that finds manifestPaths (task c2ddfe93)', async () => {
@@ -752,10 +776,28 @@ describe('detectEcosystem', () => {
     expect(info.observedLockfilePaths).toEqual({
       npm: ['package-lock.json'],
       yarn: ['packages/a/yarn.lock'],
+      composer: [],
     });
     // Only ONE getTree call backs both manifestPaths and observedLockfilePaths
     // — no separate network round-trip was needed to learn the lockfile set.
     expect(getTree).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures observed composer.lock paths for a PHP project from the same tree walk', async () => {
+    getTree.mockResolvedValue({
+      data: {
+        truncated: false,
+        tree: [
+          { path: 'svc/composer.json', type: 'blob' },
+          { path: 'svc/composer.lock', type: 'blob' },
+          { path: 'other/composer.json', type: 'blob' },
+        ],
+      },
+    });
+
+    const info = await detectEcosystem('tok', 'o', 'r', 'main');
+    expect(info.manifestPaths).toEqual(['other/composer.json', 'svc/composer.json']);
+    expect(info.observedLockfilePaths).toEqual({ npm: [], yarn: [], composer: ['svc/composer.lock'] });
   });
 
   it('leaves observedLockfilePaths null when the tree is truncated (partial set would be unsafe to filter against)', async () => {
