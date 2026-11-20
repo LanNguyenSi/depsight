@@ -42,7 +42,8 @@ export interface EcosystemInfo {
    * paths, not guessed candidates (task c2ddfe93, dedup of the parallel
    * npm+yarn lockfile-discovery blind-probe pass). `fetchNpmLockfileResolutions`
    * / `fetchYarnLockfileResolutions` use this to fetch only paths known to
-   * exist instead of probing every co-located candidate over the network.
+   * exist instead of probing every co-located candidate over the network;
+   * `collectPhpDepsResolved` does the same with the `composer` list.
    * `null` when the tree walk fell back to a root-only probe (the recursive
    * git-tree read failed or came back truncated) and the full path set is
    * therefore unknown — callers must blind-probe every candidate in that case,

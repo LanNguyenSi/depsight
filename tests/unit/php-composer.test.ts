@@ -52,6 +52,7 @@ describe('composerConstraintFloor', () => {
     ['=1.2-dev', ''],
     ['==1.2-dev', ''],
     ['^1.x-dev', ''],
+    ['^1.X-dev', ''],
     ['~1.2.x-dev', ''],
     ['^1.*-dev', ''],
     ['dev-main-dev', ''],
@@ -93,6 +94,24 @@ vi.mock('@/lib/github', () => ({
   }),
 }));
 
+// Lets one scan test hand the OSV channel an observed set without the composer
+// list, as a hand-built EcosystemInfo has it (a real tree walk always fills it).
+const eco = vi.hoisted(() => ({ dropComposerKey: false }));
+vi.mock('@/lib/manifest-discovery', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/manifest-discovery')>();
+  return {
+    ...actual,
+    detectEcosystem: async (...args: Parameters<typeof actual.detectEcosystem>) => {
+      const info = await actual.detectEcosystem(...args);
+      if (eco.dropComposerKey && info.observedLockfilePaths) {
+        const { npm, yarn } = info.observedLockfilePaths;
+        return { ...info, observedLockfilePaths: { npm, yarn } };
+      }
+      return info;
+    },
+  };
+});
+
 type Sent = { path: string; raw: boolean };
 
 /** A fake GitHub client over `files`; records every getContent call. */
@@ -133,6 +152,7 @@ describe('composer.lock raw response decoding', () => {
     ['an ArrayBuffer', asBuffer],
     ['a Uint8Array', asBytes],
     ['a Node Buffer', (t) => Buffer.from(t, 'utf-8')],
+    ['a DataView', (t) => new DataView(asBuffer(t))],
   ];
   it.each(responses)('reads the lock when GitHub answers with %s', async (_label, rawAs) => {
     const { octokit } = fakeOctokit(files, rawAs);
@@ -208,6 +228,19 @@ describe('which composer.lock files are read', () => {
     expect(lockCalls(calls)).toEqual(['svc-0/composer.lock']);
   });
 
+  it('a mixed-case directory with the same-case observed lock: exactly one lock read, at the locked version', async () => {
+    const mixed = {
+      'Svc-0/composer.json': composerJson({ 'acme/lib': '^1.0' }),
+      'Svc-0/composer.lock': lock({ 'acme/lib': '1.7.0' }),
+    };
+    const { octokit, calls } = fakeOctokit(mixed);
+    const deps = await collectPhpDepsResolved(octokit, 'o', 'r', ['Svc-0/composer.json'], [
+      'Svc-0/composer.lock',
+    ]);
+    expect(lockCalls(calls)).toEqual(['Svc-0/composer.lock']);
+    expect(deps).toEqual([{ name: 'acme/lib', version: '1.7.0' }]);
+  });
+
   it('matches observed paths case-insensitively, like the npm lockfile fetchers', async () => {
     const { octokit, calls } = fakeOctokit(files);
     await collectPhpDepsResolved(octokit, 'o', 'r', manifestPaths, ['SVC-0/Composer.lock']);
@@ -217,6 +250,7 @@ describe('which composer.lock files are read', () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  eco.dropComposerKey = false;
 });
 
 describe('OSV scan of a PHP repository: which composer.lock files are read', () => {
@@ -225,7 +259,8 @@ describe('OSV scan of a PHP repository: which composer.lock files are read', () 
   for (const d of dirs) files[`${d}/composer.json`] = composerJson({ 'acme/lib': '^1.0' });
   files['b/composer.lock'] = lock({ 'acme/lib': '1.9.0' });
 
-  const run = async (truncated: boolean) => {
+  const run = async (truncated: boolean, dropComposerKey = false) => {
+    eco.dropComposerKey = dropComposerKey;
     scan.files = files;
     scan.truncated = truncated;
     scan.calls = [];
@@ -250,6 +285,12 @@ describe('OSV scan of a PHP repository: which composer.lock files are read', () 
   it('a complete tree walk reads only the composer.lock files it saw: 1 of 3', async () => {
     const { locks, queries } = await run(false);
     expect(locks).toEqual(['b/composer.lock']);
+    expect(queries.sort()).toEqual(['acme/lib@1.0', 'acme/lib@1.9.0']);
+  });
+
+  it('an observed set without a composer key (hand-built info) probes every sibling', async () => {
+    const { locks, queries } = await run(false, true);
+    expect(locks).toEqual(['a/composer.lock', 'b/composer.lock', 'c/composer.lock']);
     expect(queries.sort()).toEqual(['acme/lib@1.0', 'acme/lib@1.9.0']);
   });
 

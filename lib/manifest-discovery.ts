@@ -62,7 +62,7 @@ function collectManifestRefs(entries: TreeEntry[]): ManifestRef[] {
 }
 
 /**
- * Pure: pick the `package-lock.json` / `yarn.lock` paths out of a flat git
+ * Pure: pick the `package-lock.json` / `yarn.lock` / `composer.lock` paths out of a flat git
  * tree, applying the same vendored/build/fixture exclusion as
  * `selectManifestPaths`. This is the OBSERVED-existence counterpart to
  * `discoverLockfilePaths`/`discoverYarnLockfilePaths`' candidate GUESSING:
@@ -72,7 +72,9 @@ function collectManifestRefs(entries: TreeEntry[]): ManifestRef[] {
  * `fetchYarnLockfileResolutions` filter their guessed candidate list down to
  * paths already known to exist instead of probing every candidate over the
  * network (task c2ddfe93 — before this, N package.json files meant ~N extra
- * blind `getContent` probes per lockfile format, most of them 404s).
+ * blind `getContent` probes per lockfile format, most of them 404s). The
+ * `composer` list does the same for `collectPhpDepsResolved`, which reads only
+ * the composer.lock files listed there.
  */
 export function selectLockfilePaths(
   entries: TreeEntry[],
