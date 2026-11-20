@@ -47,7 +47,7 @@
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0",
-    "effect": ">=3.20.0",
+    "effect": "^3.22.1",
     "defu": ">=6.1.5",
     "postcss": "$postcss",
     "esbuild": ">=0.28.1",
