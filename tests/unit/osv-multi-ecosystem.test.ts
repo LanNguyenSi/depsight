@@ -11,13 +11,14 @@ vi.mock('@/lib/github', async () => (await import('./helpers/npm-repo-fixture'))
 // Lets one test make the PHP dependency collection throw (a real read failure
 // is swallowed per file by fetchManifestContents, so it cannot be provoked
 // through the GitHub mock).
-const phpCollect = vi.hoisted(() => ({ fail: false }));
+const phpCollect = vi.hoisted(() => ({ fail: false, observedLocks: [] as unknown[] }));
 vi.mock('@/lib/manifests/php', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/manifests/php')>();
   return {
     ...actual,
     collectPhpDepsResolved: (...args: Parameters<typeof actual.collectPhpDepsResolved>) => {
       if (phpCollect.fail) throw new Error('php collect boom');
+      phpCollect.observedLocks.push(args[4]);
       return actual.collectPhpDepsResolved(...args);
     },
   };
@@ -154,6 +155,7 @@ const manyComposer = (n: number): Record<string, string> =>
 afterEach(() => {
   vi.unstubAllGlobals();
   phpCollect.fail = false;
+  phpCollect.observedLocks = [];
 });
 
 describe('OSV channel covers every supported ecosystem of a repo', () => {
@@ -233,6 +235,19 @@ describe('OSV channel covers every supported ecosystem of a repo', () => {
     expect(degraded).toBeNull();
     expect(packagistQueries(osv)).toContain('symfony/http-kernel@6.4.13');
     expect(packagistQueries(osv)).toContain('psr/log@3.0.0');
+  });
+
+  it('hands the composer.lock files of a complete tree walk to the PHP collection', async () => {
+    stubOsv();
+    await scan({
+      files: {
+        ...NPM_PROJECTS,
+        ...PHP_PROJECT,
+        'other-service/composer.json': composer({ 'acme/lib': '1.0.0' }),
+      },
+    });
+
+    expect(phpCollect.observedLocks).toEqual([['notification-service/composer.lock']]);
   });
 
   it('a composer.lock whose read fails is a degraded source and the floors are queried', async () => {

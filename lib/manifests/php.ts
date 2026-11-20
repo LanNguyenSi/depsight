@@ -68,9 +68,11 @@ export async function collectPhpDeps(
  * an `@<stability>` suffix is dropped (an `as <alias>` falls away with the first term), then the first
  * alternative of an `||`/`|` list, the first term of an AND list (space or
  * comma, whitespace after the operator allowed), its operator stripped, and a
- * wildcard segment (`.*`, `.x`) read as `.0` (`6.4.*` gives `6.4.0`). Returns
- * '' when no release version is left: `*`, a `dev-` branch, a `-dev` branch
- * alias (`1.0.x-dev`). The caller drops those.
+ * wildcard segment (`.*`, `.x`) read as `.0` (`6.4.*` gives `6.4.0`). A `-dev`
+ * suffix is dropped after `^`, `~`, `>=` or `>` (`^1.2-dev` gives `1.2`).
+ * Returns '' when no release version is left: `*`, a `dev-` branch, a `-dev`
+ * branch alias (`1.0.x-dev`, `1.2-dev`), and a first term that gives no lower
+ * bound (`<`, `<=`, `!=`). The caller drops those.
  */
 export function composerConstraintFloor(constraint: string): string {
   const alternative = (constraint.split(/\s*\|\|?\s*/)[0] ?? '')
@@ -78,8 +80,18 @@ export function composerConstraintFloor(constraint: string): string {
     .replace(/@[A-Za-z]+$/, '')
     .replace(/(>=|<=|!=|==|[<>=^~])\s+/g, '$1');
   const term = alternative.split(/[\s,]+/)[0] ?? '';
-  if (/^[^0-9a-z]*dev-/i.test(term) || /-dev$/i.test(term)) return '';
-  const version = term.replace(/^[^0-9]*/, '').replace(/\.(\*|x)(?=\.|$)/gi, '.0');
+  if (/^[^0-9a-z]*dev-/i.test(term)) return '';
+  // An upper bound or an exclusion says nothing about the installed version.
+  if (/^(<|!=)/.test(term)) return '';
+  let release = term;
+  if (/-dev$/i.test(term)) {
+    // `^1.2-dev` allows dev stability from 1.2 on; a bare or `=` version and a
+    // wildcard are a branch alias, not a release.
+    if (!/^(\^|~|>=|>)/.test(term)) return '';
+    release = term.replace(/-dev$/i, '');
+    if (/\.(\*|x)(?=\.|$)/i.test(release)) return '';
+  }
+  const version = release.replace(/^[^0-9]*/, '').replace(/\.(\*|x)(?=\.|$)/gi, '.0');
   return /\d/.test(version) ? version : '';
 }
 
@@ -124,6 +136,10 @@ async function fetchComposerLocks(
           });
           const data = resp.data as unknown;
           if (typeof data === 'string') out.set(path, data);
+          else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+            // A raw response can arrive as bytes (an ArrayBuffer or a Buffer/Uint8Array).
+            out.set(path, new TextDecoder('utf-8').decode(data));
+          }
         } catch (err) {
           if (!isNothingThere(err)) noteDegraded('GitHub file read', err);
         }
@@ -166,8 +182,11 @@ export function parseComposerLock(content: string): Map<string, string> {
  * locked package that composer.json does not list (a transitive one, or a
  * dev one) is added. Without a lock, or when the lock is empty or cannot be
  * parsed (skipped silently, like a malformed npm lockfile), the project falls
- * back to the floors of its `require`. Entries are deduped by name and version for locked ones and
- * by name (first seen, root first) for floors. A directory holding only a
+ * back to the floors of its `require`. `observedLockPaths` (the composer.lock
+ * files a complete tree walk saw) limits the lock reads to files known to
+ * exist; null or absent (the walk was truncated or fell back to a root probe)
+ * reads the sibling of every composer.json. Entries are deduped by name and
+ * version for locked ones and by name (first seen, root first) for floors. A directory holding only a
  * composer.lock is not a manifest and is not read.
  */
 export async function collectPhpDepsResolved(
@@ -175,12 +194,18 @@ export async function collectPhpDepsResolved(
   owner: string,
   repo: string,
   manifestPaths: string[] = [],
+  observedLockPaths?: string[] | null,
 ): Promise<ComposerDep[]> {
   const paths = manifestPaths.length > 0 ? manifestPaths : DEFAULT_PATHS;
   const lockPathOf = (p: string) => p.replace(/composer\.json$/i, 'composer.lock');
+  const observed =
+    observedLockPaths == null ? null : new Set(observedLockPaths.map((p) => p.toLowerCase()));
+  const lockPaths = paths
+    .map(lockPathOf)
+    .filter((p) => observed == null || observed.has(p.toLowerCase()));
   const [manifests, lockByPath] = await Promise.all([
     fetchManifestContents(octokit, owner, repo, paths),
-    fetchComposerLocks(octokit, owner, repo, paths.map(lockPathOf)),
+    fetchComposerLocks(octokit, owner, repo, lockPaths),
   ]);
 
   const seen = new Set<string>();
