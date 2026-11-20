@@ -9,6 +9,17 @@ export type Ecosystem =
   | 'dotnet'
   | 'unknown';
 
+/**
+ * Lockfile paths seen in a complete git-tree walk. `composer` is absent on a
+ * hand-built value: readers then treat the composer.lock files as unknown and
+ * probe the sibling of every composer.json.
+ */
+export interface ObservedLockfilePaths {
+  npm: string[];
+  yarn: string[];
+  composer?: string[];
+}
+
 export interface EcosystemInfo {
   ecosystem: Ecosystem;
   manifestFile: string | null; // e.g. 'package.json', 'requirements.txt'
@@ -26,12 +37,13 @@ export interface EcosystemInfo {
    */
   manifestPathsByEcosystem?: Partial<Record<Ecosystem, string[]>>;
   /**
-   * JS lockfile paths (package-lock.json, yarn.lock) OBSERVED during the same
+   * Lockfile paths (package-lock.json, yarn.lock, composer.lock) OBSERVED during the same
    * full git-tree walk that produced manifestPaths — the actual existing
    * paths, not guessed candidates (task c2ddfe93, dedup of the parallel
    * npm+yarn lockfile-discovery blind-probe pass). `fetchNpmLockfileResolutions`
    * / `fetchYarnLockfileResolutions` use this to fetch only paths known to
-   * exist instead of probing every co-located candidate over the network.
+   * exist instead of probing every co-located candidate over the network;
+   * `collectPhpDepsResolved` does the same with the `composer` list.
    * `null` when the tree walk fell back to a root-only probe (the recursive
    * git-tree read failed or came back truncated) and the full path set is
    * therefore unknown — callers must blind-probe every candidate in that case,
@@ -44,7 +56,7 @@ export interface EcosystemInfo {
    * snapshot), a file present on the read ref could be filtered out. Known,
    * accepted trade-off (R1 Finding 3, task c2ddfe93).
    */
-  observedLockfilePaths: { npm: string[]; yarn: string[] } | null;
+  observedLockfilePaths: ObservedLockfilePaths | null;
 }
 
 export const SUPPORTED_ECOSYSTEMS = new Set<Ecosystem>([

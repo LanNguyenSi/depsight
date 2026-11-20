@@ -3,6 +3,7 @@ import { createGitHubClient } from '@/lib/github';
 import {
   type Ecosystem,
   type EcosystemInfo,
+  type ObservedLockfilePaths,
   SUPPORTED_ECOSYSTEMS,
   ecosystemPrecedence,
   manifestEcosystem,
@@ -61,7 +62,7 @@ function collectManifestRefs(entries: TreeEntry[]): ManifestRef[] {
 }
 
 /**
- * Pure: pick the `package-lock.json` / `yarn.lock` paths out of a flat git
+ * Pure: pick the `package-lock.json` / `yarn.lock` / `composer.lock` paths out of a flat git
  * tree, applying the same vendored/build/fixture exclusion as
  * `selectManifestPaths`. This is the OBSERVED-existence counterpart to
  * `discoverLockfilePaths`/`discoverYarnLockfilePaths`' candidate GUESSING:
@@ -71,19 +72,25 @@ function collectManifestRefs(entries: TreeEntry[]): ManifestRef[] {
  * `fetchYarnLockfileResolutions` filter their guessed candidate list down to
  * paths already known to exist instead of probing every candidate over the
  * network (task c2ddfe93 — before this, N package.json files meant ~N extra
- * blind `getContent` probes per lockfile format, most of them 404s).
+ * blind `getContent` probes per lockfile format, most of them 404s). The
+ * `composer` list does the same for `collectPhpDepsResolved`, which reads only
+ * the composer.lock files listed there.
  */
-export function selectLockfilePaths(entries: TreeEntry[]): { npm: string[]; yarn: string[] } {
+export function selectLockfilePaths(
+  entries: TreeEntry[],
+): { npm: string[]; yarn: string[]; composer: string[] } {
   const npm: string[] = [];
   const yarn: string[] = [];
+  const composer: string[] = [];
   for (const entry of entries) {
     if (entry.type !== 'blob' || !entry.path) continue;
     if (EXCLUDED_DIR.test('/' + entry.path)) continue;
     const base = entry.path.split('/').pop();
     if (base === 'package-lock.json') npm.push(entry.path);
     else if (base === 'yarn.lock') yarn.push(entry.path);
+    else if (base === 'composer.lock') composer.push(entry.path);
   }
-  return { npm, yarn };
+  return { npm, yarn, composer };
 }
 
 // Lockfile kinds the npm resolver in this file does not read. A repo that
@@ -417,7 +424,7 @@ export async function detectEcosystem(
   const octokit = createGitHubClient(accessToken);
 
   let refs: ManifestRef[] = [];
-  let observedLockfilePaths: { npm: string[]; yarn: string[] } | null = null;
+  let observedLockfilePaths: ObservedLockfilePaths | null = null;
   let observedTreeFacts: ObservedTreeFacts | null = null;
   let needFallback = false;
   try {
