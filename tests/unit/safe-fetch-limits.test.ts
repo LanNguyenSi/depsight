@@ -50,6 +50,25 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
+/**
+ * Indexes of the spy's calls that could be the request timer safeFetch arms
+ * for the whole delivery (lib/net/safe-fetch.ts, the `requestTimeoutMs`
+ * timer). It cannot be matched on a delay of exactly `timeoutMs`: the delay
+ * is `timeoutMs` minus whatever the host name phase consumed before the
+ * timer is armed, so one ms of scheduler jitter on a loaded runner makes it
+ * one short. Match it instead on the only property the production code
+ * guarantees: a delay in (0, 123_457]. The DNS lookup timer
+ * (lib/net/safe-fetch.ts, `lookupTimeoutMs`) cannot be picked up by this:
+ * the test URL is an IP literal, so assertPublicUrl returns at its
+ * literal-IP branch before the lookup code runs and never arms that timer.
+ * The uniqueness is asserted by the caller.
+ */
+function requestTimerCallIndexes(calls: unknown[][]): number[] {
+  return calls
+    .map((call, i) => (typeof call[1] === 'number' && call[1] > 0 && call[1] <= 123_457 ? i : -1))
+    .filter((i) => i >= 0);
+}
+
 /** Resolves when every socket the server ever accepted has been closed. */
 async function allSocketsClosed(timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -251,12 +270,43 @@ describe('safeFetch limits: total timeout', () => {
       const res = await safeFetch(URL_UNDER_TEST, undefined, { timeoutMs: 123_457 });
 
       expect(await res.text()).toBe('ok');
-      const armed = setTimeoutSpy.mock.results.find(
-        (_r, i) => setTimeoutSpy.mock.calls[i][1] === 123_457,
-      );
+      const armedAt = requestTimerCallIndexes(setTimeoutSpy.mock.calls);
+      expect(armedAt).toHaveLength(1);
+      const armed = setTimeoutSpy.mock.results[armedAt[0]];
       expect(armed).toBeDefined();
       expect(clearTimeoutSpy).toHaveBeenCalledWith(armed?.value);
     } finally {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
+
+  it('arms the request timer with the time left of the budget, not the whole budget', async () => {
+    // The CI flake this pins: on a loaded runner one ms passes between the
+    // Date.now reads around the host name phase, so the armed delay is
+    // timeoutMs minus that, never timeoutMs exactly. Advance Date.now by
+    // 1 ms per call to force the elapsed case deterministically; the timer
+    // lookup must still find the request timer and its delay must be short
+    // of the full budget (the old exact-delay matcher found nothing here).
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const base = Date.now();
+    let ticks = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => base + (ticks += 1));
+    try {
+      const res = await safeFetch(URL_UNDER_TEST, undefined, { timeoutMs: 123_457 });
+
+      expect(await res.text()).toBe('ok');
+      const armedAt = requestTimerCallIndexes(setTimeoutSpy.mock.calls);
+      expect(armedAt).toHaveLength(1);
+      const armed = setTimeoutSpy.mock.results[armedAt[0]];
+      expect(armed).toBeDefined();
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(armed?.value);
+      const armedDelay = setTimeoutSpy.mock.calls[armedAt[0]][1];
+      expect(armedDelay).toBeGreaterThan(1);
+      expect(armedDelay).toBeLessThan(123_457);
+    } finally {
+      nowSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
     }
