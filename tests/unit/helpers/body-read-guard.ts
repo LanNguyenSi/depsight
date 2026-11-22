@@ -11,6 +11,9 @@
 // (`json`, `text`, `arrayBuffer`, `formData`, `blob`, `bytes`, `body`) read
 // off it, with dot or element access, and a destructured request parameter
 // may not pull a body property out.
+// Limits: the scan is syntactic. It does not judge reachability (a capped
+// call after a return, inside `if (false)` or in an uncalled inner function
+// still counts) and it does not follow handlers or helpers into other files.
 import ts from 'typescript';
 
 const REQUEST_TYPES = new Set(['NextRequest', 'Request']);
