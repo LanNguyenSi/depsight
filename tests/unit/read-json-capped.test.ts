@@ -1,6 +1,8 @@
 // Unit tests for lib/http/read-json-capped.ts: the shared body cap of the
-// JSON endpoints under app/api, plus a source guard that no route reads its
-// body with a bare req.json() again.
+// JSON endpoints under app/api, plus the source guard
+// (./helpers/body-read-guard.ts) that no route reads its body with a bare
+// req.json() again, judged per handler so one capped handler cannot excuse an
+// uncapped sibling.
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +12,7 @@ import {
   DEFAULT_JSON_BODY_BYTES,
   ID_LIST_JSON_BODY_BYTES,
 } from '@/lib/http/read-json-capped';
+import { findUncappedBodyReads, mutatingHandlerNames } from './helpers/body-read-guard';
 
 /** A JSON object string of exactly `bytes` bytes ({"a":"xxx..."}). */
 function jsonOfSize(bytes: number): string {
@@ -168,52 +171,12 @@ function routeFiles(dir: string): string[] {
   });
 }
 
-const MUTATING = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\s*\(/g;
-const BODY_ACCESS = '(?:clone\\(\\)\\s*\\.\\s*)?(?:json|text|arrayBuffer|formData|blob|bytes|body)\\b';
-
-/**
- * Structural guard for one route.ts source. Returns what is wrong, empty when
- * every request body is read through readJsonCapped or readBodyCapped:
- *  1. No request-typed parameter (NextRequest or Request, any name, handlers
- *     and helpers alike) has its body consumed directly: `.json()`, `.text()`,
- *     `.body`, `.clone().json()` and the like.
- *  2. A POST/PUT/PATCH/DELETE handler that uses its request parameter at all
- *     needs an awaited readJsonCapped/readBodyCapped call in the file. A
- *     handler that never touches its request (`_req`, or no parameter) reads
- *     no body and needs nothing.
- */
-function findUncappedBodyReads(source: string): string[] {
-  const problems: string[] = [];
-
-  const requestNames = new Set(
-    [...source.matchAll(/(\w+)\s*:\s*(?:NextRequest|Request)\b/g)].map((m) => m[1]),
-  );
-  for (const name of requestNames) {
-    const raw = new RegExp(`\\b${name}\\s*\\.\\s*${BODY_ACCESS}`);
-    if (raw.test(source)) problems.push(`${name}: body read directly`);
-  }
-
-  const capped = /\bawait\s+(?:readJsonCapped|readBodyCapped)\b/.test(source);
-  const starts = [...source.matchAll(MUTATING)];
-  starts.forEach((m, i) => {
-    const end = i + 1 < starts.length ? (starts[i + 1].index ?? source.length) : source.length;
-    const text = source.slice(m.index ?? 0, end);
-    const param = /^[^(]*\(\s*(\w+)\s*:\s*(?:NextRequest|Request)\b/.exec(text)?.[1];
-    if (!param) return;
-    const afterHeader = text.slice((/\)\s*\{/.exec(text)?.index ?? 0) + 1);
-    if (new RegExp(`\\b${param}\\b`).test(afterHeader) && !capped) {
-      problems.push(`${m[1]}: uses ${param} without readJsonCapped or readBodyCapped`);
-    }
-  });
-  return problems;
-}
-
 describe('request bodies under app/api', () => {
   const files = routeFiles(join(process.cwd(), 'app', 'api'));
 
   it('finds the route files and the handlers', () => {
     expect(files.length).toBeGreaterThan(20);
-    const handlers = files.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(MUTATING)]);
+    const handlers = files.flatMap((f) => mutatingHandlerNames(readFileSync(f, 'utf8')));
     expect(handlers.length).toBeGreaterThan(20);
   });
 
@@ -275,5 +238,88 @@ describe('findUncappedBodyReads (the guard itself)', () => {
     const src = `async function readBody(request: NextRequest) { return request.json(); }\n${clean}`;
 
     expect(findUncappedBodyReads(src)).toEqual(['request: body read directly']);
+  });
+
+  it('judges each handler on its own: a capped sibling excuses nothing', () => {
+    const src = `
+      export async function POST(req: NextRequest) {
+        const parsed = await readJsonCapped(req);
+        return parsed.ok ? NextResponse.json(parsed.body) : parsed.response;
+      }
+      export async function PUT(req: NextRequest) {
+        const b = await parseSomehow(req);
+        return NextResponse.json(b);
+      }`;
+
+    expect(findUncappedBodyReads(src)).toEqual(['PUT: uses req without readJsonCapped or readBodyCapped']);
+  });
+
+  it('flags a body read through an alias of the request', () => {
+    const src = `export async function POST(req: NextRequest) {\n  const r = req;\n  const b = await r.json();\n  return NextResponse.json(b);\n}`;
+    const problems = findUncappedBodyReads(src);
+
+    expect(problems).toContain('r: body read directly');
+    expect(problems).toContain('POST: uses req without readJsonCapped or readBodyCapped');
+  });
+
+  it('flags a handler that destructures body out of its request parameter', () => {
+    const src = `export async function POST({ body }: NextRequest) {\n  return new Response(body);\n}`;
+
+    expect(findUncappedBodyReads(src)).toEqual(['POST: body read directly']);
+  });
+
+  it('flags element access req["json"]() and req["body"]', () => {
+    expect(
+      findUncappedBodyReads(`export async function POST(req: NextRequest) {\n  return await req['json']();\n}`),
+    ).toContain('req: body read directly');
+    expect(
+      findUncappedBodyReads(`export async function POST(req: NextRequest) {\n  return new Response(req['body']);\n}`),
+    ).toContain('req: body read directly');
+  });
+
+  it('flags a raw read and a bare hand-off in an arrow-function export', () => {
+    const raw = `export const POST = async (req: NextRequest) => {\n  const b = await req.json();\n  return NextResponse.json(b);\n};`;
+    expect(findUncappedBodyReads(raw)).toContain('req: body read directly');
+
+    const handed = `import { parseSomehow } from '@/lib/parse';\nexport const POST = async (req: NextRequest) => {\n  const b = await parseSomehow(req);\n  return NextResponse.json(b);\n};`;
+    expect(findUncappedBodyReads(handed)).toEqual([
+      'POST: uses req without readJsonCapped or readBodyCapped',
+    ]);
+  });
+
+  it('accepts a header-only DELETE in a file whose POST is capped', () => {
+    const src = `
+      export async function POST(req: NextRequest) {
+        const parsed = await readJsonCapped(req);
+        return parsed.ok ? NextResponse.json(parsed.body) : parsed.response;
+      }
+      export async function DELETE(req: NextRequest) {
+        if (req.method !== 'DELETE' || !req.headers.get('authorization')) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+        return NextResponse.json({ ok: true });
+      }`;
+
+    expect(findUncappedBodyReads(src)).toEqual([]);
+  });
+
+  it('accepts a handler whose same-file helper does the capped read', () => {
+    const src = `
+      async function readBody(req: NextRequest) {
+        const parsed = await readJsonCapped<unknown>(req);
+        return parsed.ok ? parsed.body : null;
+      }
+      export async function PUT(req: NextRequest) {
+        const body = await readBody(req);
+        return NextResponse.json({ body });
+      }`;
+
+    expect(findUncappedBodyReads(src)).toEqual([]);
+  });
+
+  it('accepts an arrow-function export that reads with the capped helper', () => {
+    const src = `export const PATCH = async (req: NextRequest) => {\n  const parsed = await readJsonCapped(req);\n  return parsed.ok ? NextResponse.json(parsed.body) : parsed.response;\n};`;
+
+    expect(findUncappedBodyReads(src)).toEqual([]);
   });
 });
