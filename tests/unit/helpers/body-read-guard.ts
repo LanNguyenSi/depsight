@@ -75,31 +75,76 @@ function requestRoot(expr: ts.Expression, requestNames: Set<string>): string | n
 
 interface Handler {
   method: string;
-  fn: ts.FunctionLikeDeclaration;
+  /** Absent when the handler could not be resolved; `problem` then says why. */
+  fn?: ts.FunctionLikeDeclaration;
   /** Identifier names this handler's signature binds the request to. */
   params: string[];
   /** A body property pulled out of a destructured request parameter. */
   destructured: string[];
-  /** Set when a destructured parameter binds something beyond the non-body list. */
+  /** Set when a destructured or rest parameter binds something beyond the non-body list. */
   forcedNeeds: boolean;
+  problem?: string;
 }
 
-function destructureFirstParameter(method: string, fn: ts.FunctionLikeDeclaration, handler: Handler): void {
+type FnLike = ts.FunctionLikeDeclaration;
+
+function isFunctionExpr(e: ts.Expression): e is ts.ArrowFunction | ts.FunctionExpression {
+  return ts.isArrowFunction(e) || ts.isFunctionExpression(e);
+}
+
+/**
+ * The function a handler initializer stands for: the function expression
+ * itself, a same-file function it names, or (for a wrapper call such as
+ * `withAuth(async (req) => ...)`) the first argument that is one of those.
+ */
+function resolveHandlerFn(expr: ts.Expression, localFns: Map<string, FnLike>): FnLike | undefined {
+  const e = unwrap(expr);
+  if (isFunctionExpr(e)) return e;
+  if (ts.isIdentifier(e)) return localFns.get(e.text);
+  if (ts.isCallExpression(e)) {
+    for (const arg of e.arguments) {
+      const fn = resolveHandlerFn(arg, localFns);
+      if (fn) return fn;
+    }
+  }
+  return undefined;
+}
+
+/** Same-file functions by name: declarations and consts holding a function or a wrapper call around one. */
+function collectLocalFns(sf: ts.SourceFile): Map<string, FnLike> {
+  const localFns = new Map<string, FnLike>();
+  forEachDescendant(sf, (node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) localFns.set(node.name.text, node);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const fn = resolveHandlerFn(node.initializer, new Map());
+      if (fn) localFns.set(node.name.text, fn);
+    }
+  });
+  return localFns;
+}
+
+function bindingKey(el: ts.BindingElement): string | null {
+  if (el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName))) return el.propertyName.text;
+  return ts.isIdentifier(el.name) ? el.name.text : null;
+}
+
+function destructureFirstParameter(method: string, fn: FnLike, handler: Handler): void {
   const first = fn.parameters[0];
+  if (!first) return;
+  // A rest parameter hides the request in an array, so it cannot be judged.
+  if (first.dotDotDotToken) {
+    handler.forcedNeeds = true;
+    return;
+  }
   // The first parameter of a route handler is the request (Next passes it),
   // annotated or not, so a destructured first parameter destructures it.
-  if (!first || !ts.isObjectBindingPattern(first.name)) return;
+  if (!ts.isObjectBindingPattern(first.name)) return;
   for (const el of first.name.elements) {
     if (ts.isOmittedExpression(el) || el.dotDotDotToken) {
       handler.forcedNeeds = true;
       continue;
     }
-    const key =
-      el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName))
-        ? el.propertyName.text
-        : ts.isIdentifier(el.name)
-          ? el.name.text
-          : null;
+    const key = bindingKey(el);
     if (key && BODY_ACCESSORS.has(key)) {
       handler.destructured.push(`${method}: body read directly`);
     } else if (!key || !NON_BODY_PROPERTIES.has(key)) {
@@ -108,41 +153,73 @@ function destructureFirstParameter(method: string, fn: ts.FunctionLikeDeclaratio
   }
 }
 
-function findHandlers(sf: ts.SourceFile): Handler[] {
+function makeHandler(method: string, fn: FnLike): Handler {
+  const handler: Handler = { method, fn, params: [], destructured: [], forcedNeeds: false };
+  fn.parameters.forEach((p, i) => {
+    if (ts.isIdentifier(p.name) && (i === 0 || isRequestTypeAnnotation(p.type))) handler.params.push(p.name.text);
+  });
+  destructureFirstParameter(method, fn, handler);
+  return handler;
+}
+
+function unresolved(method: string, problem: string): Handler {
+  return { method, params: [], destructured: [], forcedNeeds: false, problem: `${method}: ${problem}` };
+}
+
+function containsFunction(sf: ts.SourceFile): boolean {
+  let found = false;
+  forEachDescendant(sf, (n) => {
+    if (ts.isFunctionDeclaration(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n)) found = true;
+  });
+  return found;
+}
+
+function findHandlers(sf: ts.SourceFile, localFns: Map<string, FnLike>): Handler[] {
   const handlers: Handler[] = [];
-  forEachDescendant(sf, (node) => {
+  for (const node of sf.statements) {
     if (ts.isFunctionDeclaration(node) && node.name && node.body && MUTATING_METHODS.has(node.name.text) && isExported(node)) {
-      const handler: Handler = { method: node.name.text, fn: node, params: [], destructured: [], forcedNeeds: false };
-      node.parameters.forEach((p, i) => {
-        if (ts.isIdentifier(p.name) && (i === 0 || isRequestTypeAnnotation(p.type))) handler.params.push(p.name.text);
-      });
-      destructureFirstParameter(handler.method, node, handler);
-      handlers.push(handler);
+      handlers.push(makeHandler(node.name.text, node));
     }
     if (ts.isVariableStatement(node) && isExported(node)) {
       for (const decl of node.declarationList.declarations) {
-        if (!ts.isIdentifier(decl.name) || !MUTATING_METHODS.has(decl.name.text) || !decl.initializer) continue;
-        const init = unwrap(decl.initializer);
-        // Only an arrow or function expression is a handler here; a re-export
-        // like `export const { GET, POST } = handlers;` defines no body.
-        if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
-          const handler: Handler = { method: decl.name.text, fn: init, params: [], destructured: [], forcedNeeds: false };
-          init.parameters.forEach((p, i) => {
-            if (ts.isIdentifier(p.name) && (i === 0 || isRequestTypeAnnotation(p.type))) handler.params.push(p.name.text);
-          });
-          destructureFirstParameter(handler.method, init, handler);
-          handlers.push(handler);
+        if (ts.isObjectBindingPattern(decl.name)) {
+          // Documented exception: `export const { GET, POST } = handlers;`
+          // re-exports an imported value, so a file that defines no function
+          // at all has no body to judge here. Any function in the file turns
+          // the shape into a problem.
+          for (const el of decl.name.elements) {
+            const exported = ts.isIdentifier(el.name) ? el.name.text : null;
+            if (exported && MUTATING_METHODS.has(exported) && containsFunction(sf)) {
+              handlers.push(unresolved(exported, 'destructured export in a file that defines functions, handler not found'));
+            }
+          }
+          continue;
         }
+        if (!ts.isIdentifier(decl.name) || !MUTATING_METHODS.has(decl.name.text) || !decl.initializer) continue;
+        const fn = resolveHandlerFn(decl.initializer, localFns);
+        handlers.push(fn ? makeHandler(decl.name.text, fn) : unresolved(decl.name.text, 'handler function not found in this file'));
       }
     }
-  });
+    if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      for (const spec of node.exportClause.elements) {
+        const exported = spec.name.text;
+        if (!MUTATING_METHODS.has(exported)) continue;
+        if (node.moduleSpecifier) {
+          handlers.push(unresolved(exported, 're-exported from another file, which the guard does not follow'));
+          continue;
+        }
+        const fn = localFns.get((spec.propertyName ?? spec.name).text);
+        handlers.push(fn ? makeHandler(exported, fn) : unresolved(exported, 'handler function not found in this file'));
+      }
+    }
+  }
   return handlers;
 }
 
 /** Names of the exported mutating handlers a source defines, in file order. */
 export function mutatingHandlerNames(source: string): string[] {
   const sf = ts.createSourceFile('route.ts', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
-  return findHandlers(sf).map((h) => h.method);
+  return findHandlers(sf, collectLocalFns(sf)).map((h) => h.method);
 }
 
 /**
@@ -155,7 +232,8 @@ export function mutatingHandlerNames(source: string): string[] {
  */
 export function findUncappedBodyReads(source: string): string[] {
   const sf = ts.createSourceFile('route.ts', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
-  const handlers = findHandlers(sf);
+  const localFns = collectLocalFns(sf);
+  const handlers = findHandlers(sf, localFns);
 
   // Request-typed names: annotated bindings, the identifiers a mutating
   // handler binds the request to, then transitive aliases (`const r = req`).
@@ -196,20 +274,25 @@ export function findUncappedBodyReads(source: string): string[] {
     if (key && BODY_ACCESSORS.has(key)) push(`${root}: body read directly`);
   });
 
-  // Same-file functions, to honour a capped read a helper does on the request.
-  const localFns = new Map<string, ts.FunctionLikeDeclaration>();
+  // A body property destructured out of a request alias: `const { body } = req`.
   forEachDescendant(sf, (node) => {
-    if (ts.isFunctionDeclaration(node) && node.name && node.body) localFns.set(node.name.text, node);
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      const init = unwrap(node.initializer);
-      if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) localFns.set(node.name.text, init);
+    if (!ts.isVariableDeclaration(node) || !ts.isObjectBindingPattern(node.name) || !node.initializer) return;
+    const root = requestRoot(node.initializer, requestNames);
+    if (!root) return;
+    for (const el of node.name.elements) {
+      if (!ts.isOmittedExpression(el) && !el.dotDotDotToken && BODY_ACCESSORS.has(bindingKey(el) ?? '')) push(`${root}: body read directly`);
     }
   });
+
+  // Same-file functions (collected above) honour a capped read a helper does on the request.
   const subtreeHasAwaitedCapped = (scope: ts.Node): boolean => {
     let found = false;
     forEachDescendant(scope, (node) => {
       if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return;
-      if (CAPPED_CALLS.has(node.expression.text) && node.parent && ts.isAwaitExpression(node.parent)) found = true;
+      if (!CAPPED_CALLS.has(node.expression.text) || !node.parent || !ts.isAwaitExpression(node.parent)) return;
+      // The call must read a request (or an alias or clone of one), not a foreign value.
+      const target = node.arguments[0];
+      if (target && requestRoot(target, requestNames)) found = true;
     });
     return found;
   };
@@ -232,7 +315,8 @@ export function findUncappedBodyReads(source: string): string[] {
   // Rule 2: per mutating handler, on its own, with no excuse from siblings.
   for (const h of handlers) {
     for (const p of h.destructured) push(p);
-    if (!h.fn.body) continue;
+    if (h.problem) push(h.problem);
+    if (!h.fn?.body) continue;
     let needs = h.forcedNeeds;
     let satisfied = subtreeHasAwaitedCapped(h.fn.body);
     forEachDescendant(h.fn.body, (node) => {
@@ -245,6 +329,14 @@ export function findUncappedBodyReads(source: string): string[] {
       if (ts.isElementAccessExpression(parent) && parent.expression === node) {
         const key = parent.argumentExpression && ts.isStringLiteral(parent.argumentExpression) ? parent.argumentExpression.text : null;
         if (!key || !NON_BODY_PROPERTIES.has(key)) needs = true;
+        return;
+      }
+      if (ts.isVariableDeclaration(parent) && parent.initializer === node && ts.isObjectBindingPattern(parent.name)) {
+        // `const { headers } = req` is fine; any other key, a rest element or an omitted one is not.
+        for (const el of parent.name.elements) {
+          if (ts.isOmittedExpression(el) || el.dotDotDotToken) needs = true;
+          else if (!NON_BODY_PROPERTIES.has(bindingKey(el) ?? '')) needs = true;
+        }
         return;
       }
       if ((ts.isVariableDeclaration(parent) || ts.isBindingElement(parent)) && parent.initializer === node) return;
