@@ -123,6 +123,7 @@ const de = {
   // Dashboard
   'dashboard.repos': 'Repositories',
   'dashboard.search': 'Suchen...',
+  'dashboard.sort.label': 'Sortierung',
   'dashboard.sort.name': 'Name',
   'dashboard.sort.risk': 'Risiko',
   'dashboard.sort.language': 'Sprache',
@@ -531,6 +532,7 @@ const en = {
   // Dashboard
   'dashboard.repos': 'Repositories',
   'dashboard.search': 'Search...',
+  'dashboard.sort.label': 'Sort by',
   'dashboard.sort.name': 'Name',
   'dashboard.sort.risk': 'Risk',
   'dashboard.sort.language': 'Language',

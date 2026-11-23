@@ -118,3 +118,91 @@ export function initialFocusTarget(destructive: boolean): 'cancel' | 'confirm' {
 /** Elements Tab can reach, used to build the focus list of a dialog. */
 export const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Menu items a key can land on: enabled `menuitem` elements inside a `role="menu"` popup. */
+export const MENU_ITEM_SELECTOR = '[role="menu"] [role="menuitem"]:not([disabled])';
+
+/** The enabled menu items below `root`, in document order (empty without a root). */
+export function enabledMenuItems(root: ParentNode | null): HTMLElement[] {
+  return root ? Array.from(root.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR)) : [];
+}
+
+/** What a key does inside an open menu. */
+export type MenuKeyAction =
+  | { kind: 'focus'; index: number }
+  | { kind: 'close'; restoreFocus: boolean }
+  | { kind: 'none' };
+
+/**
+ * Keyboard contract of a menu with `count` enabled items. `current` is the
+ * index of the focused item among the enabled ones, or -1 when focus is on
+ * the trigger or elsewhere. ArrowDown and ArrowUp move with wrap (from -1
+ * they enter at the first and the last item), Home and End jump to the
+ * ends, Escape closes and returns focus to the trigger, Tab closes and lets
+ * focus continue. Disabled items are not in the list, so they are skipped.
+ * With no enabled item the arrows and Home/End do nothing; Escape and Tab
+ * still close.
+ */
+export function menuKeyAction(key: string, current: number, count: number): MenuKeyAction {
+  if (isEscapeKey(key)) return { kind: 'close', restoreFocus: true };
+  if (key === 'Tab') return { kind: 'close', restoreFocus: false };
+  if (count <= 0) return { kind: 'none' };
+  switch (key) {
+    case 'ArrowDown':
+      return { kind: 'focus', index: current < 0 ? 0 : (current + 1) % count };
+    case 'ArrowUp':
+      return { kind: 'focus', index: current < 0 ? count - 1 : (current - 1 + count) % count };
+    case 'Home':
+      return { kind: 'focus', index: 0 };
+    case 'End':
+      return { kind: 'focus', index: count - 1 };
+    default:
+      return { kind: 'none' };
+  }
+}
+
+/**
+ * Which item a closed menu's trigger opens onto for a key: ArrowDown the
+ * first, ArrowUp the last. Enter and Space open through the button's click
+ * and land on the first item like a mouse open.
+ */
+export function menuOpenFocus(key: string): 'first' | 'last' | null {
+  if (key === 'ArrowDown') return 'first';
+  if (key === 'ArrowUp') return 'last';
+  return null;
+}
+
+export interface MenuKeyContext<T extends { focus(): void }> {
+  /** Enabled items, in order. */
+  items: readonly T[];
+  /** The element that has focus now (`null` when none). */
+  active: unknown;
+  /**
+   * Whether the key event started inside the menu or its trigger. Escape
+   * closes from anywhere; the other keys only count inside, so a dialog
+   * portaled out of the menu keeps its own keys.
+   */
+  inside: boolean;
+  /** Close the menu; `restoreFocus` asks for focus on the trigger. */
+  close: (restoreFocus: boolean) => void;
+}
+
+/**
+ * Applies `menuKeyAction` to a key event: focus moves are consumed
+ * (preventDefault stops the page from scrolling), Escape is consumed, Tab is
+ * left to the browser after closing.
+ */
+export function handleMenuKey<T extends { focus(): void }>(
+  e: Pick<DialogKeyEvent, 'key' | 'preventDefault'>,
+  { items, active, inside, close }: MenuKeyContext<T>,
+): void {
+  if (!inside && !isEscapeKey(e.key)) return;
+  const action = menuKeyAction(e.key, items.findIndex((el) => el === active), items.length);
+  if (action.kind === 'focus') {
+    e.preventDefault();
+    items[action.index]?.focus();
+  } else if (action.kind === 'close') {
+    if (e.key === 'Escape') e.preventDefault();
+    close(action.restoreFocus);
+  }
+}

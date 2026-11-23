@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  enabledMenuItems,
   handleDialogKey,
+  handleMenuKey,
   initialFocusTarget,
   isEscapeKey,
   lockBodyScroll,
+  MENU_ITEM_SELECTOR,
+  menuKeyAction,
+  menuOpenFocus,
   nextFocusIndex,
   restoreTarget,
   returnFocusTarget,
@@ -237,5 +242,138 @@ describe('initialFocusTarget', () => {
 
   it('focuses confirm for a non-destructive dialog', () => {
     expect(initialFocusTarget(false)).toBe('confirm');
+  });
+});
+
+describe('menuKeyAction', () => {
+  it('ArrowDown moves to the next item and wraps from the last to the first', () => {
+    expect(menuKeyAction('ArrowDown', 0, 3)).toEqual({ kind: 'focus', index: 1 });
+    expect(menuKeyAction('ArrowDown', 2, 3)).toEqual({ kind: 'focus', index: 0 });
+  });
+
+  it('ArrowUp moves to the previous item and wraps from the first to the last', () => {
+    expect(menuKeyAction('ArrowUp', 2, 3)).toEqual({ kind: 'focus', index: 1 });
+    expect(menuKeyAction('ArrowUp', 0, 3)).toEqual({ kind: 'focus', index: 2 });
+  });
+
+  it('enters at the first item on ArrowDown and the last on ArrowUp when no item has focus', () => {
+    expect(menuKeyAction('ArrowDown', -1, 4)).toEqual({ kind: 'focus', index: 0 });
+    expect(menuKeyAction('ArrowUp', -1, 4)).toEqual({ kind: 'focus', index: 3 });
+  });
+
+  it('Home goes to the first item and End to the last', () => {
+    expect(menuKeyAction('Home', 2, 5)).toEqual({ kind: 'focus', index: 0 });
+    expect(menuKeyAction('End', 2, 5)).toEqual({ kind: 'focus', index: 4 });
+  });
+
+  it('stays on the only item', () => {
+    expect(menuKeyAction('ArrowDown', 0, 1)).toEqual({ kind: 'focus', index: 0 });
+    expect(menuKeyAction('ArrowUp', 0, 1)).toEqual({ kind: 'focus', index: 0 });
+  });
+
+  it('Escape closes and restores focus, Tab closes and leaves focus to the browser', () => {
+    expect(menuKeyAction('Escape', 1, 3)).toEqual({ kind: 'close', restoreFocus: true });
+    expect(menuKeyAction('Tab', 1, 3)).toEqual({ kind: 'close', restoreFocus: false });
+  });
+
+  it('does nothing for arrows and Home/End when no item is enabled, but still closes', () => {
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+      expect(menuKeyAction(key, -1, 0)).toEqual({ kind: 'none' });
+    }
+    expect(menuKeyAction('Escape', -1, 0)).toEqual({ kind: 'close', restoreFocus: true });
+    expect(menuKeyAction('Tab', -1, 0)).toEqual({ kind: 'close', restoreFocus: false });
+  });
+
+  it('ignores other keys', () => {
+    for (const key of ['a', 'Enter', ' ', 'ArrowLeft', 'PageDown']) {
+      expect(menuKeyAction(key, 1, 3)).toEqual({ kind: 'none' });
+    }
+  });
+});
+
+describe('menuOpenFocus', () => {
+  it('opens onto the first item for ArrowDown and the last for ArrowUp', () => {
+    expect(menuOpenFocus('ArrowDown')).toBe('first');
+    expect(menuOpenFocus('ArrowUp')).toBe('last');
+  });
+
+  it('leaves Enter, Space and other keys to the button click', () => {
+    for (const key of ['Enter', ' ', 'Escape', 'Home', 'a']) {
+      expect(menuOpenFocus(key)).toBeNull();
+    }
+  });
+});
+
+describe('handleMenuKey', () => {
+  function setup(key: string, opts: { active?: number; inside?: boolean; count?: number } = {}) {
+    const count = opts.count ?? 3;
+    const items = Array.from({ length: count }, () => ({ focus: vi.fn() }));
+    const prevented = vi.fn();
+    const close = vi.fn();
+    handleMenuKey(
+      { key, preventDefault: prevented },
+      {
+        items,
+        active: opts.active === undefined ? null : items[opts.active],
+        inside: opts.inside ?? true,
+        close,
+      },
+    );
+    return { items, prevented, close };
+  }
+
+  it('focuses the target item and consumes the key', () => {
+    const { items, prevented } = setup('ArrowDown', { active: 0 });
+    expect(items[1].focus).toHaveBeenCalledTimes(1);
+    expect(prevented).toHaveBeenCalled();
+  });
+
+  it('wraps ArrowDown from the last item', () => {
+    const { items } = setup('ArrowDown', { active: 2 });
+    expect(items[0].focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape closes with focus restore and is consumed', () => {
+    const { close, prevented } = setup('Escape', { active: 1 });
+    expect(close).toHaveBeenCalledWith(true);
+    expect(prevented).toHaveBeenCalled();
+  });
+
+  it('Tab closes without restoring focus and is not consumed', () => {
+    const { close, prevented } = setup('Tab', { active: 1 });
+    expect(close).toHaveBeenCalledWith(false);
+    expect(prevented).not.toHaveBeenCalled();
+  });
+
+  it('Escape closes from outside the menu, other keys outside are ignored', () => {
+    const esc = setup('Escape', { inside: false });
+    expect(esc.close).toHaveBeenCalledWith(true);
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Tab']) {
+      const r = setup(key, { inside: false, active: 1 });
+      expect(r.close).not.toHaveBeenCalled();
+      expect(r.prevented).not.toHaveBeenCalled();
+      for (const item of r.items) expect(item.focus).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not throw or consume arrows with no enabled item', () => {
+    const { prevented, close } = setup('ArrowDown', { count: 0 });
+    expect(prevented).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe('enabledMenuItems', () => {
+  it('returns an empty list without a root and queries the shared selector otherwise', () => {
+    expect(enabledMenuItems(null)).toEqual([]);
+    const found = [{ id: 'a' }, { id: 'b' }];
+    const querySelectorAll = vi.fn(() => found);
+    expect(enabledMenuItems({ querySelectorAll } as unknown as ParentNode)).toEqual(found);
+    expect(querySelectorAll).toHaveBeenCalledWith(MENU_ITEM_SELECTOR);
+  });
+
+  it('selects enabled menuitems inside a menu only', () => {
+    expect(MENU_ITEM_SELECTOR).toContain('[role="menuitem"]');
+    expect(MENU_ITEM_SELECTOR).toContain(':not([disabled])');
   });
 });

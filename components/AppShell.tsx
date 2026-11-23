@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/app/actions';
 import { useLocale } from '@/lib/i18n';
+import { enabledMenuItems, handleMenuKey, isEscapeKey, menuOpenFocus } from '@/components/dialog-focus';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -23,6 +24,10 @@ export function AppShell({ children, repoCount }: AppShellProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [me, setMe] = useState<MeResponse | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const userMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const userMenuOpenFocus = useRef<'first' | 'last'>('first');
+  const headerRef = useRef<HTMLElement>(null);
+  const mobileButtonRef = useRef<HTMLButtonElement>(null);
 
   const NAV_ITEMS = [
     { href: '/overview', label: t['nav.overview'] },
@@ -51,8 +56,21 @@ export function AppShell({ children, repoCount }: AppShellProps) {
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setUserMenuOpen(false);
+      handleMenuKey(e, {
+        items: enabledMenuItems(userMenuRef.current),
+        active: document.activeElement,
+        inside: userMenuRef.current?.contains(e.target as Node) ?? false,
+        close: (restoreFocus) => {
+          setUserMenuOpen(false);
+          if (restoreFocus) userMenuButtonRef.current?.focus();
+        },
+      });
     }
+    // Keyboard and mouse opens both land on an item: the first, or the last
+    // after ArrowUp on the trigger.
+    const items = enabledMenuItems(userMenuRef.current);
+    (userMenuOpenFocus.current === 'last' ? items[items.length - 1] : items[0])?.focus();
+    userMenuOpenFocus.current = 'first';
     document.addEventListener('mousedown', onPointerDown);
     document.addEventListener('keydown', onKey);
     return () => {
@@ -61,12 +79,32 @@ export function AppShell({ children, repoCount }: AppShellProps) {
     };
   }, [userMenuOpen]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (!isEscapeKey(e.key)) return;
+      setMenuOpen(false);
+      mobileButtonRef.current?.focus();
+    }
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
   const login = me?.githubLogin ?? '';
   const initial = login ? login.charAt(0).toUpperCase() : '?';
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-40">
+      <header ref={headerRef} className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-4 sm:gap-6">
             <Link href="/overview" className="flex items-center gap-2">
@@ -106,8 +144,16 @@ export function AppShell({ children, repoCount }: AppShellProps) {
             {/* User menu */}
             <div className="relative" ref={userMenuRef}>
               <button
+                ref={userMenuButtonRef}
                 type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
+                onKeyDown={(e) => {
+                  const target = menuOpenFocus(e.key);
+                  if (!target || userMenuOpen) return;
+                  e.preventDefault();
+                  userMenuOpenFocus.current = target;
+                  setUserMenuOpen(true);
+                }}
                 aria-haspopup="menu"
                 aria-expanded={userMenuOpen}
                 aria-label={t['user.menu']}
@@ -157,6 +203,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
             </div>
             {/* Mobile menu button */}
             <button
+              ref={mobileButtonRef}
               onClick={() => setMenuOpen((v) => !v)}
               className="sm:hidden p-1.5 text-gray-400 hover:text-gray-200 transition-colors"
               aria-label={t['nav.menu']}

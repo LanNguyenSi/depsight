@@ -14,7 +14,7 @@ import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
-import { isEscapeKey } from '@/components/dialog-focus';
+import { enabledMenuItems, handleMenuKey, menuOpenFocus } from '@/components/dialog-focus';
 import { ActionsMenuTrigger, RepoTabButton } from './DashboardChrome';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 import { scanAllStopMessage } from '@/lib/rate-limit-client';
@@ -195,6 +195,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const actionsOpenFocus = useRef<'first' | 'last'>('first');
   useEffect(() => {
     if (!actionsOpen) return;
     function handleClickOutside(e: MouseEvent) {
@@ -208,10 +209,21 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
       }
     }
     function handleKey(e: KeyboardEvent) {
-      if (!isEscapeKey(e.key)) return;
-      setActionsOpen(false);
-      actionsButtonRef.current?.focus();
+      handleMenuKey(e, {
+        items: enabledMenuItems(actionsRef.current),
+        active: document.activeElement,
+        inside: actionsRef.current?.contains(e.target as Node) ?? false,
+        close: (restoreFocus) => {
+          setActionsOpen(false);
+          if (restoreFocus) actionsButtonRef.current?.focus();
+        },
+      });
     }
+    // Keyboard and mouse opens both land on an item: the first, or the last
+    // after ArrowUp on the trigger.
+    const items = enabledMenuItems(actionsRef.current);
+    (actionsOpenFocus.current === 'last' ? items[items.length - 1] : items[0])?.focus();
+    actionsOpenFocus.current = 'first';
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKey);
     return () => {
@@ -894,7 +906,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
           />
 
           {/* Sort */}
-          <div className="flex gap-1 mb-2">
+          <div role="group" aria-label={t['dashboard.sort.label']} className="flex gap-1 mb-2">
             {([
               ['name', t['dashboard.sort.name']],
               ['risk', t['dashboard.sort.risk']],
@@ -902,7 +914,9 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             ] as const).map(([key, label]) => (
               <button
                 key={key}
+                type="button"
                 onClick={() => setSortBy(key)}
+                aria-pressed={sortBy === key}
                 className={`min-h-6 px-2 text-[10px] rounded transition-colors ${
                   sortBy === key
                     ? 'bg-gray-800 text-gray-300'
@@ -1018,6 +1032,13 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       label={t['dashboard.actions']}
                       buttonRef={actionsButtonRef}
                       onClick={() => setActionsOpen((v) => !v)}
+                      onKeyDown={(e) => {
+                        const target = menuOpenFocus(e.key);
+                        if (!target || actionsOpen) return;
+                        e.preventDefault();
+                        actionsOpenFocus.current = target;
+                        setActionsOpen(true);
+                      }}
                     />
                     {actionsOpen && (
                       <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>

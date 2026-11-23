@@ -40,11 +40,13 @@ export function ActionsMenuTrigger({
   open,
   label,
   onClick,
+  onKeyDown,
   buttonRef,
 }: {
   open: boolean;
   label: string;
   onClick: () => void;
+  onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
   buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
@@ -52,6 +54,7 @@ export function ActionsMenuTrigger({
       ref={buttonRef}
       type="button"
       onClick={onClick}
+      onKeyDown={onKeyDown}
       aria-haspopup="menu"
       aria-expanded={open}
       className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-md hover:bg-blue-700 transition-colors"
