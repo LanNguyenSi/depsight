@@ -10,6 +10,7 @@ import {
   menuKeyAction,
   menuTriggerAction,
   handleTriggerKey,
+  triggerKeyHandler,
   openFocusIndex,
   isPointerOutside,
   mobileNavKeyAction,
@@ -341,6 +342,40 @@ describe('handleTriggerKey', () => {
   });
 });
 
+describe('triggerKeyHandler', () => {
+  function make(open: boolean) {
+    const focusRef: { current: 'first' | 'last' } = { current: 'first' };
+    const setOpen = vi.fn();
+    return { focusRef, setOpen, handler: triggerKeyHandler(open, focusRef, setOpen) };
+  }
+
+  it('ArrowUp records last and opens', () => {
+    const r = make(false);
+    r.handler({ key: 'ArrowUp', preventDefault: vi.fn() });
+    expect(r.focusRef.current).toBe('last');
+    expect(r.setOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('ArrowDown records first and opens', () => {
+    const r = make(false);
+    r.focusRef.current = 'last';
+    r.handler({ key: 'ArrowDown', preventDefault: vi.fn() });
+    expect(r.focusRef.current).toBe('first');
+    expect(r.setOpen).toHaveBeenCalledWith(true);
+  });
+
+  it('Enter and an open menu change nothing', () => {
+    const closed = make(false);
+    closed.handler({ key: 'Enter', preventDefault: vi.fn() });
+    const open = make(true);
+    open.handler({ key: 'ArrowUp', preventDefault: vi.fn() });
+    for (const r of [closed, open]) {
+      expect(r.setOpen).not.toHaveBeenCalled();
+      expect(r.focusRef.current).toBe('first');
+    }
+  });
+});
+
 describe('openFocusIndex', () => {
   it('first is 0 and last is count - 1', () => {
     expect(openFocusIndex(4, 'first')).toBe(0);
@@ -416,6 +451,7 @@ function fakeDoc(active: unknown = null) {
 
 describe('bindMenu', () => {
   function setup(openFocus: 'first' | 'last' = 'first', count = 3) {
+    const focusRef = { current: openFocus };
     const items = Array.from({ length: count }, () => ({ focus: vi.fn() }));
     const doc = fakeDoc();
     const container = {
@@ -428,11 +464,11 @@ describe('bindMenu', () => {
       doc: doc as never,
       container: container as never,
       trigger,
-      openFocus,
+      openFocus: focusRef,
       ignoreSelector: '[data-p]',
       setOpen,
     });
-    return { items, doc, trigger, setOpen, cleanup };
+    return { items, doc, trigger, setOpen, cleanup, focusRef };
   }
 
   it('focuses the first item on open, the last for openFocus last', () => {
@@ -442,6 +478,10 @@ describe('bindMenu', () => {
     const b = setup('last');
     expect(b.items[2].focus).toHaveBeenCalledTimes(1);
     expect(b.items[0].focus).not.toHaveBeenCalled();
+  });
+
+  it('resets the open target to first once read', () => {
+    expect(setup('last').focusRef.current).toBe('first');
   });
 
   it('Escape closes and returns focus to the trigger', () => {

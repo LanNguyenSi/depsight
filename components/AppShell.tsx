@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/app/actions';
 import { useLocale } from '@/lib/i18n';
-import { bindMenu, bindMobileNav, handleTriggerKey } from '@/components/dialog-focus';
+import { bindMenu, bindMobileNav, triggerKeyHandler } from '@/components/dialog-focus';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -50,15 +50,13 @@ export function AppShell({ children, repoCount }: AppShellProps) {
 
   useEffect(() => {
     if (!userMenuOpen) return;
-    const cleanup = bindMenu({
+    return bindMenu({
       doc: document,
       container: userMenuRef.current,
       trigger: userMenuButtonRef.current,
-      openFocus: userMenuOpenFocus.current,
+      openFocus: userMenuOpenFocus,
       setOpen: setUserMenuOpen,
     });
-    userMenuOpenFocus.current = 'first';
-    return cleanup;
   }, [userMenuOpen]);
 
   useEffect(() => {
@@ -121,12 +119,7 @@ export function AppShell({ children, repoCount }: AppShellProps) {
                 ref={userMenuButtonRef}
                 type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
-                onKeyDown={(e) =>
-                  handleTriggerKey(e, userMenuOpen, (target) => {
-                    userMenuOpenFocus.current = target;
-                    setUserMenuOpen(true);
-                  })
-                }
+                onKeyDown={(e) => triggerKeyHandler(userMenuOpen, userMenuOpenFocus, setUserMenuOpen)(e)}
                 aria-haspopup="menu"
                 aria-expanded={userMenuOpen}
                 aria-label={t['user.menu']}

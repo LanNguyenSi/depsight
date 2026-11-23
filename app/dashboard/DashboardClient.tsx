@@ -14,7 +14,7 @@ import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
-import { bindMenu, handleTriggerKey } from '@/components/dialog-focus';
+import { bindMenu, triggerKeyHandler } from '@/components/dialog-focus';
 import { ActionsMenuTrigger, RepoTabButton } from './DashboardChrome';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 import { scanAllStopMessage } from '@/lib/rate-limit-client';
@@ -201,16 +201,14 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
     // The PR-scan modal renders through a portal to document.body, so its own
     // clicks are outside the menu in the DOM. They must not dismiss the menu:
     // dismissing it unmounts the modal row (and with it the modal).
-    const cleanup = bindMenu({
+    return bindMenu({
       doc: document,
       container: actionsRef.current,
       trigger: actionsButtonRef.current,
-      openFocus: actionsOpenFocus.current,
+      openFocus: actionsOpenFocus,
       ignoreSelector: '[data-pr-scan-portal]',
       setOpen: setActionsOpen,
     });
-    actionsOpenFocus.current = 'first';
-    return cleanup;
   }, [actionsOpen]);
 
   // Scan all repos
@@ -1013,12 +1011,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       label={t['dashboard.actions']}
                       buttonRef={actionsButtonRef}
                       onClick={() => setActionsOpen((v) => !v)}
-                      onKeyDown={(e) =>
-                        handleTriggerKey(e, actionsOpen, (target) => {
-                          actionsOpenFocus.current = target;
-                          setActionsOpen(true);
-                        })
-                      }
+                      onKeyDown={(e) => triggerKeyHandler(actionsOpen, actionsOpenFocus, setActionsOpen)(e)}
                     />
                     {actionsOpen && (
                       <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>

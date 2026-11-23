@@ -192,6 +192,22 @@ export function handleTriggerKey(
   openMenu(target);
 }
 
+/**
+ * Keydown handler for a menu trigger: an opening key records its target in
+ * `focusRef` (read and reset by `bindMenu`) and opens the menu.
+ */
+export function triggerKeyHandler(
+  open: boolean,
+  focusRef: { current: MenuOpenTarget },
+  setOpen: (open: boolean) => void,
+): (e: { key: string; preventDefault(): void }) => void {
+  return (e) =>
+    handleTriggerKey(e, open, (target) => {
+      focusRef.current = target;
+      setOpen(true);
+    });
+}
+
 /** Index of the item an opened menu focuses among `count` enabled ones, -1 when none. */
 export function openFocusIndex(count: number, target: MenuOpenTarget): number {
   if (count <= 0) return -1;
@@ -246,7 +262,8 @@ export interface MenuBindingOptions {
   /** The wrapper of trigger and popup. */
   container: (ParentNode & ContainsNode) | null;
   trigger: { focus(): void } | null;
-  openFocus: MenuOpenTarget;
+  /** Which end to focus on open; reset to 'first' once read, so a later mouse open starts at the first item. */
+  openFocus: { current: MenuOpenTarget };
   /** Pointer targets inside this selector never dismiss the menu. */
   ignoreSelector?: string;
   setOpen: (open: boolean) => void;
@@ -273,7 +290,8 @@ export function bindMenu(o: MenuBindingOptions): () => void {
     });
   };
   const items = enabledMenuItems(o.container);
-  items[openFocusIndex(items.length, o.openFocus)]?.focus();
+  items[openFocusIndex(items.length, o.openFocus.current)]?.focus();
+  o.openFocus.current = 'first';
   o.doc.addEventListener('mousedown', onPointerDown);
   o.doc.addEventListener('keydown', onKey);
   return () => {
