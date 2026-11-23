@@ -3,6 +3,7 @@ import { resolveRequestUser } from '@/lib/auth-api';
 import { evaluatePolicies } from '@/lib/policy/engine';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
 import { rateLimitedResponse, policyEvaluateRateLimiter } from '@/lib/rate-limit';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,6 @@ export async function POST(req: NextRequest) {
     const violations = await evaluatePolicies(user.id, scanId.trim());
     return NextResponse.json({ violations, count: violations.length });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Evaluation failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('policies/evaluate', 'Evaluation failed', error);
   }
 }

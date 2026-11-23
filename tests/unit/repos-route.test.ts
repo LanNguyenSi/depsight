@@ -90,13 +90,22 @@ describe('GET /api/repos', () => {
     expect(getUserReposMock).toHaveBeenCalledWith('gh_tok');
   });
 
-  it('returns 500 with generic message when getUserRepos throws', async () => {
-    getUserReposMock.mockRejectedValue(new Error('GitHub API unreachable'));
+  it('answers 500 with the fixed text and logs the detail when getUserRepos throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getUserReposMock.mockRejectedValue(new Error('secret internals'));
+
     const res = await GET(makeGetRequest());
+
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
+    const text = await res.text();
     // Route returns a static message, not the underlying error
-    expect(body.error).toBe('Failed to fetch repositories');
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Failed to fetch repositories' });
+    expect(text).not.toContain('secret internals');
+    // This route was hardened before lib/http/server-error.ts and keeps its own
+    // log call, so only "the detail is logged" is pinned here (no tag prefix).
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog.mock.calls[0].join(' ')).toContain('secret internals');
+    errorLog.mockRestore();
   });
 
   it('filters out archived repos by default', async () => {

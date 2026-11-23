@@ -5,6 +5,7 @@ import { getUserRepos } from '@/lib/github';
 import { syncUserRepos } from '@/lib/repos/sync';
 import { getSessionGitHubToken } from '@/lib/auth-api';
 import { reposRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,8 @@ export async function POST() {
       archived: result.archivedCount,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Sync failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // The raw upstream text (a GitHub "Bad credentials" line, say) is for the
+    // log; the dashboard shows this route's fixed fallback.
+    return serverError('repos/sync', 'Sync failed', error);
   }
 }

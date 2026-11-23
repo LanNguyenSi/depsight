@@ -75,19 +75,32 @@ describe('GET /api/repos/tracked-ids', () => {
     expect(body.repos).toEqual([]);
   });
 
-  it('returns 500 with the underlying error message when getTrackedRepoIds throws', async () => {
-    getTrackedRepoIdsMock.mockRejectedValue(new Error('Database unreachable'));
+  it('answers 500 with the fixed text and logs the detail when getTrackedRepoIds throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getTrackedRepoIdsMock.mockRejectedValue(new Error('secret internals'));
+
     const res = await GET();
+
     expect(res.status).toBe(500);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toBe('Database unreachable');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Failed to load tracked repo ids' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[repos/tracked-ids] secret internals');
+    errorLog.mockRestore();
   });
 
-  it('returns 500 with a generic message when a non-Error is thrown', async () => {
+  it('returns 500 with the fixed message when a non-Error is thrown', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     getTrackedRepoIdsMock.mockRejectedValue('boom');
+
     const res = await GET();
+
     expect(res.status).toBe(500);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('Failed to load tracked repo ids');
+    expect(errorLog).toHaveBeenCalledWith('[repos/tracked-ids] Unknown error');
+    errorLog.mockRestore();
   });
 });

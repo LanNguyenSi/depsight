@@ -178,13 +178,21 @@ describe('GET /api/ci/analytics/[repoId]', () => {
     expect(getBottlenecksMock).toHaveBeenCalledWith('repo-1', 30);
   });
 
-  it('returns 500 with error message when an analytics fn throws', async () => {
+  it('answers 500 with the fixed text and logs the detail when an analytics fn throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     repoFindFirst.mockResolvedValue({ id: 'repo-1' });
-    getWorkflowFailRatesMock.mockRejectedValue(new Error('DB connection lost'));
+    getWorkflowFailRatesMock.mockRejectedValue(new Error('secret internals'));
     const req = new NextRequest('http://localhost/api/ci/analytics/repo-1?type=fail-rate');
+
     const res = await GET(req, makeParams('repo-1'));
+
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('DB connection lost');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Analytics failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[ci/analytics] secret internals');
+    errorLog.mockRestore();
   });
 });

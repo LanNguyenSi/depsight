@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { scanRepository, ScanAccessError } from '@/lib/cve/scanner';
 import { scanRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,10 +48,10 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     if (error instanceof ScanAccessError) {
+      // Controlled error: its message and status were written for the caller.
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
-    const message = error instanceof Error ? error.message : 'Scan failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('scan', 'Scan failed', error);
   }
 }
 

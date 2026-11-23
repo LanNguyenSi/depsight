@@ -125,12 +125,21 @@ describe('POST /api/policies/evaluate', () => {
     expect(evaluatePoliciesMock).toHaveBeenCalledWith('user-1', 'scan-padded');
   });
 
-  it('returns 500 with error message when evaluatePolicies throws', async () => {
-    evaluatePoliciesMock.mockRejectedValue(new Error('engine error'));
+  it('answers 500 with the fixed text and logs the detail when evaluatePolicies throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    evaluatePoliciesMock.mockRejectedValue(new Error('secret internals'));
+
     const res = await POST(makeRequest({ scanId: 'scan-1' }));
+
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('engine error');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Evaluation failed' });
+    // lib/http/server-error.ts: the raw message (a "not owned" scan id, say)
+    // goes to the log, never into the body. Status stays 500.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[policies/evaluate] secret internals');
+    errorLog.mockRestore();
   });
 });
 

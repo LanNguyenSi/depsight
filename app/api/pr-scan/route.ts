@@ -4,6 +4,7 @@ import { scanPRAndComment } from '@/lib/pr/pr-scanner';
 import { getSessionGitHubToken } from '@/lib/auth-api';
 import { prScanRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,7 +63,6 @@ export async function POST(req: NextRequest) {
       ...result,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'PR scan failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('pr-scan', 'PR scan failed', error);
   }
 }

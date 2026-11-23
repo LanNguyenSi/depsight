@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getTeamHealthOverview } from '@/lib/overview/team-health';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +16,6 @@ export async function GET() {
     const overview = await getTeamHealthOverview(user.id);
     return NextResponse.json(overview);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load overview';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('overview', 'Failed to load overview', error);
   }
 }

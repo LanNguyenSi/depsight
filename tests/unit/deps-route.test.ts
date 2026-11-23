@@ -142,13 +142,21 @@ describe('POST /api/deps', () => {
     expect(scanDependenciesMock).toHaveBeenCalledWith('user-1', 'repo-1', 'gh_tok');
   });
 
-  it('returns 500 with error message when scanDependencies throws', async () => {
+  it('answers 500 with the fixed text and logs the detail when scanDependencies throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     repoFindFirst.mockResolvedValue({ id: 'repo-1' });
-    scanDependenciesMock.mockRejectedValue(new Error('scan exploded'));
+    scanDependenciesMock.mockRejectedValue(new Error('secret internals'));
+
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
+
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('scan exploded');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Dependency analysis failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[deps] secret internals');
+    errorLog.mockRestore();
   });
 });
 

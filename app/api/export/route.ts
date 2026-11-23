@@ -17,6 +17,7 @@ import {
   rateLimitedResponse,
 } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,7 +127,6 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Export failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('export', 'Export failed', error);
   }
 }

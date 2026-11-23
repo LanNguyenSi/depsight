@@ -236,30 +236,44 @@ describe('POST /api/export', () => {
     expect(scanRepositoryMock).not.toHaveBeenCalled();
   });
 
-  it('(6) returns 500 when loadRepoExportData throws', async () => {
+  it('(6) answers 500 with the fixed text and logs the detail when loadRepoExportData throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
-    loadRepoExportDataMock.mockRejectedValue(new Error('Repository not found or access denied'));
+    // "Repository not found or access denied" used to reach the body; a
+    // caller must not learn whether the repository exists at all, so the
+    // message is logged and the fixed text is answered instead.
+    loadRepoExportDataMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('Repository not found or access denied');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Export failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[export] secret internals');
+    errorLog.mockRestore();
   });
 
-  it('(7) returns 500 when buildRepoExportArchive throws', async () => {
+  it('(7) answers 500 with the fixed text and logs the detail when buildRepoExportArchive throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     loadRepoExportDataMock.mockResolvedValue(fakeExportData);
     getMissingExportScansMock.mockReturnValue([]);
     buildRepoExportArchiveMock.mockImplementation(() => {
-      throw new Error('zip build error');
+      throw new Error('secret internals');
     });
 
     const res = await POST(makePostRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('zip build error');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Export failed' });
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[export] secret internals');
+    errorLog.mockRestore();
   });
 
   it('(8) invokes all three scanners when all scan types are missing on auto-run', async () => {
