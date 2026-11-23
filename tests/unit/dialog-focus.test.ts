@@ -406,11 +406,11 @@ describe('isPointerOutside', () => {
     expect(isPointerOutside('out', [])).toBe(false);
   });
 
-  it('ignores targets matching the ignore selector', () => {
-    const portal = { closest: (sel: string) => (sel === '[data-p]' ? {} : null) };
-    expect(isPointerOutside(portal, [inside], '[data-p]')).toBe(false);
-    expect(isPointerOutside(portal, [inside])).toBe(true);
-    expect(isPointerOutside({ closest: () => null }, [inside], '[data-p]')).toBe(true);
+  it('ignores targets the ignore predicate accepts', () => {
+    const ignore = (t: unknown) => t === 'portal';
+    expect(isPointerOutside('portal', [inside], ignore)).toBe(false);
+    expect(isPointerOutside('portal', [inside])).toBe(true);
+    expect(isPointerOutside('out', [inside], ignore)).toBe(true);
   });
 });
 
@@ -465,7 +465,7 @@ describe('bindMenu', () => {
       container: container as never,
       trigger,
       openFocus: focusRef,
-      ignoreSelector: '[data-p]',
+      ignore: (t) => !!(t as { portal?: boolean } | null)?.portal,
       setOpen,
     });
     return { items, doc, trigger, setOpen, cleanup, focusRef };
@@ -511,7 +511,7 @@ describe('bindMenu', () => {
     expect(r.setOpen).toHaveBeenCalledTimes(1);
     expect(r.setOpen).toHaveBeenCalledWith(false);
     r.doc.fire('mousedown', { target: 'in' });
-    r.doc.fire('mousedown', { target: { closest: () => ({}) } });
+    r.doc.fire('mousedown', { target: { portal: true } });
     expect(r.setOpen).toHaveBeenCalledTimes(1);
   });
 

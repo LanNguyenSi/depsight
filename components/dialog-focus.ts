@@ -221,16 +221,15 @@ export interface ContainsNode {
 
 /**
  * Whether a pointer event target is outside every given container. Targets
- * matching `ignoreSelector` (a portaled dialog that belongs to the menu) are
- * never outside. Without any container present nothing counts as outside.
+ * `ignore` accepts (a portaled dialog that belongs to the menu) are never
+ * outside. Without any container present nothing counts as outside.
  */
 export function isPointerOutside(
   target: unknown,
   containers: ReadonlyArray<ContainsNode | null>,
-  ignoreSelector?: string,
+  ignore?: (target: unknown) => boolean,
 ): boolean {
-  const el = target as { closest?: (selector: string) => unknown } | null;
-  if (ignoreSelector && el?.closest?.(ignoreSelector)) return false;
+  if (ignore?.(target)) return false;
   const present = containers.filter((c): c is ContainsNode => c !== null);
   if (present.length === 0) return false;
   return !present.some((c) => c.contains(target));
@@ -264,8 +263,8 @@ export interface MenuBindingOptions {
   trigger: { focus(): void } | null;
   /** Which end to focus on open; reset to 'first' once read, so a later mouse open starts at the first item. */
   openFocus: { current: MenuOpenTarget };
-  /** Pointer targets inside this selector never dismiss the menu. */
-  ignoreSelector?: string;
+  /** Pointer targets this accepts never dismiss the menu. */
+  ignore?: (target: unknown) => boolean;
   setOpen: (open: boolean) => void;
 }
 
@@ -276,7 +275,7 @@ export interface MenuBindingOptions {
  */
 export function bindMenu(o: MenuBindingOptions): () => void {
   const onPointerDown = (e: { target: unknown }) => {
-    if (isPointerOutside(e.target, [o.container], o.ignoreSelector)) o.setOpen(false);
+    if (isPointerOutside(e.target, [o.container], o.ignore)) o.setOpen(false);
   };
   const onKey = (e: { key: string; target: unknown; preventDefault(): void }) => {
     handleMenuKey(e, {

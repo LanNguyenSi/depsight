@@ -206,7 +206,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
       container: actionsRef.current,
       trigger: actionsButtonRef.current,
       openFocus: actionsOpenFocus,
-      ignoreSelector: '[data-pr-scan-portal]',
+      ignore: (target) => !!(target as Element | null)?.closest?.('[data-pr-scan-portal]'),
       setOpen: setActionsOpen,
     });
   }, [actionsOpen]);
