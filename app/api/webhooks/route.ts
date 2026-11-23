@@ -9,6 +9,7 @@ import {
   SsrfBlockedError,
 } from '@/lib/net/safe-fetch';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { rateLimitedResponse, webhookCreateRateLimiter, MAX_WEBHOOKS_PER_USER } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,11 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  // Keyed by user id; an unauthenticated request above has already returned
+  // and does not count.
+  const limit = webhookCreateRateLimiter.check(session.user.id);
+  if (!limit.allowed) return rateLimitedResponse(limit);
+
   const parsed = await readJsonCapped<{
     name?: string;
     url?: string;
@@ -55,6 +61,17 @@ export async function POST(req: NextRequest) {
 
   if (!name || !url || !events?.length) {
     return NextResponse.json({ error: 'name, url, and events are required' }, { status: 400 });
+  }
+
+  // Count-then-create without a transaction: concurrent creates can overshoot
+  // the cap by the in-flight requests the rate limit above allows. Checked
+  // before the SSRF lookup so a user at the cap gets 409 without a DNS call.
+  const existing = await prisma.webhookConfig.count({ where: { userId: session.user.id } });
+  if (existing >= MAX_WEBHOOKS_PER_USER) {
+    return NextResponse.json(
+      { error: `A user can have at most ${MAX_WEBHOOKS_PER_USER} webhooks` },
+      { status: 409 },
+    );
   }
 
   try {

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoist mocks so vi.mock factories can reference them
-const { webhookConfigFindMany, slackConfigFindUnique, safeFetchMock } = vi.hoisted(() => ({
+const { webhookConfigFindMany, webhookConfigCount, slackConfigFindUnique, safeFetchMock } = vi.hoisted(() => ({
   webhookConfigFindMany: vi.fn(),
+  webhookConfigCount: vi.fn(),
   slackConfigFindUnique: vi.fn(),
   safeFetchMock: vi.fn(),
 }));
@@ -11,6 +12,7 @@ vi.mock('@/lib/prisma', () => ({
   prisma: {
     webhookConfig: {
       findMany: webhookConfigFindMany,
+      count: webhookConfigCount,
     },
     slackConfig: {
       findUnique: slackConfigFindUnique,
@@ -33,6 +35,7 @@ vi.mock('@/lib/net/safe-fetch', () => ({
 
 import { notifyScanCompleted, notifyForScan } from '@/lib/alerts/notifier';
 import { SafeFetchLimitError, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { MAX_WEBHOOKS_PER_USER } from '@/lib/rate-limit';
 import type { Advisory } from '@prisma/client';
 
 describe('notifyScanCompleted', () => {
@@ -595,5 +598,188 @@ describe('notifier: failed-delivery logging', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded webhook delivery (per-user cap, oldest first)
+// ---------------------------------------------------------------------------
+describe('notifier: bounded webhook delivery', () => {
+  beforeEach(() => {
+    webhookConfigFindMany.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    slackConfigFindUnique.mockReset();
+    safeFetchMock.mockReset();
+    slackConfigFindUnique.mockResolvedValue(null);
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+  });
+
+  function webhookRow(i: number, event: string) {
+    return {
+      url: `https://hooks.example.com/hook-${i}`,
+      secret: null,
+      events: [event],
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+    };
+  }
+
+  function criticalAdvisory(): Advisory {
+    return {
+      id: 'adv-1',
+      ghsaId: 'GHSA-0000-0000-0001',
+      cveId: 'CVE-2024-0001',
+      severity: 'CRITICAL',
+      summary: 'Remote code execution in example-pkg',
+    } as Advisory;
+  }
+
+  it('notifyScanCompleted reads enabled webhooks oldest-first (createdAt then id) with a probe row above the cap: exact findMany args', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(webhookConfigFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', enabled: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MAX_WEBHOOKS_PER_USER + 1,
+    });
+  });
+
+  it('notifyForScan reads enabled webhooks oldest-first (createdAt then id) with a probe row above the cap: exact findMany args', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(webhookConfigFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', enabled: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MAX_WEBHOOKS_PER_USER + 1,
+    });
+  });
+
+  it('notifyScanCompleted delivers to at most the cap and warns with the exact skipped count when the probe row comes back', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER + 1);
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const line = warnSpy.mock.calls[0].join(' ');
+    expect(line).toContain('user-1');
+    expect(line).toContain(String(MAX_WEBHOOKS_PER_USER));
+    expect(line).toContain('skipped 1');
+    expect(webhookConfigCount).toHaveBeenCalledWith({ where: { userId: 'user-1', enabled: true } });
+    warnSpy.mockRestore();
+  });
+
+  it('notifyScanCompleted names the exact skipped count when far more rows are stored than the read returns', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+    webhookConfigCount.mockResolvedValue(70);
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped 50');
+    warnSpy.mockRestore();
+  });
+
+  it('notifyForScan delivers to at most the cap and warns with the exact skipped count when the probe row comes back', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'cve.critical')),
+    );
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER + 1);
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const line = warnSpy.mock.calls[0].join(' ');
+    expect(line).toContain('user-1');
+    expect(line).toContain(String(MAX_WEBHOOKS_PER_USER));
+    expect(line).toContain('skipped 1');
+    expect(webhookConfigCount).toHaveBeenCalledWith({ where: { userId: 'user-1', enabled: true } });
+    warnSpy.mockRestore();
+  });
+
+  it('notifyForScan names the exact skipped count when far more rows are stored than the read returns', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'cve.critical')),
+    );
+    webhookConfigCount.mockResolvedValue(70);
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped 50');
+    warnSpy.mockRestore();
+  });
+
+  it('notifyScanCompleted still delivers to the cap and logs the lower bound when the log-only count rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+    webhookConfigCount.mockRejectedValue(new Error('db down'));
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('notifyForScan still delivers to the cap, still looks up Slack, and logs the lower bound when the log-only count rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'cve.critical')),
+    );
+    webhookConfigCount.mockRejectedValue(new Error('db down'));
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(slackConfigFindUnique).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('logs the lower bound when a concurrent delete leaves the count at the cap or below', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER);
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    expect(warnSpy.mock.calls[0][0]).not.toMatch(/skipped (0|-)/);
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn and does not count when the read comes back exactly at the cap', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(webhookConfigCount).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

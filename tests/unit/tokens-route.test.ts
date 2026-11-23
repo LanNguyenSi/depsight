@@ -1,15 +1,16 @@
 // Route-level tests for GET /api/tokens and POST /api/tokens.
 // Uses auth() (PATTERN B) — session-only, never resolveRequestUser.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, apiTokenFindMany, apiTokenCreate } = vi.hoisted(() => ({
+const { authMock, apiTokenFindMany, apiTokenCreate, apiTokenCount } = vi.hoisted(() => ({
   authMock: vi.fn(),
   apiTokenFindMany: vi.fn(),
   apiTokenCreate: vi.fn(),
+  apiTokenCount: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ vi.mock('@/lib/prisma', () => ({
     apiToken: {
       findMany: apiTokenFindMany,
       create: apiTokenCreate,
+      count: apiTokenCount,
     },
   },
 }));
@@ -31,6 +33,11 @@ vi.mock('@/lib/prisma', () => ({
 import { GET, POST } from '@/app/api/tokens/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import {
+  apiTokenCreateRateLimiter,
+  API_TOKEN_CREATE_LIMIT_PER_HOUR,
+  MAX_API_TOKENS_PER_USER,
+} from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,6 +58,8 @@ describe('GET /api/tokens', () => {
     authMock.mockReset();
     apiTokenFindMany.mockReset();
     apiTokenCreate.mockReset();
+    apiTokenCount.mockReset().mockResolvedValue(0);
+    apiTokenCreateRateLimiter.reset();
   });
 
   it('(1) returns 401 when there is no session', async () => {
@@ -113,6 +122,8 @@ describe('POST /api/tokens', () => {
     authMock.mockReset();
     apiTokenFindMany.mockReset();
     apiTokenCreate.mockReset();
+    apiTokenCount.mockReset().mockResolvedValue(0);
+    apiTokenCreateRateLimiter.reset();
   });
 
   it('(3) returns 401 when there is no session', async () => {
@@ -292,6 +303,8 @@ describe('POST /api/tokens: request body cap', () => {
   beforeEach(() => {
     authMock.mockReset();
     apiTokenCreate.mockReset();
+    apiTokenCount.mockReset().mockResolvedValue(0);
+    apiTokenCreateRateLimiter.reset();
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
   });
 
@@ -317,5 +330,159 @@ describe('POST /api/tokens: request body cap', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'A token name is required' });
     expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/tokens: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/tokens: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    apiTokenCreateRateLimiter.reset();
+    authMock.mockReset();
+    apiTokenCreate.mockReset();
+    apiTokenCount.mockReset().mockResolvedValue(0);
+    apiTokenCreate.mockResolvedValue({ id: 'tok-new' });
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 30 mints per user and hour', () => {
+    expect(API_TOKEN_CREATE_LIMIT_PER_HOUR).toBe(30);
+  });
+
+  it('answers 429 with Retry-After on the (limit+1)th call and mints nothing', async () => {
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ name: `ci-${i}` }))).status).toBe(201);
+    }
+    expect(apiTokenCreate).toHaveBeenCalledTimes(API_TOKEN_CREATE_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest({ name: 'one-too-many' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(apiTokenCreate).toHaveBeenCalledTimes(API_TOKEN_CREATE_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and does not count an unauthenticated request', async () => {
+    authMock.mockResolvedValue(null);
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(401);
+    }
+
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+    }
+    expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(429);
+
+    authMock.mockResolvedValue({ user: { id: 'someone-else' } });
+    expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+  });
+
+  it('runs the limiter before validation and the count: an over-budget empty-name body answers 429 with no count and no mint', async () => {
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+    }
+    apiTokenCount.mockClear();
+    apiTokenCreate.mockClear();
+
+    // A body missing the required name would fail validation (400) if the
+    // limiter ran after validation; the limiter is first, so this is 429.
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(429);
+    expect(apiTokenCount).not.toHaveBeenCalled();
+    expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+      }
+      apiTokenCount.mockClear();
+      apiTokenCreate.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(apiTokenCount).not.toHaveBeenCalled();
+      expect(apiTokenCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(apiTokenCount).not.toHaveBeenCalled();
+      expect(apiTokenCreate).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/tokens: per-user active-token cap
+// ---------------------------------------------------------------------------
+describe('POST /api/tokens: per-user active-token cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    apiTokenCreate.mockReset();
+    apiTokenCount.mockReset();
+    apiTokenCreateRateLimiter.reset();
+    apiTokenCreate.mockResolvedValue({ id: 'tok-new' });
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+  });
+
+  it('answers 409 with a message naming the cap at the cap and mints nothing', async () => {
+    apiTokenCount.mockResolvedValue(MAX_API_TOKENS_PER_USER);
+
+    const res = await POST(makePostRequest({ name: 'ci-token' }));
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`A user can have at most ${MAX_API_TOKENS_PER_USER} active API tokens`);
+    expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
+
+  it('mints successfully one below the cap', async () => {
+    apiTokenCount.mockResolvedValue(MAX_API_TOKENS_PER_USER - 1);
+
+    const res = await POST(makePostRequest({ name: 'ci-token' }));
+
+    expect(res.status).toBe(201);
+    expect(apiTokenCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts only active (not revoked) tokens of the caller, so revoking frees room', async () => {
+    apiTokenCount.mockResolvedValue(0);
+    await POST(makePostRequest({ name: 'ci-token' }));
+    expect(apiTokenCount).toHaveBeenCalledWith({
+      where: { userId: 'user-1', revokedAt: null },
+    });
   });
 });

@@ -1,7 +1,7 @@
 // Route-level tests for GET, POST, DELETE /api/slack.
 // Uses auth() (PATTERN B). assertPublicUrl (SSRF guard) is mocked at the
 // module boundary so we can test SSRF error handling in isolation.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -49,6 +49,7 @@ vi.mock('@/lib/prisma', () => ({
 import { GET, POST, DELETE } from '@/app/api/slack/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import { slackConfigRateLimiter, SLACK_CONFIG_LIMIT_PER_HOUR } from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -140,6 +141,7 @@ describe('POST /api/slack', () => {
     slackConfigFindUnique.mockReset();
     slackConfigUpsert.mockReset();
     slackConfigDeleteMany.mockReset();
+    slackConfigRateLimiter.reset();
   });
 
   it('(4) returns 401 when there is no session', async () => {
@@ -367,6 +369,7 @@ describe('POST /api/slack: request body cap', () => {
     authMock.mockReset();
     assertPublicUrlMock.mockReset();
     slackConfigUpsert.mockReset();
+    slackConfigRateLimiter.reset();
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
   });
 
@@ -377,5 +380,133 @@ describe('POST /api/slack: request body cap', () => {
     expect(await res.json()).toEqual({ error: 'Request body too large' });
     expect(assertPublicUrlMock).not.toHaveBeenCalled();
     expect(slackConfigUpsert).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/slack: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/slack: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    slackConfigRateLimiter.reset();
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    slackConfigUpsert.mockReset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockResolvedValue(undefined);
+    slackConfigUpsert.mockResolvedValue({ id: 'slack-1' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 60 saves per user and hour', () => {
+    expect(SLACK_CONFIG_LIMIT_PER_HOUR).toBe(60);
+  });
+
+  it('answers 429 with Retry-After on the (limit+1)th call and saves nothing', async () => {
+    for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+    }
+    expect(slackConfigUpsert).toHaveBeenCalledTimes(SLACK_CONFIG_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(slackConfigUpsert).toHaveBeenCalledTimes(SLACK_CONFIG_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and does not count an unauthenticated request', async () => {
+    authMock.mockResolvedValue(null);
+    for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(401);
+    }
+
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+    }
+    expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(429);
+
+    authMock.mockResolvedValue({ user: { id: 'someone-else' } });
+    expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+  });
+
+  it('runs the limiter before validation and the DNS check: an over-budget body answers 429 with neither called', async () => {
+    for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+    }
+    assertPublicUrlMock.mockClear();
+    slackConfigUpsert.mockClear();
+
+    // Passes the required webhookUrl check and carries a URL that would go to
+    // the DNS check, with an invalid minSeverity that would fail validation
+    // after it. The limiter is first, so this is 429 and neither DNS nor the
+    // upsert runs (POST /api/slack has no count: it upserts the one row).
+    const res = await POST(makePostRequest({
+      webhookUrl: 'https://hooks.slack.com/x',
+      minSeverity: 'SUPER_CRITICAL',
+    }));
+
+    expect(res.status).toBe(429);
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
+  });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/slack', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+      }
+      assertPublicUrlMock.mockClear();
+      slackConfigUpsert.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(slackConfigUpsert).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(slackConfigUpsert).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 400, for a body missing the required webhookUrl once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(makePostRequest({ channel: '#alerts' }));
+
+      expect(res.status).toBe(429);
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(slackConfigUpsert).not.toHaveBeenCalled();
+    });
   });
 });

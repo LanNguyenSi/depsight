@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { Advisory } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { MAX_WEBHOOKS_PER_USER } from '@/lib/rate-limit';
 import { safeFetch, SafeFetchLimitError, SsrfBlockedError } from '@/lib/net/safe-fetch';
 import { SEVERITY_RANK, severityValue } from '@/lib/severity';
 
@@ -168,6 +169,35 @@ async function deliverSlack(
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
+// A user's enabled webhook rows, capped at MAX_WEBHOOKS_PER_USER and delivered
+// oldest first: the two reads below take the cap plus one probe row so they
+// can see that an install from before the cap holds more rows, log the skipped
+// count once per call, and fan out to at most the cap of them. A capped-out
+// user who wants to notify more targets adds or re-points an existing webhook.
+async function capWebhookTargets(
+  userId: string,
+  webhooks: Array<{ url: string; secret: string | null; events: string[] }>,
+): Promise<typeof webhooks> {
+  if (webhooks.length <= MAX_WEBHOOKS_PER_USER) return webhooks;
+  // The probe row only shows that more rows exist; one count with the same
+  // where names the exact number of stored rows this fan-out skipped.
+  // The count is log-only: a failure of it must not abort delivery, so it
+  // falls back to the lower bound the probe row proves. The count runs after
+  // the read, so a concurrent delete can leave it at or below the cap; the
+  // larger of the two figures is logged.
+  let skipped = `at least ${webhooks.length - MAX_WEBHOOKS_PER_USER}`;
+  try {
+    const total = await prisma.webhookConfig.count({ where: { userId, enabled: true } });
+    if (total >= webhooks.length) skipped = String(total - MAX_WEBHOOKS_PER_USER);
+  } catch {
+    // keep the fallback wording
+  }
+  console.warn(
+    `[alerts] user ${userId} has more enabled webhooks than the delivery cap of ${MAX_WEBHOOKS_PER_USER}: delivered to the oldest ${MAX_WEBHOOKS_PER_USER}, skipped ${skipped}`,
+  );
+  return webhooks.slice(0, MAX_WEBHOOKS_PER_USER);
+}
+
 export async function notifyForScan(
   userId: string,
   repoId: string,
@@ -211,9 +241,14 @@ export async function notifyForScan(
   // Deliver webhooks
   if (webhookAdvisories.length > 0) {
     const payload = buildPayload(event, webhookAdvisories);
-    const webhooks = await prisma.webhookConfig.findMany({
-      where: { userId, enabled: true },
-    });
+    const webhooks = await capWebhookTargets(
+      userId,
+      await prisma.webhookConfig.findMany({
+        where: { userId, enabled: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: MAX_WEBHOOKS_PER_USER + 1,
+      }),
+    );
 
     await Promise.allSettled(
       webhooks
@@ -257,9 +292,14 @@ export async function notifyScanCompleted(
   policyViolations: ScanCompletedPayload['policyViolations'],
   degradedReason: string | null = null,
 ): Promise<void> {
-  const webhooks = await prisma.webhookConfig.findMany({
-    where: { userId, enabled: true },
-  });
+  const webhooks = await capWebhookTargets(
+    userId,
+    await prisma.webhookConfig.findMany({
+      where: { userId, enabled: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MAX_WEBHOOKS_PER_USER + 1,
+    }),
+  );
 
   const subscribers = webhooks.filter((wh) => wh.events.includes('scan.completed'));
   if (subscribers.length === 0) return;

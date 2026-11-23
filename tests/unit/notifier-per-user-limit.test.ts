@@ -42,6 +42,7 @@ import {
   dnsLookupsInFlightForTests,
   resetDnsLookupStateForTests,
 } from '@/lib/net/safe-fetch';
+import { MAX_WEBHOOKS_PER_USER } from '@/lib/rate-limit';
 
 const PUBLIC = [{ address: '93.184.216.34', family: 4 }];
 
@@ -135,10 +136,10 @@ afterEach(() => {
 });
 
 describe('alert delivery of two users against the shared DNS lookup slots', () => {
-  it('user B is dialed while 66 webhooks of user A park their lookups', async () => {
+  it('user B is dialed while 20 webhooks of user A park their lookups', async () => {
     const pending = parkUserAHosts();
     dialWith200();
-    webhooksByUser({ 'user-a': hooksOf('a', 66), 'user-b': hooksOf('b', 1) });
+    webhooksByUser({ 'user-a': hooksOf('a', MAX_WEBHOOKS_PER_USER), 'user-b': hooksOf('b', 1) });
 
     const aDone = notify('user-a');
     await vi.advanceTimersByTimeAsync(0);
@@ -154,36 +155,42 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('b-0.example.com'));
 
     // A's lookups finally answer: every one of A's queued deliveries proceeds.
-    for (let i = 0; i < 70 && dialedHosts().length < 66; i += 1) {
+    // The condition counts only A's hosts (B's delivery was already dialed).
+    const aDialCount = () => dialedHosts().filter((h) => h.startsWith('a-')).length;
+    for (let i = 0; i < 70 && aDialCount() < MAX_WEBHOOKS_PER_USER; i += 1) {
       for (const [host, p] of [...pending]) {
         p.resolve(PUBLIC);
         pending.delete(host);
       }
       await vi.advanceTimersByTimeAsync(0);
     }
+    // Drain the last dial's response callbacks: the loop may exit on its
+    // condition right after dialing, before the fake nextTick chain fires.
+    await vi.advanceTimersByTimeAsync(0);
     await aDone;
-    // The first of A's hooks took the slot and 32 more got a place in the wait
-    // queue (the per-owner share of it), the other 33 were refused with
-    // dns_busy. None was dropped silently: every refusal is logged.
+    // The first of A's hooks took the slot and the other 19 got a place in the
+    // wait queue (the per-owner share of it is larger), so none was refused.
+    // 20 is exactly the delivery cap, so no cap warning fires either.
     const aDialed = dialedHosts().filter((h) => h.startsWith('a-'));
     const refused = warn.mock.calls.filter((c) => String(c[0]).includes('dns_busy'));
-    expect(aDialed.length + refused.length).toBe(66);
-    expect(refused.length).toBe(33);
+    expect(aDialed.length + refused.length).toBe(MAX_WEBHOOKS_PER_USER);
+    expect(refused.length).toBe(0);
   });
 
   it('each of A deliveries that never gets a lookup ends in a logged timeout, none is lost silently', async () => {
     const pending = parkUserAHosts();
     dialWith200();
-    webhooksByUser({ 'user-a': hooksOf('a', 66) });
+    webhooksByUser({ 'user-a': hooksOf('a', MAX_WEBHOOKS_PER_USER) });
 
     const aDone = notify('user-a');
     await vi.advanceTimersByTimeAsync(15_000);
     await aDone;
     expect(httpsRequestMock).not.toHaveBeenCalled();
     const kinds = warn.mock.calls.map((c) => String(c[0]));
-    // 1 parked lookup (timeout), 32 queued waiters (timeout), 33 over A's queue share (dns_busy).
-    expect(kinds.filter((m) => m.includes('kind: timeout'))).toHaveLength(33);
-    expect(kinds.filter((m) => m.includes('kind: dns_busy'))).toHaveLength(33);
+    // 1 parked lookup (timeout) and the 19 queued waiters (timeout). All 20 fit
+    // in the per-owner queue share, so none is refused with dns_busy.
+    expect(kinds.filter((m) => m.includes('kind: timeout'))).toHaveLength(MAX_WEBHOOKS_PER_USER);
+    expect(kinds.filter((m) => m.includes('kind: dns_busy'))).toHaveLength(0);
     expect(kinds.every((m) => /a-\d+\.example\.com/.test(m))).toBe(true);
 
     // The abandoned lookup still holds A's slot until it settles, then it is released.
@@ -192,10 +199,10 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  it('user B with two deliveries of one event is dialed twice while A holds its slot and a full share of the queue', async () => {
+  it('user B with two deliveries of one event is dialed twice while A holds its slot and a share of the queue', async () => {
     const pending = parkUserAHosts();
     dialWith200();
-    webhooksByUser({ 'user-a': hooksOf('a', 66), 'user-b': hooksOf('b', 2) });
+    webhooksByUser({ 'user-a': hooksOf('a', MAX_WEBHOOKS_PER_USER), 'user-b': hooksOf('b', 2) });
 
     const aDone = notify('user-a');
     await vi.advanceTimersByTimeAsync(0);
@@ -215,7 +222,7 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
     const pending = parkUserAHosts();
     dialWith200();
     webhooksByUser({
-      'user-a': hooksOf('a', 66),
+      'user-a': hooksOf('a', MAX_WEBHOOKS_PER_USER),
       'user-b': [
         {
           url: 'https://b-0.example.com/deliver',
@@ -256,7 +263,7 @@ describe('alert delivery of two users against the shared DNS lookup slots', () =
     const pending = parkUserAHosts();
     dialWith200();
     webhooksByUser({
-      'user-a': hooksOf('a', 66),
+      'user-a': hooksOf('a', MAX_WEBHOOKS_PER_USER),
       'user-b': hooksOf('b', 1),
       'user-c': hooksOf('c', 1),
     });

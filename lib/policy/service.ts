@@ -24,6 +24,14 @@ export async function listPolicies(userId: string) {
   });
 }
 
+// Count before `createPolicy` to enforce the per-user cap (MAX_POLICIES_PER_USER
+// in lib/rate-limit.ts). Count-then-create is not one transaction: concurrent
+// creates can overshoot the cap by the small number of in-flight requests the
+// route's rate limit allows.
+export async function countPolicies(userId: string) {
+  return prisma.policy.count({ where: { userId } });
+}
+
 export async function getPolicyById(userId: string, policyId: string) {
   return prisma.policy.findFirst({
     where: { id: policyId, userId },

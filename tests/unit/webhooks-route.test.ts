@@ -1,17 +1,18 @@
 // Route-level tests for GET /api/webhooks and POST /api/webhooks.
 // Uses auth() (PATTERN B). assertPublicUrl (SSRF guard) is mocked at the
 // module boundary so we can test the route's SSRF error handling in isolation.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { authMock, assertPublicUrlMock, webhookConfigFindMany, webhookConfigCreate } = vi.hoisted(
+const { authMock, assertPublicUrlMock, webhookConfigFindMany, webhookConfigCreate, webhookConfigCount } = vi.hoisted(
   () => ({
     authMock: vi.fn(),
     assertPublicUrlMock: vi.fn(),
     webhookConfigFindMany: vi.fn(),
     webhookConfigCreate: vi.fn(),
+    webhookConfigCount: vi.fn(),
   }),
 );
 
@@ -33,6 +34,7 @@ vi.mock('@/lib/prisma', () => ({
     webhookConfig: {
       findMany: webhookConfigFindMany,
       create: webhookConfigCreate,
+      count: webhookConfigCount,
     },
   },
 }));
@@ -43,6 +45,11 @@ vi.mock('@/lib/prisma', () => ({
 import { GET, POST } from '@/app/api/webhooks/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import {
+  webhookCreateRateLimiter,
+  WEBHOOK_CREATE_LIMIT_PER_HOUR,
+  MAX_WEBHOOKS_PER_USER,
+} from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,6 +71,8 @@ describe('GET /api/webhooks', () => {
     webhookConfigFindMany.mockReset();
     assertPublicUrlMock.mockReset();
     webhookConfigCreate.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    webhookCreateRateLimiter.reset();
   });
 
   it('(1) returns 401 when there is no session', async () => {
@@ -115,6 +124,8 @@ describe('POST /api/webhooks', () => {
     webhookConfigFindMany.mockReset();
     assertPublicUrlMock.mockReset();
     webhookConfigCreate.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    webhookCreateRateLimiter.reset();
   });
 
   it('(3) returns 401 when there is no session', async () => {
@@ -318,6 +329,8 @@ describe('POST /api/webhooks: request body cap', () => {
     authMock.mockReset();
     assertPublicUrlMock.mockReset();
     webhookConfigCreate.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    webhookCreateRateLimiter.reset();
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     assertPublicUrlMock.mockResolvedValue({
       url: new URL('https://example.com/hook'),
@@ -348,6 +361,8 @@ describe('webhook responses never carry the signing secret', () => {
     assertPublicUrlMock.mockReset();
     webhookConfigCreate.mockReset();
     webhookConfigFindMany.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    webhookCreateRateLimiter.reset();
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     assertPublicUrlMock.mockResolvedValue({
       url: new URL('https://example.com/hook'),
@@ -389,5 +404,203 @@ describe('webhook responses never carry the signing secret', () => {
 
     const { webhooks } = await res.json() as { webhooks: Record<string, unknown>[] };
     expect(Object.keys(webhooks[0]).sort()).toEqual(PUBLIC_KEYS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/webhooks: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/webhooks: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+  const validBody = { name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    webhookCreateRateLimiter.reset();
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    webhookConfigCreate.mockReset();
+    webhookConfigCount.mockReset().mockResolvedValue(0);
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockResolvedValue({
+      url: new URL('https://example.com/hook'),
+      addresses: ['93.184.216.34'],
+    });
+    webhookConfigCreate.mockResolvedValue({ id: 'wh-new' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 60 creates per user and hour', () => {
+    expect(WEBHOOK_CREATE_LIMIT_PER_HOUR).toBe(60);
+  });
+
+  it('answers 429 with Retry-After on the (limit+1)th call and creates nothing', async () => {
+    for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validBody))).status).toBe(201);
+    }
+    expect(webhookConfigCreate).toHaveBeenCalledTimes(WEBHOOK_CREATE_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest(validBody));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(webhookConfigCreate).toHaveBeenCalledTimes(WEBHOOK_CREATE_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and does not count an unauthenticated request', async () => {
+    authMock.mockResolvedValue(null);
+    for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest(validBody))).status).toBe(401);
+    }
+
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validBody))).status).toBe(201);
+    }
+    expect((await POST(makePostRequest(validBody))).status).toBe(429);
+
+    authMock.mockResolvedValue({ user: { id: 'someone-else' } });
+    expect((await POST(makePostRequest(validBody))).status).toBe(201);
+  });
+
+  it('runs the limiter before validation, count and the DNS check: an over-budget body answers 429 with none of them called', async () => {
+    for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validBody))).status).toBe(201);
+    }
+    assertPublicUrlMock.mockClear();
+    webhookConfigCount.mockClear();
+    webhookConfigCreate.mockClear();
+
+    // Passes the required-fields check and carries a URL that would go to the
+    // DNS check, with an invalid event that would fail validation after it.
+    // The limiter is first, so this is 429 and none of count/DNS/create runs.
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['bogus.event'] }),
+    );
+
+    expect(res.status).toBe(429);
+    expect(webhookConfigCount).not.toHaveBeenCalled();
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/webhooks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest(validBody))).status).toBe(201);
+      }
+      assertPublicUrlMock.mockClear();
+      webhookConfigCount.mockClear();
+      webhookConfigCreate.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 400, for a body missing the required url once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(makePostRequest({ name: 'My Hook', events: ['cve.critical'] }));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/webhooks: per-user count cap
+// ---------------------------------------------------------------------------
+describe('POST /api/webhooks: per-user count cap', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    assertPublicUrlMock.mockReset();
+    webhookConfigCreate.mockReset();
+    webhookConfigCount.mockReset();
+    webhookCreateRateLimiter.reset();
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    assertPublicUrlMock.mockResolvedValue({
+      url: new URL('https://example.com/hook'),
+      addresses: ['93.184.216.34'],
+    });
+    webhookConfigCreate.mockResolvedValue({ id: 'wh-new' });
+  });
+
+  it('answers 409 with a message naming the cap at the cap and writes nothing', async () => {
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER);
+
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`A user can have at most ${MAX_WEBHOOKS_PER_USER} webhooks`);
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('checks the cap before the URL lookup: a user at the cap gets 409 with no DNS call', async () => {
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER);
+
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('creates successfully one below the cap', async () => {
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER - 1);
+
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(201);
+    expect(webhookConfigCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts only the caller rows', async () => {
+    webhookConfigCount.mockResolvedValue(0);
+    await POST(makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] }));
+    expect(webhookConfigCount).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
   });
 });

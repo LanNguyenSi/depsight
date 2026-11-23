@@ -1,4 +1,4 @@
-// Unit tests for lib/policy/service.ts — all 6 exported functions.
+// Unit tests for lib/policy/service.ts — all 7 exported functions.
 // Prisma is mocked at the module boundary; no DB access.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PolicyType, Severity } from '@prisma/client';
@@ -12,12 +12,14 @@ const {
   policyCreate,
   policyUpdate,
   policyDelete,
+  policyCount,
 } = vi.hoisted(() => ({
   policyFindMany: vi.fn(),
   policyFindFirst: vi.fn(),
   policyCreate: vi.fn(),
   policyUpdate: vi.fn(),
   policyDelete: vi.fn(),
+  policyCount: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -31,6 +33,7 @@ vi.mock('@/lib/prisma', () => ({
       create: policyCreate,
       update: policyUpdate,
       delete: policyDelete,
+      count: policyCount,
     },
   },
 }));
@@ -45,6 +48,7 @@ import {
   updatePolicy,
   deletePolicy,
   togglePolicy,
+  countPolicies,
 } from '@/lib/policy/service';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +60,7 @@ function resetAll() {
   policyCreate.mockReset();
   policyUpdate.mockReset();
   policyDelete.mockReset();
+  policyCount.mockReset();
 }
 
 // ---------------------------------------------------------------------------
@@ -319,5 +324,21 @@ describe('togglePolicy', () => {
         data: { enabled: true },
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// countPolicies: the per-user cap read
+// ---------------------------------------------------------------------------
+describe('countPolicies', () => {
+  beforeEach(resetAll);
+
+  it('counts only the given user rows and returns the count', async () => {
+    policyCount.mockResolvedValue(42);
+
+    const result = await countPolicies('user-1');
+
+    expect(result).toBe(42);
+    expect(policyCount).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
   });
 });

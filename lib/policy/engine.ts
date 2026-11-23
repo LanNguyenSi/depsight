@@ -1,6 +1,7 @@
 import semver from 'semver';
 import { Prisma, PolicyType, Severity } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { MAX_POLICIES_PER_USER } from '@/lib/rate-limit';
 import { SEVERITY_RANK, severityGte } from '@/lib/severity';
 
 export interface PolicyViolation {
@@ -114,8 +115,33 @@ export type PolicyRuleValidation =
   | { error: string; rule?: undefined }
   | { error?: undefined; rule: Prisma.InputJsonValue };
 
+// The license arrays get a size bound on top of the string-array shape check:
+// an unbounded array persists and is then `includes`-scanned once per stored
+// row per evaluation, so one policy write of megabytes of strings slows every
+// later scan-completion for that user. SPDX ids and expressions are far
+// shorter than the entry bound, and no realistic allowlist comes near the
+// entry count. A row stored before the bound exists keeps evaluating (the
+// evaluation cases only check the string-array shape), it just logs the
+// stored-row warning on every evaluation.
+export const MAX_RULE_ARRAY_ENTRIES = 200;
+export const MAX_RULE_ARRAY_ENTRY_LENGTH = 128;
+
+// Returns an error naming the violated limit, or undefined when the array
+// fits both. Called after isStringArray, so `values` holds only strings.
+function ruleArrayBoundsError(values: string[], field: string): string | undefined {
+  if (values.length > MAX_RULE_ARRAY_ENTRIES) {
+    return `${field} must contain at most ${MAX_RULE_ARRAY_ENTRIES} entries`;
+  }
+  if (values.some((v) => v.length > MAX_RULE_ARRAY_ENTRY_LENGTH)) {
+    return `each entry of ${field} must be at most ${MAX_RULE_ARRAY_ENTRY_LENGTH} characters`;
+  }
+  return undefined;
+}
+
 // Validates a rule payload against the shape its PolicyType evaluates, using the
-// same guards evaluatePolicies applies. This runs on every policy write (create
+// same guards evaluatePolicies applies plus the size bound on the license
+// arrays (a row stored before that bound keeps evaluating and only logs the
+// stored-row warning). This runs on every policy write (create
 // and update) and on stored rows during evaluation, so a rule that would fall
 // out of its evaluation case without a violation is rejected up front instead
 // of persisting and reporting clean forever. The returned rule is the value to
@@ -133,10 +159,18 @@ export function validatePolicyRule(type: PolicyType, rule: unknown): PolicyRuleV
       if (!isStringArray(fields['deniedLicenses'])) {
         return { error: 'rule.deniedLicenses must be an array of strings' };
       }
+      {
+        const boundsError = ruleArrayBoundsError(fields['deniedLicenses'], 'rule.deniedLicenses');
+        if (boundsError !== undefined) return { error: boundsError };
+      }
       return { rule: persisted };
     case PolicyType.LICENSE_ALLOW_ONLY:
       if (!isStringArray(fields['allowedLicenses'])) {
         return { error: 'rule.allowedLicenses must be an array of strings' };
+      }
+      {
+        const boundsError = ruleArrayBoundsError(fields['allowedLicenses'], 'rule.allowedLicenses');
+        if (boundsError !== undefined) return { error: boundsError };
       }
       return { rule: persisted };
     case PolicyType.CVE_MIN_SEVERITY:
@@ -168,6 +202,13 @@ export async function evaluatePolicies(
   const [policies, scan] = await Promise.all([
     prisma.policy.findMany({
       where: { userId, enabled: true },
+      // Oldest first, capped at the per-user policy cap plus one probe row:
+      // the probe is what lets this function notice (and log once) that an
+      // install from before the cap has more enabled policies than it reads.
+      // `id` breaks createdAt ties so the read (and the slice below) is a
+      // deterministic order. Only the oldest MAX_POLICIES_PER_USER are evaluated.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MAX_POLICIES_PER_USER + 1,
     }),
     prisma.scan.findFirst({
       where: {
@@ -182,13 +223,34 @@ export async function evaluatePolicies(
     }),
   ]);
 
+  let policiesToEvaluate = policies;
+  if (policies.length > MAX_POLICIES_PER_USER) {
+    // The probe row only shows that more rows exist; one count with the same
+    // where names the exact number of stored rows this call skipped.
+    // The count is log-only: a failure of it must not abort evaluation, so it
+    // falls back to the lower bound the probe row proves. The count runs after
+    // the read, so a concurrent delete can leave it at or below the cap; the
+    // larger of the two figures is logged.
+    let skipped = `at least ${policies.length - MAX_POLICIES_PER_USER}`;
+    try {
+      const total = await prisma.policy.count({ where: { userId, enabled: true } });
+      if (total >= policies.length) skipped = String(total - MAX_POLICIES_PER_USER);
+    } catch {
+      // keep the fallback wording
+    }
+    console.warn(
+      `[policy] user ${userId} has more enabled policies than the cap of ${MAX_POLICIES_PER_USER}: evaluated the oldest ${MAX_POLICIES_PER_USER}, skipped ${skipped}`,
+    );
+    policiesToEvaluate = policies.slice(0, MAX_POLICIES_PER_USER);
+  }
+
   if (!scan) {
     throw new Error(`Scan ${scanId} not found or not owned by user ${userId}`);
   }
 
   const violations: PolicyViolation[] = [];
 
-  for (const policy of policies) {
+  for (const policy of policiesToEvaluate) {
     const rule = policy.rule as Record<string, unknown>;
 
     // Rows stored before write-time validation existed (or written outside the

@@ -9,15 +9,16 @@
 // "(real auth-api composition)" tests near the bottom of this file are the
 // exception: they leave @/lib/auth-api unmocked to prove the route actually
 // wires a Bearer dsat_ token through to a 200/201 and a revoked token to 401.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
 // ---------------------------------------------------------------------------
-const { resolveRequestUserMock, listPoliciesMock, createPolicyMock } = vi.hoisted(() => ({
+const { resolveRequestUserMock, listPoliciesMock, createPolicyMock, countPoliciesMock } = vi.hoisted(() => ({
   resolveRequestUserMock: vi.fn(),
   listPoliciesMock: vi.fn(),
   createPolicyMock: vi.fn(),
+  countPoliciesMock: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ vi.mock('@/lib/prisma', () => ({ prisma: { apiToken: { findUnique: vi.fn(), upda
 vi.mock('@/lib/policy/service', () => ({
   listPolicies: listPoliciesMock,
   createPolicy: createPolicyMock,
+  countPolicies: countPoliciesMock,
 }));
 
 // ---------------------------------------------------------------------------
@@ -55,6 +57,12 @@ vi.mock('@/lib/policy/service', () => ({
 import { GET, POST } from '@/app/api/policies/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import {
+  policyCreateRateLimiter,
+  POLICY_CREATE_LIMIT_PER_HOUR,
+  MAX_POLICIES_PER_USER,
+} from '@/lib/rate-limit';
+import { MAX_RULE_ARRAY_ENTRIES, MAX_RULE_ARRAY_ENTRY_LENGTH } from '@/lib/policy/engine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -107,6 +115,8 @@ describe('GET /api/policies', () => {
     resolveRequestUserMock.mockReset();
     listPoliciesMock.mockReset();
     createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    policyCreateRateLimiter.reset();
   });
 
   it('(1) returns 401 when there is neither a session nor a token', async () => {
@@ -152,6 +162,8 @@ describe('POST /api/policies', () => {
     resolveRequestUserMock.mockReset();
     listPoliciesMock.mockReset();
     createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    policyCreateRateLimiter.reset();
   });
 
   it('(3) returns 401 when there is neither a session nor a token', async () => {
@@ -483,6 +495,7 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     vi.doMock('@/lib/policy/service', () => ({
       listPolicies: listPoliciesMock,
       createPolicy: createPolicyMock,
+      countPolicies: countPoliciesMock,
     }));
 
     authMock.mockReset();
@@ -492,6 +505,8 @@ describe('GET/POST /api/policies (real auth-api composition)', () => {
     apiTokenUpdateMock.mockResolvedValue({});
     listPoliciesMock.mockReset();
     createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    policyCreateRateLimiter.reset();
   });
 
   it('(2c) returns 200 for a valid READ-scoped dsat_ token with no session', async () => {
@@ -569,6 +584,8 @@ describe('POST /api/policies: request body cap', () => {
   beforeEach(() => {
     resolveRequestUserMock.mockReset();
     createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    policyCreateRateLimiter.reset();
     resolveRequestUserMock.mockResolvedValue(mockUser);
   });
 
@@ -578,5 +595,253 @@ describe('POST /api/policies: request body cap', () => {
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: 'Request body too large' });
     expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/policies: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/policies: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    policyCreateRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    listPoliciesMock.mockReset();
+    createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    createPolicyMock.mockResolvedValue({ id: 'pol-new' });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 60 creates per user and hour', () => {
+    expect(POLICY_CREATE_LIMIT_PER_HOUR).toBe(60);
+  });
+
+  it('answers 429 with Retry-After on the (limit+1)th call and creates nothing', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+    }
+    expect(createPolicyMock).toHaveBeenCalledTimes(POLICY_CREATE_LIMIT_PER_HOUR);
+
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(createPolicyMock).toHaveBeenCalledTimes(POLICY_CREATE_LIMIT_PER_HOUR);
+  });
+
+  it('does not count 401 or 403 rejections', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(401);
+    }
+    resolveRequestUserMock.mockResolvedValue(readOnlyUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(403);
+    }
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+    }
+    expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(429);
+  });
+
+  it('limits per user: a different caller keeps a full budget', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+    }
+    expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(429);
+
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
+    expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+  });
+
+  it('runs the limiter before validation and the count: an over-budget invalid body answers 429 with no count and no create', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+    }
+    countPoliciesMock.mockClear();
+    createPolicyMock.mockClear();
+
+    // A rule that would fail validation (a non-object rule) if the limiter ran
+    // after validation; the limiter is first, so this is 429, not 400.
+    const res = await POST(makePostRequest({ ...validPolicyBody(), rule: 'not-an-object' }));
+
+    expect(res.status).toBe(429);
+    expect(countPoliciesMock).not.toHaveBeenCalled();
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/policies', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      resolveRequestUserMock.mockResolvedValue(mockUser);
+      for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+      }
+      countPoliciesMock.mockClear();
+      createPolicyMock.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(countPoliciesMock).not.toHaveBeenCalled();
+      expect(createPolicyMock).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(countPoliciesMock).not.toHaveBeenCalled();
+      expect(createPolicyMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/policies: per-user count cap
+// ---------------------------------------------------------------------------
+describe('POST /api/policies: per-user count cap', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    createPolicyMock.mockReset();
+    countPoliciesMock.mockReset();
+    policyCreateRateLimiter.reset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    createPolicyMock.mockResolvedValue({ id: 'pol-new' });
+  });
+
+  it('answers 409 with a message naming the cap at the cap and creates nothing', async () => {
+    countPoliciesMock.mockResolvedValue(MAX_POLICIES_PER_USER);
+
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`A user can have at most ${MAX_POLICIES_PER_USER} policies`);
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('creates successfully one below the cap', async () => {
+    countPoliciesMock.mockResolvedValue(MAX_POLICIES_PER_USER - 1);
+
+    const res = await POST(makePostRequest(validPolicyBody()));
+
+    expect(res.status).toBe(201);
+    expect(createPolicyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts only the caller rows', async () => {
+    countPoliciesMock.mockResolvedValue(0);
+    await POST(makePostRequest(validPolicyBody()));
+    expect(countPoliciesMock).toHaveBeenCalledWith('user-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/policies: bounded rule arrays
+// ---------------------------------------------------------------------------
+describe('POST /api/policies: bounded rule arrays', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    createPolicyMock.mockReset();
+    countPoliciesMock.mockReset().mockResolvedValue(0);
+    policyCreateRateLimiter.reset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    createPolicyMock.mockResolvedValue({ id: 'pol-new' });
+  });
+
+  it('rejects deniedLicenses over the entry bound, naming the bound', async () => {
+    const res = await POST(
+      makePostRequest({
+        name: 'Big GPL list',
+        type: 'LICENSE_DENY',
+        severity: 'HIGH',
+        rule: { deniedLicenses: Array.from({ length: MAX_RULE_ARRAY_ENTRIES + 1 }, (_, i) => `GPL-${i}`) },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`rule.deniedLicenses must contain at most ${MAX_RULE_ARRAY_ENTRIES} entries`);
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a deniedLicenses entry over the length bound, naming the bound', async () => {
+    const res = await POST(
+      makePostRequest({
+        name: 'Long license',
+        type: 'LICENSE_DENY',
+        severity: 'HIGH',
+        rule: { deniedLicenses: ['x'.repeat(MAX_RULE_ARRAY_ENTRY_LENGTH + 1)] },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(
+      `each entry of rule.deniedLicenses must be at most ${MAX_RULE_ARRAY_ENTRY_LENGTH} characters`,
+    );
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects allowedLicenses over the entry bound, naming the field', async () => {
+    const res = await POST(
+      makePostRequest({
+        name: 'Big allow list',
+        type: 'LICENSE_ALLOW_ONLY',
+        severity: 'HIGH',
+        rule: { allowedLicenses: Array.from({ length: MAX_RULE_ARRAY_ENTRIES + 1 }, (_, i) => `MIT-${i}`) },
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`rule.allowedLicenses must contain at most ${MAX_RULE_ARRAY_ENTRIES} entries`);
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a rule exactly at both bounds (boundary)', async () => {
+    const licenses = Array.from({ length: MAX_RULE_ARRAY_ENTRIES }, (_, i) => `LIC-${i}`);
+    licenses[0] = 'x'.repeat(MAX_RULE_ARRAY_ENTRY_LENGTH);
+
+    const res = await POST(
+      makePostRequest({
+        name: 'Boundary list',
+        type: 'LICENSE_DENY',
+        severity: 'HIGH',
+        rule: { deniedLicenses: licenses },
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    expect(createPolicyMock).toHaveBeenCalledTimes(1);
   });
 });
