@@ -181,9 +181,19 @@ async function capWebhookTargets(
   if (webhooks.length <= MAX_WEBHOOKS_PER_USER) return webhooks;
   // The probe row only shows that more rows exist; one count with the same
   // where names the exact number of stored rows this fan-out skipped.
-  const total = await prisma.webhookConfig.count({ where: { userId, enabled: true } });
+  // The count is log-only: a failure of it must not abort delivery, so it
+  // falls back to the lower bound the probe row proves. The count runs after
+  // the read, so a concurrent delete can leave it at or below the cap; the
+  // larger of the two figures is logged.
+  let skipped = `at least ${webhooks.length - MAX_WEBHOOKS_PER_USER}`;
+  try {
+    const total = await prisma.webhookConfig.count({ where: { userId, enabled: true } });
+    if (total >= webhooks.length) skipped = String(total - MAX_WEBHOOKS_PER_USER);
+  } catch {
+    // keep the fallback wording
+  }
   console.warn(
-    `[alerts] user ${userId} has more enabled webhooks than the delivery cap of ${MAX_WEBHOOKS_PER_USER}: delivered to the oldest ${MAX_WEBHOOKS_PER_USER}, skipped ${total - MAX_WEBHOOKS_PER_USER}`,
+    `[alerts] user ${userId} has more enabled webhooks than the delivery cap of ${MAX_WEBHOOKS_PER_USER}: delivered to the oldest ${MAX_WEBHOOKS_PER_USER}, skipped ${skipped}`,
   );
   return webhooks.slice(0, MAX_WEBHOOKS_PER_USER);
 }

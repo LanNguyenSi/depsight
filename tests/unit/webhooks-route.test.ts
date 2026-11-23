@@ -489,6 +489,59 @@ describe('POST /api/webhooks: per-user rate limit', () => {
     expect(assertPublicUrlMock).not.toHaveBeenCalled();
     expect(webhookConfigCreate).not.toHaveBeenCalled();
   });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/webhooks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest(validBody))).status).toBe(201);
+      }
+      assertPublicUrlMock.mockClear();
+      webhookConfigCount.mockClear();
+      webhookConfigCreate.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 400, for a body missing the required url once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(makePostRequest({ name: 'My Hook', events: ['cve.critical'] }));
+
+      expect(res.status).toBe(429);
+      expect(webhookConfigCount).not.toHaveBeenCalled();
+      expect(assertPublicUrlMock).not.toHaveBeenCalled();
+      expect(webhookConfigCreate).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

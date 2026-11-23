@@ -683,6 +683,46 @@ describe('POST /api/policies: per-user rate limit', () => {
     expect(countPoliciesMock).not.toHaveBeenCalled();
     expect(createPolicyMock).not.toHaveBeenCalled();
   });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/policies', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      resolveRequestUserMock.mockResolvedValue(mockUser);
+      for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+      }
+      countPoliciesMock.mockClear();
+      createPolicyMock.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(countPoliciesMock).not.toHaveBeenCalled();
+      expect(createPolicyMock).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(countPoliciesMock).not.toHaveBeenCalled();
+      expect(createPolicyMock).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -404,6 +404,45 @@ describe('POST /api/tokens: per-user rate limit', () => {
     expect(apiTokenCount).not.toHaveBeenCalled();
     expect(apiTokenCreate).not.toHaveBeenCalled();
   });
+
+  // Raw bodies the body reader or the first validation would reject: once the
+  // budget is spent the limiter must answer first, so these are 429.
+  describe('limiter runs before the body is read', () => {
+    const rawRequest = (body: string): NextRequest =>
+      new NextRequest('http://localhost/api/tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+
+    async function spendBudget(): Promise<void> {
+      for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+        expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+      }
+      apiTokenCount.mockClear();
+      apiTokenCreate.mockClear();
+    }
+
+    it('answers 429, not a parse error, for malformed JSON once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest('{not json'));
+
+      expect(res.status).toBe(429);
+      expect(apiTokenCount).not.toHaveBeenCalled();
+      expect(apiTokenCreate).not.toHaveBeenCalled();
+    });
+
+    it('answers 429, not 413, for a body over the read cap once the budget is spent', async () => {
+      await spendBudget();
+
+      const res = await POST(rawRequest(JSON.stringify({ pad: 'x'.repeat(DEFAULT_JSON_BODY_BYTES) })));
+
+      expect(res.status).toBe(429);
+      expect(apiTokenCount).not.toHaveBeenCalled();
+      expect(apiTokenCreate).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -652,6 +652,51 @@ describe('evaluatePolicies(): bounded policy read', () => {
     warnSpy.mockRestore();
   });
 
+  function overCapPolicies() {
+    return Array.from(
+      { length: MAX_POLICIES_PER_USER + 1 },
+      (_, i) => makePolicy({
+        id: `policy-${i}`,
+        type: PolicyType.LICENSE_DENY,
+        rule: { deniedLicenses: ['GPL-3.0'] },
+      }),
+    );
+  }
+
+  const gplScan = () => makeScan({
+    licenses: [{ id: 'l1', packageName: 'foo', version: '1.0.0', license: 'GPL-3.0', isCompatible: false, policyViolation: false }],
+  });
+
+  it('still evaluates the capped set and logs the lower bound when the log-only count rejects', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPolicyFindMany.mockResolvedValue(overCapPolicies());
+    mockPolicyCount.mockRejectedValue(new Error('db down'));
+    mockScanFindFirst.mockResolvedValue(gplScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(MAX_POLICIES_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('logs the lower bound when a concurrent delete leaves the count at the cap or below', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPolicyFindMany.mockResolvedValue(overCapPolicies());
+    mockPolicyCount.mockResolvedValue(MAX_POLICIES_PER_USER);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    expect(warnSpy.mock.calls[0][0]).not.toMatch(/skipped (0|-)/);
+    warnSpy.mockRestore();
+  });
+
   it('does not warn and does not count when the read comes back exactly at the cap', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const atCap = Array.from(

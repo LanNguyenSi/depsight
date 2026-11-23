@@ -227,9 +227,19 @@ export async function evaluatePolicies(
   if (policies.length > MAX_POLICIES_PER_USER) {
     // The probe row only shows that more rows exist; one count with the same
     // where names the exact number of stored rows this call skipped.
-    const total = await prisma.policy.count({ where: { userId, enabled: true } });
+    // The count is log-only: a failure of it must not abort evaluation, so it
+    // falls back to the lower bound the probe row proves. The count runs after
+    // the read, so a concurrent delete can leave it at or below the cap; the
+    // larger of the two figures is logged.
+    let skipped = `at least ${policies.length - MAX_POLICIES_PER_USER}`;
+    try {
+      const total = await prisma.policy.count({ where: { userId, enabled: true } });
+      if (total >= policies.length) skipped = String(total - MAX_POLICIES_PER_USER);
+    } catch {
+      // keep the fallback wording
+    }
     console.warn(
-      `[policy] user ${userId} has more enabled policies than the cap of ${MAX_POLICIES_PER_USER}: evaluated the oldest ${MAX_POLICIES_PER_USER}, skipped ${total - MAX_POLICIES_PER_USER}`,
+      `[policy] user ${userId} has more enabled policies than the cap of ${MAX_POLICIES_PER_USER}: evaluated the oldest ${MAX_POLICIES_PER_USER}, skipped ${skipped}`,
     );
     policiesToEvaluate = policies.slice(0, MAX_POLICIES_PER_USER);
   }
