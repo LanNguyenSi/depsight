@@ -8,7 +8,13 @@ import {
   lockBodyScroll,
   MENU_ITEM_SELECTOR,
   menuKeyAction,
-  menuOpenFocus,
+  menuTriggerAction,
+  handleTriggerKey,
+  openFocusIndex,
+  isPointerOutside,
+  mobileNavKeyAction,
+  bindMenu,
+  bindMobileNav,
   nextFocusIndex,
   restoreTarget,
   returnFocusTarget,
@@ -291,16 +297,246 @@ describe('menuKeyAction', () => {
   });
 });
 
-describe('menuOpenFocus', () => {
-  it('opens onto the first item for ArrowDown and the last for ArrowUp', () => {
-    expect(menuOpenFocus('ArrowDown')).toBe('first');
-    expect(menuOpenFocus('ArrowUp')).toBe('last');
+describe('menuTriggerAction', () => {
+  it('opens a closed menu onto the first item for ArrowDown and the last for ArrowUp', () => {
+    expect(menuTriggerAction('ArrowDown', false)).toBe('first');
+    expect(menuTriggerAction('ArrowUp', false)).toBe('last');
   });
 
   it('leaves Enter, Space and other keys to the button click', () => {
     for (const key of ['Enter', ' ', 'Escape', 'Home', 'a']) {
-      expect(menuOpenFocus(key)).toBeNull();
+      expect(menuTriggerAction(key, false)).toBe('none');
     }
+  });
+
+  it('does nothing while the menu is open', () => {
+    expect(menuTriggerAction('ArrowDown', true)).toBe('none');
+    expect(menuTriggerAction('ArrowUp', true)).toBe('none');
+  });
+});
+
+describe('handleTriggerKey', () => {
+  function press(key: string, open: boolean) {
+    const preventDefault = vi.fn();
+    const openMenu = vi.fn();
+    handleTriggerKey({ key, preventDefault }, open, openMenu);
+    return { preventDefault, openMenu };
+  }
+
+  it('ArrowDown on a closed trigger opens onto first and consumes the key', () => {
+    const r = press('ArrowDown', false);
+    expect(r.openMenu).toHaveBeenCalledWith('first');
+    expect(r.preventDefault).toHaveBeenCalled();
+  });
+
+  it('ArrowUp on a closed trigger opens onto last', () => {
+    expect(press('ArrowUp', false).openMenu).toHaveBeenCalledWith('last');
+  });
+
+  it('does not open for Enter, or when already open, and leaves the key alone', () => {
+    for (const r of [press('Enter', false), press('ArrowDown', true)]) {
+      expect(r.openMenu).not.toHaveBeenCalled();
+      expect(r.preventDefault).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('openFocusIndex', () => {
+  it('first is 0 and last is count - 1', () => {
+    expect(openFocusIndex(4, 'first')).toBe(0);
+    expect(openFocusIndex(4, 'last')).toBe(3);
+    expect(openFocusIndex(1, 'last')).toBe(0);
+  });
+
+  it('is -1 without items', () => {
+    expect(openFocusIndex(0, 'first')).toBe(-1);
+    expect(openFocusIndex(0, 'last')).toBe(-1);
+  });
+});
+
+describe('isPointerOutside', () => {
+  const inside = { contains: (n: unknown) => n === 'in' };
+
+  it('is outside when no container holds the target', () => {
+    expect(isPointerOutside('out', [inside])).toBe(true);
+  });
+
+  it('is inside when a container holds the target', () => {
+    expect(isPointerOutside('in', [inside])).toBe(false);
+    expect(isPointerOutside('in', [null, inside])).toBe(false);
+  });
+
+  it('is never outside without a present container', () => {
+    expect(isPointerOutside('out', [null])).toBe(false);
+    expect(isPointerOutside('out', [])).toBe(false);
+  });
+
+  it('ignores targets matching the ignore selector', () => {
+    const portal = { closest: (sel: string) => (sel === '[data-p]' ? {} : null) };
+    expect(isPointerOutside(portal, [inside], '[data-p]')).toBe(false);
+    expect(isPointerOutside(portal, [inside])).toBe(true);
+    expect(isPointerOutside({ closest: () => null }, [inside], '[data-p]')).toBe(true);
+  });
+});
+
+describe('mobileNavKeyAction', () => {
+  it('closes on a plain Escape', () => {
+    expect(mobileNavKeyAction('Escape', false, false)).toBe('close');
+  });
+
+  it('ignores an Escape the user menu handles', () => {
+    expect(mobileNavKeyAction('Escape', true, false)).toBe('ignore');
+    expect(mobileNavKeyAction('Escape', false, true)).toBe('ignore');
+    expect(mobileNavKeyAction('Escape', true, true)).toBe('ignore');
+  });
+
+  it('ignores other keys', () => {
+    for (const key of ['Tab', 'ArrowDown', 'Enter', 'a']) {
+      expect(mobileNavKeyAction(key, false, false)).toBe('ignore');
+    }
+  });
+});
+
+type Listener = (e: never) => void;
+
+function fakeDoc(active: unknown = null) {
+  const listeners = new Map<string, Listener>();
+  return {
+    activeElement: active,
+    addEventListener: vi.fn((type: string, fn: Listener) => { listeners.set(type, fn); }),
+    removeEventListener: vi.fn((type: string, fn: Listener) => {
+      if (listeners.get(type) === fn) listeners.delete(type);
+    }),
+    fire(type: string, e: object) {
+      (listeners.get(type) as unknown as (e: object) => void)?.(e);
+    },
+    has: (type: string) => listeners.has(type),
+  };
+}
+
+describe('bindMenu', () => {
+  function setup(openFocus: 'first' | 'last' = 'first', count = 3) {
+    const items = Array.from({ length: count }, () => ({ focus: vi.fn() }));
+    const doc = fakeDoc();
+    const container = {
+      contains: (n: unknown) => n === 'in' || items.includes(n as never),
+      querySelectorAll: () => items,
+    };
+    const trigger = { focus: vi.fn() };
+    const setOpen = vi.fn();
+    const cleanup = bindMenu({
+      doc: doc as never,
+      container: container as never,
+      trigger,
+      openFocus,
+      ignoreSelector: '[data-p]',
+      setOpen,
+    });
+    return { items, doc, trigger, setOpen, cleanup };
+  }
+
+  it('focuses the first item on open, the last for openFocus last', () => {
+    const a = setup('first');
+    expect(a.items[0].focus).toHaveBeenCalledTimes(1);
+    expect(a.items[2].focus).not.toHaveBeenCalled();
+    const b = setup('last');
+    expect(b.items[2].focus).toHaveBeenCalledTimes(1);
+    expect(b.items[0].focus).not.toHaveBeenCalled();
+  });
+
+  it('Escape closes and returns focus to the trigger', () => {
+    const r = setup();
+    r.doc.fire('keydown', { key: 'Escape', target: 'in', preventDefault: vi.fn() });
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+    expect(r.trigger.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('Tab closes without moving focus to the trigger', () => {
+    const r = setup();
+    r.doc.fire('keydown', { key: 'Tab', target: 'in', preventDefault: vi.fn() });
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+    expect(r.trigger.focus).not.toHaveBeenCalled();
+  });
+
+  it('ArrowDown moves from the active item', () => {
+    const r = setup();
+    r.doc.activeElement = r.items[0];
+    r.doc.fire('keydown', { key: 'ArrowDown', target: r.items[0], preventDefault: vi.fn() });
+    expect(r.items[1].focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mousedown outside closes, inside and portal targets do not', () => {
+    const r = setup();
+    r.doc.fire('mousedown', { target: 'out' });
+    expect(r.setOpen).toHaveBeenCalledTimes(1);
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+    r.doc.fire('mousedown', { target: 'in' });
+    r.doc.fire('mousedown', { target: { closest: () => ({}) } });
+    expect(r.setOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleanup removes both listeners', () => {
+    const r = setup();
+    expect(r.doc.has('keydown') && r.doc.has('mousedown')).toBe(true);
+    r.cleanup();
+    expect(r.doc.has('keydown') || r.doc.has('mousedown')).toBe(false);
+  });
+});
+
+describe('bindMobileNav', () => {
+  function setup(opts: { userMenuOpen?: boolean } = {}) {
+    const doc = fakeDoc();
+    const button = { focus: vi.fn() };
+    const setOpen = vi.fn();
+    const cleanup = bindMobileNav({
+      doc: doc as never,
+      header: { contains: (n: unknown) => n === 'header' },
+      button,
+      userMenu: { contains: (n: unknown) => n === 'user' },
+      userMenuOpen: () => opts.userMenuOpen ?? false,
+      setOpen,
+    });
+    return { doc, button, setOpen, cleanup };
+  }
+
+  it('Escape closes and focuses the menu button', () => {
+    const r = setup();
+    r.doc.fire('keydown', { key: 'Escape', target: 'header', defaultPrevented: false });
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+    expect(r.button.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('other keys do nothing', () => {
+    const r = setup();
+    r.doc.fire('keydown', { key: 'Tab', target: 'header', defaultPrevented: false });
+    expect(r.setOpen).not.toHaveBeenCalled();
+  });
+
+  it('an Escape from inside the user menu, an open user menu or a prevented event is left alone', () => {
+    const inside = setup();
+    inside.doc.fire('keydown', { key: 'Escape', target: 'user', defaultPrevented: false });
+    const open = setup({ userMenuOpen: true });
+    open.doc.fire('keydown', { key: 'Escape', target: 'header', defaultPrevented: false });
+    const prevented = setup();
+    prevented.doc.fire('keydown', { key: 'Escape', target: 'header', defaultPrevented: true });
+    for (const r of [inside, open, prevented]) {
+      expect(r.setOpen).not.toHaveBeenCalled();
+      expect(r.button.focus).not.toHaveBeenCalled();
+    }
+  });
+
+  it('a mousedown outside the header closes, inside does not', () => {
+    const r = setup();
+    r.doc.fire('mousedown', { target: 'header' });
+    expect(r.setOpen).not.toHaveBeenCalled();
+    r.doc.fire('mousedown', { target: 'elsewhere' });
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('cleanup removes both listeners', () => {
+    const r = setup();
+    r.cleanup();
+    expect(r.doc.has('keydown') || r.doc.has('mousedown')).toBe(false);
   });
 });
 

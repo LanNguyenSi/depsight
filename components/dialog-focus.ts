@@ -161,15 +161,161 @@ export function menuKeyAction(key: string, current: number, count: number): Menu
   }
 }
 
+/** Which end of a menu an open lands on. */
+export type MenuOpenTarget = 'first' | 'last';
+
 /**
- * Which item a closed menu's trigger opens onto for a key: ArrowDown the
- * first, ArrowUp the last. Enter and Space open through the button's click
- * and land on the first item like a mouse open.
+ * What a key on a menu trigger does: ArrowDown on a closed menu opens it
+ * onto the first item, ArrowUp onto the last. Enter and Space open through
+ * the button's click and land on the first item like a mouse open, so they
+ * are `none` here, as is every key while the menu is already open.
  */
-export function menuOpenFocus(key: string): 'first' | 'last' | null {
+export function menuTriggerAction(key: string, open: boolean): MenuOpenTarget | 'none' {
+  if (open) return 'none';
   if (key === 'ArrowDown') return 'first';
   if (key === 'ArrowUp') return 'last';
-  return null;
+  return 'none';
+}
+
+/**
+ * Trigger keydown: for an opening key, consume it and open the menu onto
+ * the given end through `openMenu`; any other key is untouched.
+ */
+export function handleTriggerKey(
+  e: { key: string; preventDefault(): void },
+  open: boolean,
+  openMenu: (target: MenuOpenTarget) => void,
+): void {
+  const target = menuTriggerAction(e.key, open);
+  if (target === 'none') return;
+  e.preventDefault();
+  openMenu(target);
+}
+
+/** Index of the item an opened menu focuses among `count` enabled ones, -1 when none. */
+export function openFocusIndex(count: number, target: MenuOpenTarget): number {
+  if (count <= 0) return -1;
+  return target === 'last' ? count - 1 : 0;
+}
+
+/** Something that can hold a pointer target (an element). */
+export interface ContainsNode {
+  contains(node: unknown): boolean;
+}
+
+/**
+ * Whether a pointer event target is outside every given container. Targets
+ * matching `ignoreSelector` (a portaled dialog that belongs to the menu) are
+ * never outside. Without any container present nothing counts as outside.
+ */
+export function isPointerOutside(
+  target: unknown,
+  containers: ReadonlyArray<ContainsNode | null>,
+  ignoreSelector?: string,
+): boolean {
+  const el = target as { closest?: (selector: string) => unknown } | null;
+  if (ignoreSelector && el?.closest?.(ignoreSelector)) return false;
+  const present = containers.filter((c): c is ContainsNode => c !== null);
+  if (present.length === 0) return false;
+  return !present.some((c) => c.contains(target));
+}
+
+/** What the mobile nav does with a key press. */
+export type MobileNavKeyAction = 'close' | 'ignore';
+
+/**
+ * Escape closes the mobile nav, unless the user menu handles that Escape
+ * (`userMenuHandles`, or the event is already `defaultPrevented`): one
+ * Escape then closes only the user menu.
+ */
+export function mobileNavKeyAction(
+  key: string,
+  defaultPrevented: boolean,
+  userMenuHandles: boolean,
+): MobileNavKeyAction {
+  if (!isEscapeKey(key)) return 'ignore';
+  if (defaultPrevented || userMenuHandles) return 'ignore';
+  return 'close';
+}
+
+/** The slice of a document the menu bindings use. */
+export type BindingDocument = Pick<Document, 'activeElement' | 'addEventListener' | 'removeEventListener'>;
+
+export interface MenuBindingOptions {
+  doc: BindingDocument;
+  /** The wrapper of trigger and popup. */
+  container: (ParentNode & ContainsNode) | null;
+  trigger: { focus(): void } | null;
+  openFocus: MenuOpenTarget;
+  /** Pointer targets inside this selector never dismiss the menu. */
+  ignoreSelector?: string;
+  setOpen: (open: boolean) => void;
+}
+
+/**
+ * Wires an open menu: focuses its first or last enabled item, closes on a
+ * pointer press outside, and applies the key contract (Escape returns focus
+ * to the trigger). Returns the function that removes the listeners.
+ */
+export function bindMenu(o: MenuBindingOptions): () => void {
+  const onPointerDown = (e: { target: unknown }) => {
+    if (isPointerOutside(e.target, [o.container], o.ignoreSelector)) o.setOpen(false);
+  };
+  const onKey = (e: { key: string; target: unknown; preventDefault(): void }) => {
+    handleMenuKey(e, {
+      items: enabledMenuItems(o.container),
+      active: o.doc.activeElement,
+      inside: o.container?.contains(e.target) ?? false,
+      close: (restoreFocus) => {
+        o.setOpen(false);
+        if (restoreFocus) o.trigger?.focus();
+      },
+    });
+  };
+  const items = enabledMenuItems(o.container);
+  items[openFocusIndex(items.length, o.openFocus)]?.focus();
+  o.doc.addEventListener('mousedown', onPointerDown);
+  o.doc.addEventListener('keydown', onKey);
+  return () => {
+    o.doc.removeEventListener('mousedown', onPointerDown);
+    o.doc.removeEventListener('keydown', onKey);
+  };
+}
+
+export interface MobileNavBindingOptions {
+  doc: BindingDocument;
+  /** The header holding the menu button and the panel. */
+  header: ContainsNode | null;
+  button: { focus(): void } | null;
+  /** The user menu wrapper, whose Escape is not the mobile nav's. */
+  userMenu: ContainsNode | null;
+  /** Whether the user menu popup is open right now. */
+  userMenuOpen: () => boolean;
+  setOpen: (open: boolean) => void;
+}
+
+/**
+ * Wires the open mobile nav: closes on a pointer press outside the header
+ * and on Escape (focus back to the menu button), except for an Escape the
+ * user menu handles. Returns the function that removes the listeners.
+ */
+export function bindMobileNav(o: MobileNavBindingOptions): () => void {
+  const onPointerDown = (e: { target: unknown }) => {
+    if (isPointerOutside(e.target, [o.header])) o.setOpen(false);
+  };
+  const onKey = (e: { key: string; target: unknown; defaultPrevented: boolean }) => {
+    const userMenuHandles = (o.userMenu?.contains(e.target) ?? false) || o.userMenuOpen();
+    if (mobileNavKeyAction(e.key, e.defaultPrevented, userMenuHandles) === 'close') {
+      o.setOpen(false);
+      o.button?.focus();
+    }
+  };
+  o.doc.addEventListener('mousedown', onPointerDown);
+  o.doc.addEventListener('keydown', onKey);
+  return () => {
+    o.doc.removeEventListener('mousedown', onPointerDown);
+    o.doc.removeEventListener('keydown', onKey);
+  };
 }
 
 export interface MenuKeyContext<T extends { focus(): void }> {

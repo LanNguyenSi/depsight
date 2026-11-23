@@ -14,7 +14,7 @@ import { RiskTimeline } from '@/components/RiskTimeline';
 import { DependencyTable } from '@/components/DependencyTable';
 import { Pagination, usePagination } from '@/components/Pagination';
 import { CIHealthTab } from '@/components/dashboard/CIHealthTab';
-import { enabledMenuItems, handleMenuKey, menuOpenFocus } from '@/components/dialog-focus';
+import { bindMenu, handleTriggerKey } from '@/components/dialog-focus';
 import { ActionsMenuTrigger, RepoTabButton } from './DashboardChrome';
 import { failingScanners, type ScannerStatuses } from '@/lib/scan/freshness';
 import { scanAllStopMessage } from '@/lib/rate-limit-client';
@@ -198,38 +198,19 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
   const actionsOpenFocus = useRef<'first' | 'last'>('first');
   useEffect(() => {
     if (!actionsOpen) return;
-    function handleClickOutside(e: MouseEvent) {
-      const target = e.target as Element | null;
-      // The PR-scan modal renders through a portal to document.body, so its
-      // own clicks are outside the menu in the DOM. They must not dismiss the
-      // menu: dismissing it unmounts the modal row (and with it the modal).
-      if (target?.closest?.('[data-pr-scan-portal]')) return;
-      if (actionsRef.current && !actionsRef.current.contains(e.target as Node)) {
-        setActionsOpen(false);
-      }
-    }
-    function handleKey(e: KeyboardEvent) {
-      handleMenuKey(e, {
-        items: enabledMenuItems(actionsRef.current),
-        active: document.activeElement,
-        inside: actionsRef.current?.contains(e.target as Node) ?? false,
-        close: (restoreFocus) => {
-          setActionsOpen(false);
-          if (restoreFocus) actionsButtonRef.current?.focus();
-        },
-      });
-    }
-    // Keyboard and mouse opens both land on an item: the first, or the last
-    // after ArrowUp on the trigger.
-    const items = enabledMenuItems(actionsRef.current);
-    (actionsOpenFocus.current === 'last' ? items[items.length - 1] : items[0])?.focus();
+    // The PR-scan modal renders through a portal to document.body, so its own
+    // clicks are outside the menu in the DOM. They must not dismiss the menu:
+    // dismissing it unmounts the modal row (and with it the modal).
+    const cleanup = bindMenu({
+      doc: document,
+      container: actionsRef.current,
+      trigger: actionsButtonRef.current,
+      openFocus: actionsOpenFocus.current,
+      ignoreSelector: '[data-pr-scan-portal]',
+      setOpen: setActionsOpen,
+    });
     actionsOpenFocus.current = 'first';
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKey);
-    };
+    return cleanup;
   }, [actionsOpen]);
 
   // Scan all repos
@@ -1032,13 +1013,12 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
                       label={t['dashboard.actions']}
                       buttonRef={actionsButtonRef}
                       onClick={() => setActionsOpen((v) => !v)}
-                      onKeyDown={(e) => {
-                        const target = menuOpenFocus(e.key);
-                        if (!target || actionsOpen) return;
-                        e.preventDefault();
-                        actionsOpenFocus.current = target;
-                        setActionsOpen(true);
-                      }}
+                      onKeyDown={(e) =>
+                        handleTriggerKey(e, actionsOpen, (target) => {
+                          actionsOpenFocus.current = target;
+                          setActionsOpen(true);
+                        })
+                      }
                     />
                     {actionsOpen && (
                       <div role="menu" className="absolute right-0 mt-1 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 z-50" style={{ animation: 'fadeIn 100ms ease-out' }}>

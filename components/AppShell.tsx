@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { logout } from '@/app/actions';
 import { useLocale } from '@/lib/i18n';
-import { enabledMenuItems, handleMenuKey, isEscapeKey, menuOpenFocus } from '@/components/dialog-focus';
+import { bindMenu, bindMobileNav, handleTriggerKey } from '@/components/dialog-focus';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -50,53 +50,27 @@ export function AppShell({ children, repoCount }: AppShellProps) {
 
   useEffect(() => {
     if (!userMenuOpen) return;
-    function onPointerDown(e: MouseEvent) {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
-        setUserMenuOpen(false);
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      handleMenuKey(e, {
-        items: enabledMenuItems(userMenuRef.current),
-        active: document.activeElement,
-        inside: userMenuRef.current?.contains(e.target as Node) ?? false,
-        close: (restoreFocus) => {
-          setUserMenuOpen(false);
-          if (restoreFocus) userMenuButtonRef.current?.focus();
-        },
-      });
-    }
-    // Keyboard and mouse opens both land on an item: the first, or the last
-    // after ArrowUp on the trigger.
-    const items = enabledMenuItems(userMenuRef.current);
-    (userMenuOpenFocus.current === 'last' ? items[items.length - 1] : items[0])?.focus();
+    const cleanup = bindMenu({
+      doc: document,
+      container: userMenuRef.current,
+      trigger: userMenuButtonRef.current,
+      openFocus: userMenuOpenFocus.current,
+      setOpen: setUserMenuOpen,
+    });
     userMenuOpenFocus.current = 'first';
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
+    return cleanup;
   }, [userMenuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
-    function onPointerDown(e: MouseEvent) {
-      if (headerRef.current && !headerRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (!isEscapeKey(e.key)) return;
-      setMenuOpen(false);
-      mobileButtonRef.current?.focus();
-    }
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKey);
-    };
+    return bindMobileNav({
+      doc: document,
+      header: headerRef.current,
+      button: mobileButtonRef.current,
+      userMenu: userMenuRef.current,
+      userMenuOpen: () => userMenuRef.current?.querySelector('[role="menu"]') != null,
+      setOpen: setMenuOpen,
+    });
   }, [menuOpen]);
 
   const login = me?.githubLogin ?? '';
@@ -147,13 +121,12 @@ export function AppShell({ children, repoCount }: AppShellProps) {
                 ref={userMenuButtonRef}
                 type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
-                onKeyDown={(e) => {
-                  const target = menuOpenFocus(e.key);
-                  if (!target || userMenuOpen) return;
-                  e.preventDefault();
-                  userMenuOpenFocus.current = target;
-                  setUserMenuOpen(true);
-                }}
+                onKeyDown={(e) =>
+                  handleTriggerKey(e, userMenuOpen, (target) => {
+                    userMenuOpenFocus.current = target;
+                    setUserMenuOpen(true);
+                  })
+                }
                 aria-haspopup="menu"
                 aria-expanded={userMenuOpen}
                 aria-label={t['user.menu']}
