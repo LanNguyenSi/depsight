@@ -666,6 +666,23 @@ describe('POST /api/policies: per-user rate limit', () => {
     resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
     expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
   });
+
+  it('runs the limiter before validation and the count: an over-budget invalid body answers 429 with no count and no create', async () => {
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validPolicyBody()))).status).toBe(201);
+    }
+    countPoliciesMock.mockClear();
+    createPolicyMock.mockClear();
+
+    // A rule that would fail validation (a non-object rule) if the limiter ran
+    // after validation; the limiter is first, so this is 429, not 400.
+    const res = await POST(makePostRequest({ ...validPolicyBody(), rule: 'not-an-object' }));
+
+    expect(res.status).toBe(429);
+    expect(countPoliciesMock).not.toHaveBeenCalled();
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

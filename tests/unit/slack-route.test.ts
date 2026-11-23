@@ -439,4 +439,25 @@ describe('POST /api/slack: per-user rate limit', () => {
     authMock.mockResolvedValue({ user: { id: 'someone-else' } });
     expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
   });
+
+  it('runs the limiter before validation and the DNS check: an over-budget body answers 429 with neither called', async () => {
+    for (let i = 0; i < SLACK_CONFIG_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ webhookUrl: 'https://hooks.slack.com/x' }))).status).toBe(200);
+    }
+    assertPublicUrlMock.mockClear();
+    slackConfigUpsert.mockClear();
+
+    // Passes the required webhookUrl check and carries a URL that would go to
+    // the DNS check, with an invalid minSeverity that would fail validation
+    // after it. The limiter is first, so this is 429 and neither DNS nor the
+    // upsert runs (POST /api/slack has no count: it upserts the one row).
+    const res = await POST(makePostRequest({
+      webhookUrl: 'https://hooks.slack.com/x',
+      minSeverity: 'SUPER_CRITICAL',
+    }));
+
+    expect(res.status).toBe(429);
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(slackConfigUpsert).not.toHaveBeenCalled();
+  });
 });

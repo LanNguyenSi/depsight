@@ -174,13 +174,16 @@ async function deliverSlack(
 // can see that an install from before the cap holds more rows, log the skipped
 // count once per call, and fan out to at most the cap of them. A capped-out
 // user who wants to notify more targets adds or re-points an existing webhook.
-function capWebhookTargets(
+async function capWebhookTargets(
   userId: string,
   webhooks: Array<{ url: string; secret: string | null; events: string[] }>,
-): typeof webhooks {
+): Promise<typeof webhooks> {
   if (webhooks.length <= MAX_WEBHOOKS_PER_USER) return webhooks;
+  // The probe row only shows that more rows exist; one count with the same
+  // where names the exact number of stored rows this fan-out skipped.
+  const total = await prisma.webhookConfig.count({ where: { userId, enabled: true } });
   console.warn(
-    `[alerts] user ${userId} has more enabled webhooks than the delivery cap of ${MAX_WEBHOOKS_PER_USER}: delivered to the oldest ${MAX_WEBHOOKS_PER_USER}, skipped at least ${webhooks.length - MAX_WEBHOOKS_PER_USER}`,
+    `[alerts] user ${userId} has more enabled webhooks than the delivery cap of ${MAX_WEBHOOKS_PER_USER}: delivered to the oldest ${MAX_WEBHOOKS_PER_USER}, skipped ${total - MAX_WEBHOOKS_PER_USER}`,
   );
   return webhooks.slice(0, MAX_WEBHOOKS_PER_USER);
 }
@@ -228,11 +231,11 @@ export async function notifyForScan(
   // Deliver webhooks
   if (webhookAdvisories.length > 0) {
     const payload = buildPayload(event, webhookAdvisories);
-    const webhooks = capWebhookTargets(
+    const webhooks = await capWebhookTargets(
       userId,
       await prisma.webhookConfig.findMany({
         where: { userId, enabled: true },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take: MAX_WEBHOOKS_PER_USER + 1,
       }),
     );
@@ -279,11 +282,11 @@ export async function notifyScanCompleted(
   policyViolations: ScanCompletedPayload['policyViolations'],
   degradedReason: string | null = null,
 ): Promise<void> {
-  const webhooks = capWebhookTargets(
+  const webhooks = await capWebhookTargets(
     userId,
     await prisma.webhookConfig.findMany({
       where: { userId, enabled: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: MAX_WEBHOOKS_PER_USER + 1,
     }),
   );

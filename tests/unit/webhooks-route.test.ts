@@ -468,6 +468,27 @@ describe('POST /api/webhooks: per-user rate limit', () => {
     authMock.mockResolvedValue({ user: { id: 'someone-else' } });
     expect((await POST(makePostRequest(validBody))).status).toBe(201);
   });
+
+  it('runs the limiter before validation, count and the DNS check: an over-budget body answers 429 with none of them called', async () => {
+    for (let i = 0; i < WEBHOOK_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest(validBody))).status).toBe(201);
+    }
+    assertPublicUrlMock.mockClear();
+    webhookConfigCount.mockClear();
+    webhookConfigCreate.mockClear();
+
+    // Passes the required-fields check and carries a URL that would go to the
+    // DNS check, with an invalid event that would fail validation after it.
+    // The limiter is first, so this is 429 and none of count/DNS/create runs.
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['bogus.event'] }),
+    );
+
+    expect(res.status).toBe(429);
+    expect(webhookConfigCount).not.toHaveBeenCalled();
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -498,6 +519,18 @@ describe('POST /api/webhooks: per-user count cap', () => {
     expect(res.status).toBe(409);
     const body = await res.json() as { error: string };
     expect(body.error).toBe(`A user can have at most ${MAX_WEBHOOKS_PER_USER} webhooks`);
+    expect(webhookConfigCreate).not.toHaveBeenCalled();
+  });
+
+  it('checks the cap before the URL lookup: a user at the cap gets 409 with no DNS call', async () => {
+    webhookConfigCount.mockResolvedValue(MAX_WEBHOOKS_PER_USER);
+
+    const res = await POST(
+      makePostRequest({ name: 'My Hook', url: 'https://example.com/hook', events: ['cve.critical'] }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(assertPublicUrlMock).not.toHaveBeenCalled();
     expect(webhookConfigCreate).not.toHaveBeenCalled();
   });
 

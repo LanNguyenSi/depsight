@@ -10,12 +10,14 @@ import { MAX_POLICIES_PER_USER } from '@/lib/rate-limit';
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockPolicyFindMany = vi.fn();
+const mockPolicyCount = vi.fn();
 const mockScanFindFirst = vi.fn();
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     policy: {
       findMany: mockPolicyFindMany,
+      count: mockPolicyCount,
     },
     scan: {
       findFirst: mockScanFindFirst,
@@ -574,7 +576,13 @@ describe('evaluatePolicies()', () => {
 });
 
 describe('evaluatePolicies(): bounded policy read', () => {
-  it('reads oldest-first with a probe row above the cap: exact findMany args', async () => {
+  beforeEach(() => {
+    mockPolicyFindMany.mockReset();
+    mockPolicyCount.mockReset().mockResolvedValue(0);
+    mockScanFindFirst.mockReset();
+  });
+
+  it('reads oldest-first (createdAt then id) with a probe row above the cap: exact findMany args', async () => {
     mockPolicyFindMany.mockResolvedValue([]);
     mockScanFindFirst.mockResolvedValue(makeScan());
 
@@ -583,12 +591,12 @@ describe('evaluatePolicies(): bounded policy read', () => {
 
     expect(mockPolicyFindMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', enabled: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: MAX_POLICIES_PER_USER + 1,
     });
   });
 
-  it('evaluates only the oldest cap policies and warns once when the probe row comes back', async () => {
+  it('evaluates only the oldest cap policies and warns with the exact skipped count when the probe row comes back', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const overCap = Array.from(
       { length: MAX_POLICIES_PER_USER + 1 },
@@ -599,6 +607,9 @@ describe('evaluatePolicies(): bounded policy read', () => {
       }),
     );
     mockPolicyFindMany.mockResolvedValue(overCap);
+    // 101 enabled policies stored: the read holds the cap plus one probe row,
+    // so the exact skipped number (count - cap = 1) comes from one count call.
+    mockPolicyCount.mockResolvedValue(MAX_POLICIES_PER_USER + 1);
     mockScanFindFirst.mockResolvedValue(
       makeScan({
         licenses: [{ id: 'l1', packageName: 'foo', version: '1.0.0', license: 'GPL-3.0', isCompatible: false, policyViolation: false }],
@@ -612,11 +623,36 @@ describe('evaluatePolicies(): bounded policy read', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0][0]).toContain('user-1');
     expect(warnSpy.mock.calls[0][0]).toContain(String(MAX_POLICIES_PER_USER));
-    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped 1');
+    expect(mockPolicyCount).toHaveBeenCalledWith({ where: { userId: 'user-1', enabled: true } });
     warnSpy.mockRestore();
   });
 
-  it('does not warn when the read comes back exactly at the cap', async () => {
+  it('names the exact skipped number when far more rows are stored than the read returns', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const overCap = Array.from(
+      { length: MAX_POLICIES_PER_USER + 1 },
+      (_, i) => makePolicy({
+        id: `policy-${i}`,
+        type: PolicyType.LICENSE_DENY,
+        rule: { deniedLicenses: ['GPL-3.0'] },
+      }),
+    );
+    mockPolicyFindMany.mockResolvedValue(overCap);
+    // 150 stored rows but the bounded read returns cap plus one: skipped is
+    // count - cap = 50, not the read-row difference (which would say 1).
+    mockPolicyCount.mockResolvedValue(150);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped 50');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn and does not count when the read comes back exactly at the cap', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const atCap = Array.from(
       { length: MAX_POLICIES_PER_USER },
@@ -633,6 +669,7 @@ describe('evaluatePolicies(): bounded policy read', () => {
     await evaluatePolicies('user-1', 'scan-1');
 
     expect(warnSpy).not.toHaveBeenCalled();
+    expect(mockPolicyCount).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 });

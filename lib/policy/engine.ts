@@ -205,8 +205,9 @@ export async function evaluatePolicies(
       // Oldest first, capped at the per-user policy cap plus one probe row:
       // the probe is what lets this function notice (and log once) that an
       // install from before the cap has more enabled policies than it reads.
-      // Only the oldest MAX_POLICIES_PER_USER are evaluated.
-      orderBy: { createdAt: 'asc' },
+      // `id` breaks createdAt ties so the read (and the slice below) is a
+      // deterministic order. Only the oldest MAX_POLICIES_PER_USER are evaluated.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: MAX_POLICIES_PER_USER + 1,
     }),
     prisma.scan.findFirst({
@@ -224,8 +225,11 @@ export async function evaluatePolicies(
 
   let policiesToEvaluate = policies;
   if (policies.length > MAX_POLICIES_PER_USER) {
+    // The probe row only shows that more rows exist; one count with the same
+    // where names the exact number of stored rows this call skipped.
+    const total = await prisma.policy.count({ where: { userId, enabled: true } });
     console.warn(
-      `[policy] user ${userId} has more enabled policies than the cap of ${MAX_POLICIES_PER_USER}: evaluated the oldest ${MAX_POLICIES_PER_USER}, skipped at least ${policies.length - MAX_POLICIES_PER_USER}`,
+      `[policy] user ${userId} has more enabled policies than the cap of ${MAX_POLICIES_PER_USER}: evaluated the oldest ${MAX_POLICIES_PER_USER}, skipped ${total - MAX_POLICIES_PER_USER}`,
     );
     policiesToEvaluate = policies.slice(0, MAX_POLICIES_PER_USER);
   }

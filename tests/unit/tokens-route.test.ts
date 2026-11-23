@@ -388,6 +388,22 @@ describe('POST /api/tokens: per-user rate limit', () => {
     authMock.mockResolvedValue({ user: { id: 'someone-else' } });
     expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
   });
+
+  it('runs the limiter before validation and the count: an over-budget empty-name body answers 429 with no count and no mint', async () => {
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makePostRequest({ name: 'ci-token' }))).status).toBe(201);
+    }
+    apiTokenCount.mockClear();
+    apiTokenCreate.mockClear();
+
+    // A body missing the required name would fail validation (400) if the
+    // limiter ran after validation; the limiter is first, so this is 429.
+    const res = await POST(makePostRequest({}));
+
+    expect(res.status).toBe(429);
+    expect(apiTokenCount).not.toHaveBeenCalled();
+    expect(apiTokenCreate).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

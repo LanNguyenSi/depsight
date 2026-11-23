@@ -205,4 +205,18 @@ describe('POST /api/policies/evaluate: per-user rate limit', () => {
     resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
     expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(200);
   });
+
+  it('runs the limiter before validation: an over-budget body with a missing scanId answers 429 without evaluating', async () => {
+    for (let i = 0; i < POLICY_EVALUATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(200);
+    }
+    evaluatePoliciesMock.mockClear();
+
+    // A body without scanId would fail validation (400) if the limiter ran
+    // after validation; the limiter is first, so this is 429 and no evaluation.
+    const res = await POST(makeRequest({}));
+
+    expect(res.status).toBe(429);
+    expect(evaluatePoliciesMock).not.toHaveBeenCalled();
+  });
 });

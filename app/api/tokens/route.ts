@@ -82,7 +82,8 @@ export async function POST(req: NextRequest) {
 
   // Per-user cap on active tokens, checked before minting: revoked rows are
   // excluded so revoking frees room. Count-then-create without a transaction,
-  // so two simultaneous requests can overshoot by at most one (bounded).
+  // so concurrent creates can overshoot the cap by the in-flight requests the
+  // rate limit above allows.
   const activeTokens = await prisma.apiToken.count({
     where: { userId: session.user.id, revokedAt: null },
   });
