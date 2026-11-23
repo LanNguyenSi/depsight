@@ -110,6 +110,7 @@ const de = {
   'landing.feature.policyEngine': 'Policy Engine',
   'landing.feature.policyEngineDesc': 'Eigene Regeln für Lizenzen, CVE-Schwellen und maximales Dependency-Alter.',
   'landing.ecosystems': 'Unterstützte Ökosysteme',
+  'landing.features': 'Funktionen',
   'landing.footer': 'Open Source · GitHub-connected',
 
   // Login
@@ -519,6 +520,7 @@ const en = {
   'landing.feature.policyEngine': 'Policy Engine',
   'landing.feature.policyEngineDesc': 'Custom rules for licenses, CVE thresholds, and maximum dependency age.',
   'landing.ecosystems': 'Supported Ecosystems',
+  'landing.features': 'Features',
   'landing.footer': 'Open Source · GitHub-connected',
 
   // Login

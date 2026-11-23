@@ -881,7 +881,7 @@ export function DashboardClient({ repos: initialRepos, initialRepoId, ciEnabledR
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t['dashboard.search']}
-            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-700 transition-colors mb-2"
+            className="w-full bg-gray-900 border border-gray-800 rounded-md px-3 py-1.5 text-sm text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-700 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors mb-2"
           />
 
           {/* Sort */}
