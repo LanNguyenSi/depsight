@@ -33,3 +33,10 @@ describe('AppShell mobile nav button', () => {
     expect(tag).toContain('aria-controls="mobile-nav"');
   });
 });
+
+describe('AppShell user menu trigger', () => {
+  it('is a menu button the keyboard handlers can find', () => {
+    const html = render();
+    expect(html).toMatch(/<button[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"/);
+  });
+});
