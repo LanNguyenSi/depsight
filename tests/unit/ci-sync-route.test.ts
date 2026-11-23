@@ -156,16 +156,22 @@ describe('POST /api/ci/sync', () => {
     expect(syncRepoByIdMock).toHaveBeenCalledWith('r1', { daysBack: 30 });
   });
 
-  it('(4) returns 500 when syncRepoById throws', async () => {
+  it('(4) answers 500 with the fixed text and logs the detail when syncRepoById throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue(SESSION);
     repoFindFirst.mockResolvedValue({ id: 'r1' });
-    syncRepoByIdMock.mockRejectedValue(new Error('GitHub rate limit exceeded'));
+    syncRepoByIdMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST(makePostRequest({ repoId: 'r1' }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('GitHub rate limit exceeded');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Sync failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[ci/sync] secret internals');
+    errorLog.mockRestore();
   });
 
   it('(5) no repoId in body → all-repos path, returns 200 {summary}', async () => {

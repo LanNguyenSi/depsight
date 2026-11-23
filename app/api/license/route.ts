@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { scanLicenses } from '@/lib/license/scanner';
 import { licenseRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,8 +41,7 @@ export async function POST(req: NextRequest) {
     const result = await scanLicenses(user.id, repoId, user.githubToken);
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'License scan failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('license', 'License scan failed', error);
   }
 }
 

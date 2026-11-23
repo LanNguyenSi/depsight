@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { scanDependencies } from '@/lib/deps/scanner';
 import { depsRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,8 +60,7 @@ export async function POST(req: NextRequest) {
     const result = await scanDependencies(user.id, repoId, user.githubToken);
     return NextResponse.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Dependency analysis failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('deps', 'Dependency analysis failed', error);
   }
 }
 

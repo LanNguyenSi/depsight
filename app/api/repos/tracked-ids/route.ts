@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getTrackedRepoIds } from '@/lib/repos/tracked-ids';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,6 @@ export async function GET() {
     const repos = await getTrackedRepoIds(user.id);
     return NextResponse.json({ repos });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to load tracked repo ids';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('repos/tracked-ids', 'Failed to load tracked repo ids', error);
   }
 }

@@ -168,16 +168,22 @@ describe('GET /api/sbom', () => {
     expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="sbom.cdx.json"');
   });
 
-  it('(6) returns 500 when generateSBOM throws', async () => {
+  it('(6) answers 500 with the fixed text and logs the detail when generateSBOM throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue({ user: { id: 'user-1' } });
     scanFindFirst.mockResolvedValue({ id: 'scan-1' });
-    generateSBOMMock.mockRejectedValue(new Error('SBOM build failed'));
+    generateSBOMMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await GET(makeGetRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('SBOM build failed');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'SBOM generation failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[sbom] secret internals');
+    errorLog.mockRestore();
   });
   describe('Bearer dsat_ token access', () => {
     const bom = { metadata: { component: { name: 'owner/my-repo' } }, components: [] };

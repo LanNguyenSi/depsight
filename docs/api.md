@@ -13,6 +13,8 @@ The table lists every route handler except the NextAuth handlers under `/api/aut
 
 **Request body size.** A JSON request body over 256 KiB (1 MiB for `POST /api/dependabot/enable-all`, whose body is a list of repository ids) is refused with `413` and `{ "error": "Request body too large" }` before any work starts, whether the size is declared in `Content-Length` or counted while the body streams in. The GitHub webhook has its own 1 MiB cap, see [GitHub pull-request webhook](#github-pull-request-webhook).
 
+**Errors.** A `500` answer from any route in the table carries a fixed `{ "error": ... }` message for that route (`{ "error": "Scan failed" }`, `{ "error": "Export failed" }`, and so on); what actually went wrong is written to the server log with the route tag and never sent to the caller. The 4xx answers keep their specific messages, including the `403`/`404` access answers of `POST /api/scan` and the SSRF refusals of `POST /api/webhooks` and `POST /api/slack`.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/scan` | Trigger CVE scan for a repository (body: `{ repoId }`); the answer carries `degradedReason`, null unless a source could not be read; rate limited, see [Rate limits](#rate-limits) |

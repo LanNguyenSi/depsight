@@ -6,6 +6,7 @@ import { getWorkflowBuildTimes } from '@/lib/ci/analytics/build-times';
 import { detectFlakyJobs } from '@/lib/ci/analytics/flaky';
 import { getBottlenecks } from '@/lib/ci/analytics/bottleneck';
 import type { Period } from '@/lib/ci/analytics/fail-rate';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,10 +62,6 @@ export async function GET(req: NextRequest, { params }: Props) {
         return NextResponse.json({ error: `Unknown type: ${type}` }, { status: 400 });
     }
   } catch (err) {
-    console.error(`[ci/analytics] Error fetching ${type}:`, err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Analytics failed' },
-      { status: 500 }
-    );
+    return serverError('ci/analytics', 'Analytics failed', err);
   }
 }

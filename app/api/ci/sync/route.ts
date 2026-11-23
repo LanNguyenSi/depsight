@@ -8,6 +8,7 @@ import {
   rateLimitedResponse,
 } from '@/lib/rate-limit';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,11 +56,7 @@ export async function POST(req: NextRequest) {
       const result = await syncRepoById(body.repoId, { daysBack: 30 });
       return NextResponse.json({ result });
     } catch (err) {
-      console.error('[ci/sync] Error syncing repo:', err);
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Sync failed' },
-        { status: 500 }
-      );
+      return serverError('ci/sync', 'Sync failed', err);
     }
   } else {
     // Sync all tracked repos for this user

@@ -154,15 +154,21 @@ describe('POST /api/pr-scan', () => {
     expect(scanPRAndCommentMock).toHaveBeenCalledWith('tok-123', 'acme', 'api', 42, 'user-1');
   });
 
-  it('(9) returns 500 when scanPRAndComment throws', async () => {
+  it('(9) answers 500 with the fixed text and logs the detail when scanPRAndComment throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue(SESSION);
-    scanPRAndCommentMock.mockRejectedValue(new Error('GitHub API error'));
+    scanPRAndCommentMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST(makePostRequest({ owner: 'acme', repo: 'api', prNumber: 1 }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('GitHub API error');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'PR scan failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[pr-scan] secret internals');
+    errorLog.mockRestore();
   });
 });
 

@@ -178,14 +178,20 @@ describe('POST /api/scan — route status codes', () => {
     expect(body.error).toBe('Access denied');
   });
 
-  it('returns 500 for a generic scan failure', async () => {
-    scanRepositoryMock.mockRejectedValue(new Error('boom'));
+  it('answers 500 with the fixed text and logs the detail for a generic scan failure', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    scanRepositoryMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST(makeRequest({ repoId: 'repo-1' }));
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('boom');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Scan failed' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[scan] secret internals');
+    errorLog.mockRestore();
   });
 
   it('returns 200 with alreadyRunning:false on a successful completed scan', async () => {

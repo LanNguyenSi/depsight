@@ -63,11 +63,19 @@ describe('GET /api/overview', () => {
     expect(getTeamHealthOverviewMock).toHaveBeenCalledWith('user-1');
   });
 
-  it('returns 500 with error message when getTeamHealthOverview throws', async () => {
-    getTeamHealthOverviewMock.mockRejectedValue(new Error('overview failed'));
+  it('answers 500 with the fixed text and logs the detail when getTeamHealthOverview throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getTeamHealthOverviewMock.mockRejectedValue(new Error('secret internals'));
+
     const res = await GET();
+
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('overview failed');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Failed to load overview' });
+    // lib/http/server-error.ts: the raw message goes to the log, never into the body.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[overview] secret internals');
+    errorLog.mockRestore();
   });
 });

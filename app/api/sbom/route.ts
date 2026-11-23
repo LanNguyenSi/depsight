@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { prisma } from '@/lib/prisma';
 import { generateSBOM } from '@/lib/sbom/cyclonedx';
+import { serverError } from '@/lib/http/server-error';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,7 +58,6 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'SBOM generation failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError('sbom', 'SBOM generation failed', error);
   }
 }

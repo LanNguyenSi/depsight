@@ -110,28 +110,40 @@ describe('POST /api/repos/sync', () => {
     );
   });
 
-  it('(3) returns 500 when getUserRepos throws', async () => {
+  it('(3) answers 500 with the fixed text and logs the detail when getUserRepos throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue(SESSION);
-    getUserReposMock.mockRejectedValue(new Error('GitHub API unavailable'));
+    getUserReposMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST();
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('GitHub API unavailable');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Sync failed' });
+    // lib/http/server-error.ts: a GitHub error text such as "Bad credentials"
+    // stays in the log; the dashboard only sees the fixed text.
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[repos/sync] secret internals');
     expect(syncUserReposMock).not.toHaveBeenCalled();
+    errorLog.mockRestore();
   });
 
-  it('(4) returns 500 when syncUserRepos throws', async () => {
+  it('(4) answers 500 with the fixed text and logs the detail when syncUserRepos throws', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     authMock.mockResolvedValue(SESSION);
     getUserReposMock.mockResolvedValue(GITHUB_REPOS);
-    syncUserReposMock.mockRejectedValue(new Error('Database write failed'));
+    syncUserReposMock.mockRejectedValue(new Error('secret internals'));
 
     const res = await POST();
 
     expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(body.error).toBe('Database write failed');
+    const text = await res.text();
+    expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Sync failed' });
+    expect(text).not.toContain('secret internals');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog).toHaveBeenCalledWith('[repos/sync] secret internals');
+    errorLog.mockRestore();
   });
 
   it('(5) returns 200 with zero counts when sync reports nothing changed', async () => {
