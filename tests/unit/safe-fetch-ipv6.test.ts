@@ -47,12 +47,44 @@ const BLOCKED: { label: string; address: string }[] = [
   { label: 'link-local', address: 'fe80::1' },
   { label: 'IPv4-mapped RFC1918', address: '::ffff:10.0.0.1' },
   { label: 'IPv4-mapped link-local metadata', address: '::ffff:169.254.169.254' },
+  {
+    label: 'IPv4-mapped RFC1918, asymmetric octet pairs (catches a word-6 byte swap)',
+    address: '::ffff:192.168.1.1',
+  },
+  {
+    label: 'IPv4-mapped RFC1918 in hex words (catches a word-6 byte swap)',
+    address: '::ffff:c0a8:101',
+  },
+  {
+    label: 'IPv4-mapped RFC1918, swapped bytes fall out of range (catches a word-6 swap)',
+    address: '::ffff:172.16.0.1',
+  },
+  {
+    label: 'IPv4-mapped IETF protocol assignment, word 7 asymmetric (catches a word-7 byte swap)',
+    address: '::ffff:192.0.0.9',
+  },
+  { label: 'link-local within /10 but above the /12 floor', address: 'fe90::1' },
+  { label: 'link-local at the top of /10 (febf is still fe80::/10)', address: 'febf::1' },
+  { label: 'unique local at the /7 floor', address: 'fc00::1' },
 ];
 
 /** Unchanged verdicts: these stay allowed. */
 const ALLOWED: { label: string; address: string }[] = [
   { label: 'IPv4-mapped public IPv4', address: '::ffff:8.8.8.8' },
   { label: 'IPv4-mapped public IPv4 in hex words', address: '::ffff:0808:0808' },
+  {
+    label: 'IPv4-mapped public IPv4, a word swap would land it in 10/8',
+    address: '::ffff:1.1.10.0',
+  },
+  {
+    label: 'IPv4-mapped public IPv4 in hex words (same address)',
+    address: '::ffff:0101:0a00',
+  },
+  { label: 'just below fc00::/7 (edge control for the unique-local mask)', address: 'fbff::1' },
+  {
+    label: 'just below fe80::/10 (edge control for the link-local mask)',
+    address: 'fe00::1',
+  },
   { label: 'Google DNS (inside 2001:: but not 2001:0000::/32)', address: '2001:4860:4860::8888' },
   { label: 'documentation prefix, not Teredo', address: '2001:db8::1' },
   { label: 'Google DNS prefix, not Teredo', address: '2001:4860::1' },

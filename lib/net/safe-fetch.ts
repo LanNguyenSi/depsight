@@ -19,14 +19,16 @@ import type { LookupFunction } from 'net';
  *    whole range is blocked whatever the embedded address is.
  *  - `::ffff:0:0/96` IPv4-mapped: the embedded IPv4 decides (`::ffff:10.0.0.1`
  *    is blocked, `::ffff:8.8.8.8` is allowed).
- *  - `2002::/16` 6to4: the embedded IPv4 is the anycast relay, which can name
- *    an internal target, and the range is deprecated.
+ *  - `2002::/16` 6to4: the embedded IPv4 names the 6to4 site's router, which
+ *    can be an internal address, and the range is deprecated.
  *  - `2001:0000::/32` Teredo: tunnelling to (often internal) clients; `2001:`
  *    alone is not enough, `2001:4860::/32` (Google DNS) is a public range.
  *  - `fc00::/7` unique-local, `fe80::/10` link-local.
  * An IPv6 string this file cannot parse is blocked too (fail closed), which
  * also covers a scoped address (`fe80::1%eth0`), whose zone is host-local.
- * Not blocked (residuals): `64:ff9b::/96` (NAT64) and `ff00::/8` (multicast).
+ * Not blocked (residuals): `64:ff9b::/96` (NAT64) and `64:ff9b:1::/48`
+ * (local-use NAT64), `ff00::/8` (multicast), `::ffff:0:0:0/96`
+ * (IPv4-translated, SIIT) and `fec0::/10` (deprecated site-local).
  *
  * Returns the set of resolved public IPs so callers can pin the connection
  * and defeat DNS-rebinding (resolve once, connect to the same address).
@@ -136,8 +138,8 @@ function isPrivateIPv6(ip: string): boolean {
     return isPrivateIPv4(`${(w6 >> 8) & 0xff}.${w6 & 0xff}.${(w7 >> 8) & 0xff}.${w7 & 0xff}`);
   }
 
-  // 6to4 (2002::/16): the embedded IPv4 is the anycast relay, so the range can
-  // name an internal target, and it is deprecated anyway.
+  // 6to4 (2002::/16): the embedded IPv4 names the 6to4 site's router, which
+  // can be an internal address, and the range is deprecated anyway.
   if (w0 === 0x2002) return true;
 
   // Teredo (2001:0000::/32): tunnelling, the endpoint is usually internal.
