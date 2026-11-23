@@ -505,6 +505,21 @@ describe('bindMenu', () => {
     expect(r.items[1].focus).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores navigation keys from a target outside the menu (a portaled dialog input)', () => {
+    for (const target of ['out', { portal: true }]) {
+      for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+        const r = setup();
+        for (const item of r.items) item.focus.mockClear();
+        r.doc.activeElement = target;
+        const preventDefault = vi.fn();
+        r.doc.fire('keydown', { key, target, preventDefault });
+        for (const item of r.items) expect(item.focus).not.toHaveBeenCalled();
+        expect(preventDefault).not.toHaveBeenCalled();
+        expect(r.setOpen).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it('a mousedown outside closes, inside and portal targets do not', () => {
     const r = setup();
     r.doc.fire('mousedown', { target: 'out' });
