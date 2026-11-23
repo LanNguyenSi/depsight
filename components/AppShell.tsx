@@ -65,7 +65,6 @@ export function AppShell({ children, repoCount }: AppShellProps) {
       doc: document,
       header: headerRef.current,
       button: mobileButtonRef.current,
-      userMenu: userMenuRef.current,
       userMenuOpen: () => userMenuRef.current?.querySelector('[role="menu"]') != null,
       setOpen: setMenuOpen,
     });

@@ -304,9 +304,7 @@ export interface MobileNavBindingOptions {
   /** The header holding the menu button and the panel. */
   header: ContainsNode | null;
   button: { focus(): void } | null;
-  /** The user menu wrapper, whose Escape is not the mobile nav's. */
-  userMenu: ContainsNode | null;
-  /** Whether the user menu popup is open right now. */
+  /** Whether the user menu popup is open right now (it then handles Escape). */
   userMenuOpen: () => boolean;
   setOpen: (open: boolean) => void;
 }
@@ -320,9 +318,8 @@ export function bindMobileNav(o: MobileNavBindingOptions): () => void {
   const onPointerDown = (e: { target: unknown }) => {
     if (isPointerOutside(e.target, [o.header])) o.setOpen(false);
   };
-  const onKey = (e: { key: string; target: unknown; defaultPrevented: boolean }) => {
-    const userMenuHandles = (o.userMenu?.contains(e.target) ?? false) || o.userMenuOpen();
-    if (mobileNavKeyAction(e.key, e.defaultPrevented, userMenuHandles) === 'close') {
+  const onKey = (e: { key: string; defaultPrevented: boolean }) => {
+    if (mobileNavKeyAction(e.key, e.defaultPrevented, o.userMenuOpen()) === 'close') {
       o.setOpen(false);
       o.button?.focus();
     }

@@ -532,7 +532,6 @@ describe('bindMobileNav', () => {
       doc: doc as never,
       header: { contains: (n: unknown) => n === 'header' },
       button,
-      userMenu: { contains: (n: unknown) => n === 'user' },
       userMenuOpen: () => opts.userMenuOpen ?? false,
       setOpen,
     });
@@ -546,20 +545,24 @@ describe('bindMobileNav', () => {
     expect(r.button.focus).toHaveBeenCalledTimes(1);
   });
 
+  it('Escape with focus on the closed user menu trigger still closes the nav', () => {
+    const r = setup();
+    r.doc.fire('keydown', { key: 'Escape', target: 'user', defaultPrevented: false });
+    expect(r.setOpen).toHaveBeenCalledWith(false);
+  });
+
   it('other keys do nothing', () => {
     const r = setup();
     r.doc.fire('keydown', { key: 'Tab', target: 'header', defaultPrevented: false });
     expect(r.setOpen).not.toHaveBeenCalled();
   });
 
-  it('an Escape from inside the user menu, an open user menu or a prevented event is left alone', () => {
-    const inside = setup();
-    inside.doc.fire('keydown', { key: 'Escape', target: 'user', defaultPrevented: false });
+  it('an Escape while the user menu is open, or already prevented, is left alone', () => {
     const open = setup({ userMenuOpen: true });
     open.doc.fire('keydown', { key: 'Escape', target: 'header', defaultPrevented: false });
     const prevented = setup();
     prevented.doc.fire('keydown', { key: 'Escape', target: 'header', defaultPrevented: true });
-    for (const r of [inside, open, prevented]) {
+    for (const r of [open, prevented]) {
       expect(r.setOpen).not.toHaveBeenCalled();
       expect(r.button.focus).not.toHaveBeenCalled();
     }
