@@ -118,15 +118,37 @@ export interface CargoWorkspace {
 }
 
 /**
+ * Caps on the `members` and `exclude` patterns of a Cargo.toml `[workspace]`
+ * table, mirroring the npm workspace matcher (`MAX_WORKSPACE_PATTERNS` and
+ * `MAX_WORKSPACE_PATTERN_CHARS` in `lib/manifest-discovery.ts`). A `[workspace]`
+ * whose `members` or `exclude` holds more than `MAX_CARGO_WORKSPACE_PATTERNS`
+ * entries, or any entry longer than `MAX_CARGO_WORKSPACE_PATTERN_CHARS`
+ * characters, is treated as not modelled: `parseCargoWorkspace` warns once
+ * (naming the manifest path and which cap was hit, never the pattern text) and
+ * returns null, so `nearestCargoLock` falls back to the nearest-lock walk
+ * instead of compiling and matching an unbounded pattern list for every manifest
+ * in the scan. Real Cargo workspaces list a handful of short globs, so the caps
+ * only bite a hostile `Cargo.toml`.
+ */
+export const MAX_CARGO_WORKSPACE_PATTERNS = 1000;
+export const MAX_CARGO_WORKSPACE_PATTERN_CHARS = 1024;
+
+/**
  * Read the `members` and `exclude` arrays of a Cargo.toml `[workspace]` table.
- * Returns null when the file has no `[workspace]` table. Arrays may span lines
- * and carry `#` comments; only quoted string entries are read.
+ * Returns null when the file has no `[workspace]` table, and null for a
+ * `[workspace]` that exceeds a cap (`MAX_CARGO_WORKSPACE_PATTERNS` entries per
+ * key, or `MAX_CARGO_WORKSPACE_PATTERN_CHARS` characters per entry): that case
+ * logs one `console.warn` naming `manifestPath` and the cap hit (never the
+ * pattern text), so the caller drops it and `nearestCargoLock` falls back to the
+ * nearest-lock walk rather than resolving an unbounded pattern set. Arrays may
+ * span lines and carry `#` comments; only quoted string entries are read.
  *
  * Only the exact header `[workspace]` is recognised (not `[ workspace ]`).
  *
- * Pure function, exported for testing.
+ * Exported for testing. Aside from the over-cap warning it is a pure read of
+ * `content`.
  */
-export function parseCargoWorkspace(content: string): CargoWorkspace | null {
+export function parseCargoWorkspace(content: string, manifestPath?: string): CargoWorkspace | null {
   let inWorkspace = false;
   let found = false;
   let key: 'members' | 'exclude' | null = null;
@@ -152,8 +174,44 @@ export function parseCargoWorkspace(content: string): CargoWorkspace | null {
     for (const m of body.matchAll(/"([^"]*)"|'([^']*)'/g)) ws[key].push(m[1] ?? m[2]);
     if (closed) key = null;
   }
-  return found ? ws : null;
+  if (!found) return null;
+  const over = overWorkspaceCap(ws);
+  if (over !== null) {
+    console.warn(
+      `[depsight] Cargo workspace in ${manifestPath ?? '(unknown path)'} has ${over}; ` +
+        `not modelled, falling back to the nearest Cargo.lock`,
+    );
+    return null;
+  }
+  return ws;
 }
+
+/**
+ * Which `parseCargoWorkspace` cap `ws` exceeds, as a phrase to name in the
+ * warning (no pattern text), or null when it fits within all caps.
+ */
+function overWorkspaceCap(ws: CargoWorkspace): string | null {
+  if (ws.members.length > MAX_CARGO_WORKSPACE_PATTERNS) {
+    return `more than ${MAX_CARGO_WORKSPACE_PATTERNS} members patterns`;
+  }
+  if (ws.exclude.length > MAX_CARGO_WORKSPACE_PATTERNS) {
+    return `more than ${MAX_CARGO_WORKSPACE_PATTERNS} exclude patterns`;
+  }
+  if (ws.members.some((p) => p.length > MAX_CARGO_WORKSPACE_PATTERN_CHARS)) {
+    return `a members pattern longer than ${MAX_CARGO_WORKSPACE_PATTERN_CHARS} characters`;
+  }
+  if (ws.exclude.some((p) => p.length > MAX_CARGO_WORKSPACE_PATTERN_CHARS)) {
+    return `an exclude pattern longer than ${MAX_CARGO_WORKSPACE_PATTERN_CHARS} characters`;
+  }
+  return null;
+}
+
+/**
+ * Member-glob RegExps built by `globToRegExp`. Exported so a test can show the
+ * compile-once property (each pattern compiles at most once per workspace
+ * object); production logic never reads it.
+ */
+export const cargoWorkspaceRegExpCompiles = { count: 0 };
 
 function normalizeGlob(pattern: string): string {
   return pattern.replace(/^\.\//, '').replace(/\/+$/, '');
@@ -166,7 +224,24 @@ function globToRegExp(pattern: string): RegExp {
       seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]'),
     )
     .join('/');
+  cargoWorkspaceRegExpCompiles.count++;
   return new RegExp(`^${escaped}$`);
+}
+
+// The compiled `members` globs of a workspace, built at most once per workspace
+// object and reused by every `isWorkspaceMember` call for it (`RegExp` has no
+// `g`/`y` flag here, so a shared instance stays stateless across `.test`). A
+// WeakMap keeps it off the returned object (so it stays `{ members, exclude }`)
+// and drops the cache with the workspace.
+const memberGlobsCache = new WeakMap<CargoWorkspace, RegExp[]>();
+
+function compiledMemberGlobs(ws: CargoWorkspace): RegExp[] {
+  let globs = memberGlobsCache.get(ws);
+  if (globs === undefined) {
+    globs = ws.members.map((p) => globToRegExp(p));
+    memberGlobsCache.set(ws, globs);
+  }
+  return globs;
 }
 
 /**
@@ -178,13 +253,21 @@ function globToRegExp(pattern: string): RegExp {
  * inside one path segment (for example `crates/*`), plus exact paths; a
  * leading `./` and a trailing `/` are ignored.
  *
+ * The `members` globs are compiled once per workspace object and reused across
+ * calls, so a workspace read from `parseCargoWorkspace` builds at most
+ * `MAX_CARGO_WORKSPACE_PATTERNS` RegExps in total no matter how many manifests
+ * resolve against it. `parseCargoWorkspace` enforces those caps and the
+ * `MAX_CARGO_WORKSPACE_PATTERN_CHARS` per-pattern length, dropping an over-cap
+ * `[workspace]` (with a warning) so `nearestCargoLock` never sees one and falls
+ * back to the nearest-lock walk.
+ *
  * Not modelled: a `[ workspace ]` header with inner spaces, `package.workspace`
  * pointers, Cargo's implicit membership of path dependencies, `**` as a whole
  * segment (it behaves like `*`), character classes, and a non-glob `members`
  * entry naming a parent directory overriding `exclude` (Cargo allows that).
  */
 export function isWorkspaceMember(ws: CargoWorkspace, memberDir: string): boolean {
-  if (!ws.members.some((p) => globToRegExp(p).test(memberDir))) return false;
+  if (!compiledMemberGlobs(ws).some((glob) => glob.test(memberDir))) return false;
   if (ws.members.some((p) => !/[*?[]/.test(p) && normalizeGlob(p) === memberDir)) return true;
   return !ws.exclude.some((e) => {
     const ex = normalizeGlob(e);
@@ -389,7 +472,7 @@ export async function collectRustDeps(
   const lockPaths = new Set(lockedByLock.keys());
   const workspaces = new Map<string, CargoWorkspace>();
   for (const { path, content } of contents) {
-    const ws = parseCargoWorkspace(content);
+    const ws = parseCargoWorkspace(content, path);
     if (ws) workspaces.set(path.split('/').slice(0, -1).join('/'), ws);
   }
 
