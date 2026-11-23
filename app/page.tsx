@@ -45,6 +45,7 @@ export default async function HomePage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-6 pb-24">
+        <h2 className="sr-only">{t['landing.features']}</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {FEATURES.map((f) => (
             <div key={f.title} className={`rounded-xl border p-5 ${f.bg}`}>

@@ -159,7 +159,7 @@ export function DependencyTable({ dependencies, summary }: DependencyTableProps)
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t['filter.search']}
-            className="ml-auto min-w-0 w-48 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1 text-xs text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-600 transition-colors"
+            className="ml-auto min-w-0 w-48 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1 text-xs text-gray-300 placeholder-gray-400 focus:outline-none focus:border-gray-600 focus-visible:ring-2 focus-visible:ring-blue-500 transition-colors"
           />
         </div>
       )}

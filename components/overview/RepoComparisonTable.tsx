@@ -123,13 +123,20 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  onClick={() => handleSort(col.key)}
-                  className={`${col.align === 'left' ? 'text-left' : 'text-center'} ${col.key === 'name' ? 'px-4' : 'px-3'} py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-300 transition-colors select-none`}
+                  scope="col"
+                  aria-sort={sortCol === col.key ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                  className={`${col.align === 'left' ? 'text-left' : 'text-center'} ${col.key === 'name' ? 'px-4' : 'px-3'} py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider`}
                 >
-                  {col.label}
-                  {sortCol === col.key && (
-                    <span className="ml-1 text-blue-400">{sortDir === 'asc' ? '↑' : '↓'}</span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSort(col.key)}
+                    className="inline-flex min-h-6 items-center cursor-pointer uppercase tracking-wider hover:text-gray-300 transition-colors select-none rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+                  >
+                    {col.label}
+                    {sortCol === col.key && (
+                      <span aria-hidden="true" className="ml-1 text-blue-400">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </button>
                 </th>
               ))}
             </tr>
@@ -142,7 +149,21 @@ export function RepoComparisonTable({ repos, onSelectRepo }: RepoComparisonTable
                 className={`hover:bg-gray-800/30 transition-colors ${onSelectRepo ? 'cursor-pointer' : ''}`}
               >
                 <td className="px-4 py-2.5">
-                  <div className="font-medium text-gray-300 truncate max-w-[200px]">{repo.fullName}</div>
+                  {onSelectRepo ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // The row click calls the same callback; stop the bubble so it fires once.
+                        e.stopPropagation();
+                        onSelectRepo(repo.repoId);
+                      }}
+                      className="block min-h-6 max-w-[200px] truncate text-left font-medium text-gray-300 hover:text-white rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
+                    >
+                      {repo.fullName}
+                    </button>
+                  ) : (
+                    <div className="font-medium text-gray-300 truncate max-w-[200px]">{repo.fullName}</div>
+                  )}
                   {repo.language && <div className="text-[10px] text-gray-400">{repo.language}</div>}
                 </td>
                 <td className="px-3 py-2.5 text-center">
