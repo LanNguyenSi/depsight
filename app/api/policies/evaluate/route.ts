@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { evaluatePolicies } from '@/lib/policy/engine';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { rateLimitedResponse, policyEvaluateRateLimiter } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,11 @@ export async function POST(req: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  // Keyed by user id; an unauthenticated request above has already returned
+  // and does not count.
+  const limit = policyEvaluateRateLimiter.check(user.id);
+  if (!limit.allowed) return rateLimitedResponse(limit);
 
   const parsed = await readJsonCapped<{ scanId?: unknown }>(req);
   if (!parsed.ok) return parsed.response;

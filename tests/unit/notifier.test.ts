@@ -33,6 +33,7 @@ vi.mock('@/lib/net/safe-fetch', () => ({
 
 import { notifyScanCompleted, notifyForScan } from '@/lib/alerts/notifier';
 import { SafeFetchLimitError, SsrfBlockedError } from '@/lib/net/safe-fetch';
+import { MAX_WEBHOOKS_PER_USER } from '@/lib/rate-limit';
 import type { Advisory } from '@prisma/client';
 
 describe('notifyScanCompleted', () => {
@@ -595,5 +596,108 @@ describe('notifier: failed-delivery logging', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded webhook delivery (per-user cap, oldest first)
+// ---------------------------------------------------------------------------
+describe('notifier: bounded webhook delivery', () => {
+  beforeEach(() => {
+    webhookConfigFindMany.mockReset();
+    slackConfigFindUnique.mockReset();
+    safeFetchMock.mockReset();
+    slackConfigFindUnique.mockResolvedValue(null);
+    safeFetchMock.mockResolvedValue({ ok: true, status: 200 });
+  });
+
+  function webhookRow(i: number, event: string) {
+    return {
+      url: `https://hooks.example.com/hook-${i}`,
+      secret: null,
+      events: [event],
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+    };
+  }
+
+  function criticalAdvisory(): Advisory {
+    return {
+      id: 'adv-1',
+      ghsaId: 'GHSA-0000-0000-0001',
+      cveId: 'CVE-2024-0001',
+      severity: 'CRITICAL',
+      summary: 'Remote code execution in example-pkg',
+    } as Advisory;
+  }
+
+  it('notifyScanCompleted reads enabled webhooks oldest-first with a probe row above the cap: exact findMany args', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(webhookConfigFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', enabled: true },
+      orderBy: { createdAt: 'asc' },
+      take: MAX_WEBHOOKS_PER_USER + 1,
+    });
+  });
+
+  it('notifyForScan reads enabled webhooks oldest-first with a probe row above the cap: exact findMany args', async () => {
+    webhookConfigFindMany.mockResolvedValue([]);
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(webhookConfigFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', enabled: true },
+      orderBy: { createdAt: 'asc' },
+      take: MAX_WEBHOOKS_PER_USER + 1,
+    });
+  });
+
+  it('notifyScanCompleted delivers to at most the cap and warns once when the probe row comes back', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const line = warnSpy.mock.calls[0].join(' ');
+    expect(line).toContain('user-1');
+    expect(line).toContain(String(MAX_WEBHOOKS_PER_USER));
+    expect(line).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('notifyForScan delivers to at most the cap and warns once when the probe row comes back', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER + 1 }, (_, i) => webhookRow(i, 'cve.critical')),
+    );
+
+    await notifyForScan('user-1', 'repo-1', 'acme/web', 'scan-crit', 50, [criticalAdvisory()]);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const line = warnSpy.mock.calls[0].join(' ');
+    expect(line).toContain('user-1');
+    expect(line).toContain(String(MAX_WEBHOOKS_PER_USER));
+    expect(line).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when the read comes back exactly at the cap', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    webhookConfigFindMany.mockResolvedValue(
+      Array.from({ length: MAX_WEBHOOKS_PER_USER }, (_, i) => webhookRow(i, 'scan.completed')),
+    );
+
+    await notifyScanCompleted('user-1', 'repo-1', 'acme/web', 'scan-abc', 'cve', { cveCount: 0 }, []);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(MAX_WEBHOOKS_PER_USER);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

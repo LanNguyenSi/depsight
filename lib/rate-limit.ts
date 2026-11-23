@@ -252,6 +252,56 @@ export const webhookSecretRateLimiter = createRateLimiter({
   windowMs: HOUR_MS,
 });
 
+// The configuration-write routes (policies, webhooks, Slack, tokens) and
+// POST /api/policies/evaluate: each call is cheap and writes no GitHub quota,
+// but every create adds a row a leaked WRITE token could add without end, and
+// one evaluation loads the user's policies. Fixed one-hour windows, keyed by
+// user id, like the other per-user limits. The evaluate budget is the scan
+// budget (300) because an MCP agent evaluates once per scan it runs.
+export const POLICY_CREATE_LIMIT_PER_HOUR = 60;
+export const WEBHOOK_CREATE_LIMIT_PER_HOUR = 60;
+export const SLACK_CONFIG_LIMIT_PER_HOUR = 60;
+export const API_TOKEN_CREATE_LIMIT_PER_HOUR = 30;
+export const POLICY_EVALUATE_LIMIT_PER_HOUR = 300;
+
+/** POST /api/policies, keyed by user id. */
+export const policyCreateRateLimiter = createRateLimiter({
+  limit: POLICY_CREATE_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/webhooks, keyed by user id. */
+export const webhookCreateRateLimiter = createRateLimiter({
+  limit: WEBHOOK_CREATE_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/slack, keyed by user id. */
+export const slackConfigRateLimiter = createRateLimiter({
+  limit: SLACK_CONFIG_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/tokens, keyed by user id. */
+export const apiTokenCreateRateLimiter = createRateLimiter({
+  limit: API_TOKEN_CREATE_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/policies/evaluate, keyed by user id. */
+export const policyEvaluateRateLimiter = createRateLimiter({
+  limit: POLICY_EVALUATE_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+
+// Per-user row caps for the same writes: the rate limit bounds the pace, these
+// bound the total. The create routes answer 409 at the cap (the token cap
+// counts active tokens only, so revoking always frees room). The reads of
+// evaluate and of the notifier are capped too: an install from before the cap
+// can hold more rows than one read or one fan-out should handle, so those
+// reads take the oldest rows (createdAt ascending) plus one probe row that
+// tells them to log the skip once per call. `POST /api/slack` needs no cap:
+// it upserts the user's single row.
+export const MAX_POLICIES_PER_USER = 100;
+export const MAX_WEBHOOKS_PER_USER = 20;
+export const MAX_API_TOKENS_PER_USER = 50;
+
 /** Standard 429 response with a Retry-After header. */
 export function rateLimitedResponse(result: RateLimitResult): Response {
   return Response.json(

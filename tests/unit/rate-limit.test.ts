@@ -6,6 +6,19 @@ import {
   prScanWebhookPreAuthIpRateLimiter,
   PR_SCAN_WEBHOOK_PREAUTH_IP_LIMIT_PER_MINUTE,
   PR_SCAN_WEBHOOK_PREAUTH_MAX_IPS,
+  policyCreateRateLimiter,
+  webhookCreateRateLimiter,
+  slackConfigRateLimiter,
+  apiTokenCreateRateLimiter,
+  policyEvaluateRateLimiter,
+  POLICY_CREATE_LIMIT_PER_HOUR,
+  WEBHOOK_CREATE_LIMIT_PER_HOUR,
+  SLACK_CONFIG_LIMIT_PER_HOUR,
+  API_TOKEN_CREATE_LIMIT_PER_HOUR,
+  POLICY_EVALUATE_LIMIT_PER_HOUR,
+  MAX_POLICIES_PER_USER,
+  MAX_WEBHOOKS_PER_USER,
+  MAX_API_TOKENS_PER_USER,
 } from '@/lib/rate-limit';
 
 describe('createRateLimiter', () => {
@@ -166,5 +179,67 @@ describe('prScanWebhookPreAuthIpRateLimiter table cap', () => {
     expect(prScanWebhookPreAuthIpRateLimiter.check('overflow-next').allowed).toBe(false);
     // An address that already had a window keeps counting on its own.
     expect(prScanWebhookPreAuthIpRateLimiter.check('addr-0').allowed).toBe(true);
+  });
+});
+
+const HOUR_WINDOW_LIMITERS: Array<[string, ReturnType<typeof createRateLimiter>, number]> = [
+  ['policyCreateRateLimiter', policyCreateRateLimiter, POLICY_CREATE_LIMIT_PER_HOUR],
+  ['webhookCreateRateLimiter', webhookCreateRateLimiter, WEBHOOK_CREATE_LIMIT_PER_HOUR],
+  ['slackConfigRateLimiter', slackConfigRateLimiter, SLACK_CONFIG_LIMIT_PER_HOUR],
+  ['apiTokenCreateRateLimiter', apiTokenCreateRateLimiter, API_TOKEN_CREATE_LIMIT_PER_HOUR],
+  ['policyEvaluateRateLimiter', policyEvaluateRateLimiter, POLICY_EVALUATE_LIMIT_PER_HOUR],
+];
+
+describe('config-write and evaluate limiters', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    for (const [, limiter] of HOUR_WINDOW_LIMITERS) limiter.reset();
+  });
+
+  afterEach(() => {
+    for (const [, limiter] of HOUR_WINDOW_LIMITERS) limiter.reset();
+    vi.useRealTimers();
+  });
+
+  it('pins the frozen budgets: 60 / 60 / 60 per hour writes, 30 token mints, 300 evaluations', () => {
+    expect(POLICY_CREATE_LIMIT_PER_HOUR).toBe(60);
+    expect(WEBHOOK_CREATE_LIMIT_PER_HOUR).toBe(60);
+    expect(SLACK_CONFIG_LIMIT_PER_HOUR).toBe(60);
+    expect(API_TOKEN_CREATE_LIMIT_PER_HOUR).toBe(30);
+    expect(POLICY_EVALUATE_LIMIT_PER_HOUR).toBe(300);
+  });
+
+  it.each(HOUR_WINDOW_LIMITERS)(
+    '%s spends its whole budget inside the hour and blocks one request later with a one-hour Retry-After',
+    (_name, limiter, limit) => {
+      for (let i = 0; i < limit; i++) {
+        expect(limiter.check('u1').allowed).toBe(true);
+      }
+      const blocked = limiter.check('u1');
+      expect(blocked).toMatchObject({ allowed: false, remaining: 0, retryAfterSeconds: 3600 });
+      // A different user is untouched, and the window resets after the hour.
+      expect(limiter.check('u2').allowed).toBe(true);
+      vi.advanceTimersByTime(3_600_000);
+      expect(limiter.check('u1').allowed).toBe(true);
+    },
+  );
+
+  it('gives each limiter a budget of its own', () => {
+    for (let i = 0; i < API_TOKEN_CREATE_LIMIT_PER_HOUR; i++) {
+      expect(apiTokenCreateRateLimiter.check('u1').allowed).toBe(true);
+    }
+    expect(apiTokenCreateRateLimiter.check('u1').allowed).toBe(false);
+    // The token budget does not touch the others.
+    expect(policyCreateRateLimiter.check('u1').allowed).toBe(true);
+    expect(policyEvaluateRateLimiter.check('u1').allowed).toBe(true);
+  });
+});
+
+describe('per-user storage caps', () => {
+  it('pins the frozen caps: 100 policies, 20 webhooks, 50 active tokens', () => {
+    expect(MAX_POLICIES_PER_USER).toBe(100);
+    expect(MAX_WEBHOOKS_PER_USER).toBe(20);
+    expect(MAX_API_TOKENS_PER_USER).toBe(50);
   });
 });

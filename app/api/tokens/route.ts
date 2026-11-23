@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { ApiTokenScope } from '@prisma/client';
 import { generateApiToken, hashApiToken } from '@/lib/api-token';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { rateLimitedResponse, apiTokenCreateRateLimiter, MAX_API_TOKENS_PER_USER } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Keyed by user id; an unauthenticated request above has already returned
+  // and does not count.
+  const limit = apiTokenCreateRateLimiter.check(session.user.id);
+  if (!limit.allowed) return rateLimitedResponse(limit);
+
   let body: { name?: unknown; scope?: unknown } = {};
   try {
     const parsed = await readJsonCapped<{ name?: unknown; scope?: unknown }>(req);
@@ -72,6 +78,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid token scope (expected READ or WRITE)' }, { status: 400 });
     }
     scope = body.scope as ApiTokenScope;
+  }
+
+  // Per-user cap on active tokens, checked before minting: revoked rows are
+  // excluded so revoking frees room. Count-then-create without a transaction,
+  // so two simultaneous requests can overshoot by at most one (bounded).
+  const activeTokens = await prisma.apiToken.count({
+    where: { userId: session.user.id, revokedAt: null },
+  });
+  if (activeTokens >= MAX_API_TOKENS_PER_USER) {
+    return NextResponse.json(
+      { error: `A user can have at most ${MAX_API_TOKENS_PER_USER} active API tokens` },
+      { status: 409 },
+    );
   }
 
   const rawToken = generateApiToken();

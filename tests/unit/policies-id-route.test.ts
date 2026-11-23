@@ -56,6 +56,7 @@ vi.mock('@/lib/policy/service', () => ({
 import { GET, PUT, DELETE } from '@/app/api/policies/[id]/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import { MAX_RULE_ARRAY_ENTRIES, MAX_RULE_ARRAY_ENTRY_LENGTH } from '@/lib/policy/engine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -624,6 +625,80 @@ describe('PUT /api/policies/[id]', () => {
         rule: { package: 'postcss', minVersion: '8.5.18' },
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: PUT /api/policies/[id]: bounded rule arrays (validatePolicyRule)
+// ---------------------------------------------------------------------------
+describe('PUT /api/policies/[id]: bounded rule arrays', () => {
+  beforeEach(() => {
+    resolveRequestUserMock.mockReset();
+    getPolicyByIdMock.mockReset();
+    updatePolicyMock.mockReset();
+    deletePolicyMock.mockReset();
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    updatePolicyMock.mockResolvedValue({ id: 'pol-1', name: 'P', type: 'LICENSE_DENY', severity: 'HIGH', enabled: true });
+  });
+
+  it('returns 400 when deniedLicenses exceeds the entry bound, naming the bound', async () => {
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'LICENSE_DENY',
+        rule: { deniedLicenses: Array.from({ length: MAX_RULE_ARRAY_ENTRIES + 1 }, (_, i) => `GPL-${i}`) },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`rule.deniedLicenses must contain at most ${MAX_RULE_ARRAY_ENTRIES} entries`);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when a deniedLicenses entry exceeds the length bound, naming the bound', async () => {
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'LICENSE_DENY',
+        rule: { deniedLicenses: ['x'.repeat(MAX_RULE_ARRAY_ENTRY_LENGTH + 1)] },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(
+      `each entry of rule.deniedLicenses must be at most ${MAX_RULE_ARRAY_ENTRY_LENGTH} characters`,
+    );
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when allowedLicenses exceeds the entry bound, naming the field', async () => {
+    const res = await PUT(
+      makePutRequest('pol-1', {
+        type: 'LICENSE_ALLOW_ONLY',
+        rule: { allowedLicenses: Array.from({ length: MAX_RULE_ARRAY_ENTRIES + 1 }, (_, i) => `MIT-${i}`) },
+      }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe(`rule.allowedLicenses must contain at most ${MAX_RULE_ARRAY_ENTRIES} entries`);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a rule exactly at both bounds (boundary)', async () => {
+    const licenses = Array.from({ length: MAX_RULE_ARRAY_ENTRIES }, (_, i) => `LIC-${i}`);
+    licenses[0] = 'x'.repeat(MAX_RULE_ARRAY_ENTRY_LENGTH);
+
+    const res = await PUT(
+      makePutRequest('pol-1', { type: 'LICENSE_DENY', rule: { deniedLicenses: licenses } }),
+      makeParams('pol-1'),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updatePolicyMock).toHaveBeenCalledTimes(1);
   });
 });
 

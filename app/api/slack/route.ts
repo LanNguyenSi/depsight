@@ -9,6 +9,7 @@ import {
   SsrfBlockedError,
 } from '@/lib/net/safe-fetch';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { rateLimitedResponse, slackConfigRateLimiter } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,11 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  // Keyed by user id; an unauthenticated request above has already returned
+  // and does not count. No count cap: this is an upsert, one row per user.
+  const limit = slackConfigRateLimiter.check(session.user.id);
+  if (!limit.allowed) return rateLimitedResponse(limit);
 
   const parsed = await readJsonCapped<{
     webhookUrl?: string;

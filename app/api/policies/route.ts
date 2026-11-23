@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser, hasWriteScope } from '@/lib/auth-api';
-import { listPolicies, createPolicy } from '@/lib/policy/service';
+import { listPolicies, createPolicy, countPolicies } from '@/lib/policy/service';
 import { validatePolicyRule } from '@/lib/policy/engine';
 import { PolicyType, Severity } from '@prisma/client';
 import { readJsonCapped } from '@/lib/http/read-json-capped';
+import { rateLimitedResponse, policyCreateRateLimiter, MAX_POLICIES_PER_USER } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,9 @@ export async function POST(req: NextRequest) {
   if (!hasWriteScope(user)) {
     return NextResponse.json({ error: 'This token does not have write access' }, { status: 403 });
   }
+  // Keyed by user id; a 401 or 403 above has already returned and does not count.
+  const limit = policyCreateRateLimiter.check(user.id);
+  if (!limit.allowed) return rateLimitedResponse(limit);
 
   const parsed = await readJsonCapped<{
     name?: unknown;
@@ -70,6 +74,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: validated.error }, { status: 400 });
   }
   const ruleToPersist = validated.rule;
+
+  // Count-then-create without a transaction: concurrent creates can overshoot
+  // the cap by the in-flight requests the rate limit above allows.
+  if ((await countPolicies(user.id)) >= MAX_POLICIES_PER_USER) {
+    return NextResponse.json(
+      { error: `A user can have at most ${MAX_POLICIES_PER_USER} policies` },
+      { status: 409 },
+    );
+  }
 
   const policy = await createPolicy(user.id, {
     name: name.trim(),

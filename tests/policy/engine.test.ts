@@ -5,6 +5,7 @@
 
 import { vi } from 'vitest';
 import { PolicyType, Severity } from '@prisma/client';
+import { MAX_POLICIES_PER_USER } from '@/lib/rate-limit';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -569,6 +570,70 @@ describe('evaluatePolicies()', () => {
     const violations = await evaluatePolicies('user-1', 'scan-1');
 
     expect(violations).toHaveLength(0);
+  });
+});
+
+describe('evaluatePolicies(): bounded policy read', () => {
+  it('reads oldest-first with a probe row above the cap: exact findMany args', async () => {
+    mockPolicyFindMany.mockResolvedValue([]);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(mockPolicyFindMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', enabled: true },
+      orderBy: { createdAt: 'asc' },
+      take: MAX_POLICIES_PER_USER + 1,
+    });
+  });
+
+  it('evaluates only the oldest cap policies and warns once when the probe row comes back', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const overCap = Array.from(
+      { length: MAX_POLICIES_PER_USER + 1 },
+      (_, i) => makePolicy({
+        id: `policy-${i}`,
+        type: PolicyType.LICENSE_DENY,
+        rule: { deniedLicenses: ['GPL-3.0'] },
+      }),
+    );
+    mockPolicyFindMany.mockResolvedValue(overCap);
+    mockScanFindFirst.mockResolvedValue(
+      makeScan({
+        licenses: [{ id: 'l1', packageName: 'foo', version: '1.0.0', license: 'GPL-3.0', isCompatible: false, policyViolation: false }],
+      }),
+    );
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    const violations = await evaluatePolicies('user-1', 'scan-1');
+
+    expect(violations).toHaveLength(MAX_POLICIES_PER_USER);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('user-1');
+    expect(warnSpy.mock.calls[0][0]).toContain(String(MAX_POLICIES_PER_USER));
+    expect(warnSpy.mock.calls[0][0]).toContain('skipped at least 1');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when the read comes back exactly at the cap', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const atCap = Array.from(
+      { length: MAX_POLICIES_PER_USER },
+      (_, i) => makePolicy({
+        id: `policy-${i}`,
+        type: PolicyType.LICENSE_DENY,
+        rule: { deniedLicenses: ['GPL-3.0'] },
+      }),
+    );
+    mockPolicyFindMany.mockResolvedValue(atCap);
+    mockScanFindFirst.mockResolvedValue(makeScan());
+
+    const { evaluatePolicies } = await import('@/lib/policy/engine');
+    await evaluatePolicies('user-1', 'scan-1');
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 

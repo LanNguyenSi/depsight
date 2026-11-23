@@ -1,7 +1,7 @@
 // Route-level tests for POST /api/policies/evaluate.
 // Covers 401, scanId validation (missing/non-string/whitespace), count===violations.length,
 // scanId trimming, and 500 path.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoist mock handles
@@ -31,6 +31,10 @@ vi.mock('@/lib/policy/engine', () => ({
 import { POST } from '@/app/api/policies/evaluate/route';
 import { NextRequest } from 'next/server';
 import { DEFAULT_JSON_BODY_BYTES } from '@/lib/http/read-json-capped';
+import {
+  policyEvaluateRateLimiter,
+  POLICY_EVALUATE_LIMIT_PER_HOUR,
+} from '@/lib/rate-limit';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -52,6 +56,7 @@ describe('POST /api/policies/evaluate', () => {
   beforeEach(() => {
     resolveRequestUserMock.mockReset();
     evaluatePoliciesMock.mockReset();
+    policyEvaluateRateLimiter.reset();
     resolveRequestUserMock.mockResolvedValue(mockUser);
   });
 
@@ -133,6 +138,7 @@ describe('POST /api/policies/evaluate: request body cap', () => {
   beforeEach(() => {
     resolveRequestUserMock.mockReset();
     evaluatePoliciesMock.mockReset();
+    policyEvaluateRateLimiter.reset();
     resolveRequestUserMock.mockResolvedValue(mockUser);
   });
 
@@ -142,5 +148,61 @@ describe('POST /api/policies/evaluate: request body cap', () => {
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: 'Request body too large' });
     expect(evaluatePoliciesMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/policies/evaluate: per-user rate limit
+// ---------------------------------------------------------------------------
+describe('POST /api/policies/evaluate: per-user rate limit', () => {
+  const WINDOW_MS = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    policyEvaluateRateLimiter.reset();
+    resolveRequestUserMock.mockReset();
+    evaluatePoliciesMock.mockReset();
+    evaluatePoliciesMock.mockResolvedValue([]);
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('budgets 300 evaluations per user and hour', () => {
+    expect(POLICY_EVALUATE_LIMIT_PER_HOUR).toBe(300);
+  });
+
+  it('answers 429 with Retry-After on the (limit+1)th call and evaluates nothing', async () => {
+    for (let i = 0; i < POLICY_EVALUATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(200);
+    }
+    expect(evaluatePoliciesMock).toHaveBeenCalledTimes(POLICY_EVALUATE_LIMIT_PER_HOUR);
+
+    const res = await POST(makeRequest({ scanId: 'scan-1' }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe(String(WINDOW_MS / 1000));
+    const body = await res.json() as { error: string; retryAfterSeconds: number };
+    expect(body).toEqual({ error: 'Rate limit exceeded', retryAfterSeconds: WINDOW_MS / 1000 });
+    expect(evaluatePoliciesMock).toHaveBeenCalledTimes(POLICY_EVALUATE_LIMIT_PER_HOUR);
+  });
+
+  it('limits per user and does not count an unauthenticated request', async () => {
+    resolveRequestUserMock.mockResolvedValue(null);
+    for (let i = 0; i < POLICY_EVALUATE_LIMIT_PER_HOUR + 3; i++) {
+      expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(401);
+    }
+
+    resolveRequestUserMock.mockResolvedValue(mockUser);
+    for (let i = 0; i < POLICY_EVALUATE_LIMIT_PER_HOUR; i++) {
+      expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(200);
+    }
+    expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(429);
+
+    resolveRequestUserMock.mockResolvedValue({ ...mockUser, id: 'someone-else' });
+    expect((await POST(makeRequest({ scanId: 'scan-1' }))).status).toBe(200);
   });
 });
