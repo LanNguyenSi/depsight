@@ -12,6 +12,24 @@ import type { LookupFunction } from 'net';
  *  - hostnames that resolve to loopback, link-local, RFC1918 private,
  *    unique-local (IPv6), or cloud-metadata (169.254.169.254) ranges
  *
+ * Blocked IPv6 ranges, judged on the parsed value of the address (not on
+ * string prefixes, so every spelling of an address gets the same verdict):
+ *  - `::/96` IPv4-compatible: `::`, `::1` and every form carrying an IPv4 in
+ *    its low 32 bits. Deprecated and no legitimate webhook target, so the
+ *    whole range is blocked whatever the embedded address is.
+ *  - `::ffff:0:0/96` IPv4-mapped: the embedded IPv4 decides (`::ffff:10.0.0.1`
+ *    is blocked, `::ffff:8.8.8.8` is allowed).
+ *  - `2002::/16` 6to4: the embedded IPv4 names the 6to4 site's router, which
+ *    can be an internal address, and the range is deprecated.
+ *  - `2001:0000::/32` Teredo: tunnelling to (often internal) clients; `2001:`
+ *    alone is not enough, `2001:4860::/32` (Google DNS) is a public range.
+ *  - `fc00::/7` unique-local, `fe80::/10` link-local.
+ * An IPv6 string this file cannot parse is blocked too (fail closed), which
+ * also covers a scoped address (`fe80::1%eth0`), whose zone is host-local.
+ * Not blocked (residuals): `64:ff9b::/96` (NAT64) and `64:ff9b:1::/48`
+ * (local-use NAT64), `ff00::/8` (multicast), `::ffff:0:0:0/96`
+ * (IPv4-translated, SIIT) and `fec0::/10` (deprecated site-local).
+ *
  * Returns the set of resolved public IPs so callers can pin the connection
  * and defeat DNS-rebinding (resolve once, connect to the same address).
  */
@@ -53,48 +71,84 @@ function isPrivateIPv4(ip: string): boolean {
 }
 
 /**
- * Extract the embedded IPv4 address from an IPv4-mapped IPv6 literal
- * (::ffff:0:0/96), in either the dotted-quad form (::ffff:10.0.0.1) or the
- * compressed-hex form (::ffff:a00:1). The latter is what `new URL(...)`
- * canonicalizes bracketed IPv4-mapped literals to, so both must be handled
- * for the synchronous literal-IP branch to catch them.
+ * Expand an IPv6 address into its eight 16-bit words, so the block list can
+ * judge the parsed value instead of the spelling: `::7f00:1`,
+ * `0:0:0:0:0:0:7f00:1` and `::127.0.0.1` are one address and must come out
+ * the same. Handles `::` compression and an optional trailing dotted quad,
+ * which stands for the last two words (`::ffff:1.2.3.4` is `::ffff:102:304`).
+ * Returns `null` for anything it cannot parse, including a scoped address
+ * (`fe80::1%eth0`, whose zone is host-local), so the caller fails closed.
  */
-function mappedIPv4FromIPv6(addr: string): string | null {
-  const dotted = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (dotted) return dotted[1];
+function parseIPv6Words(ip: string): number[] | null {
+  let addr = ip.toLowerCase();
+  if (addr.includes('%')) return null;
 
-  const hex = addr.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (hex) {
-    const hi = parseInt(hex[1], 16);
-    const lo = parseInt(hex[2], 16);
-    if (hi > 0xffff || lo > 0xffff) return null;
-    const combined = (hi << 16) | lo;
-    return [
-      (combined >>> 24) & 0xff,
-      (combined >>> 16) & 0xff,
-      (combined >>> 8) & 0xff,
-      combined & 0xff,
-    ].join('.');
+  // A trailing dotted quad is two words in disguise.
+  const lastColon = addr.lastIndexOf(':');
+  if (addr.slice(lastColon + 1).includes('.')) {
+    const octets = addr.slice(lastColon + 1).split('.');
+    if (octets.length !== 4) return null;
+    let quad = 0;
+    for (const octet of octets) {
+      if (!/^\d{1,3}$/.test(octet)) return null;
+      const n = Number(octet);
+      if (n > 255) return null;
+      quad = quad * 256 + n;
+    }
+    addr = `${addr.slice(0, lastColon)}:${(quad >>> 16).toString(16)}:${(quad & 0xffff).toString(16)}`;
   }
 
-  return null;
+  const toWords = (groups: string): number[] | null => {
+    if (groups === '') return [];
+    const words: number[] = [];
+    for (const group of groups.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+      words.push(parseInt(group, 16));
+    }
+    return words;
+  };
+
+  // At most one `::` (`:::` has two, at index 0 and index 1, and is refused).
+  const compressed = addr.indexOf('::');
+  if (compressed !== addr.lastIndexOf('::')) return null;
+  const head = toWords(compressed < 0 ? addr : addr.slice(0, compressed));
+  const tail = compressed < 0 ? [] : toWords(addr.slice(compressed + 2));
+  if (head === null || tail === null) return null;
+
+  if (compressed < 0) return head.length === 8 ? head : null;
+  const zeros = 8 - head.length - tail.length;
+  if (zeros < 1) return null; // `::` must stand for at least one zero word
+  return [...head, ...new Array<number>(zeros).fill(0), ...tail];
 }
 
 function isPrivateIPv6(ip: string): boolean {
-  const addr = ip.toLowerCase();
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:a00:1) — evaluate the embedded IPv4.
-  const mapped = mappedIPv4FromIPv6(addr);
-  if (mapped) return isPrivateIPv4(mapped);
-  return (
-    addr === '::' ||
-    addr === '::1' || // loopback
-    addr.startsWith('fc') || // unique-local fc00::/7
-    addr.startsWith('fd') ||
-    addr.startsWith('fe8') || // link-local fe80::/10
-    addr.startsWith('fe9') ||
-    addr.startsWith('fea') ||
-    addr.startsWith('feb')
-  );
+  const words = parseIPv6Words(ip);
+  // Not a form this guard can judge: fail closed rather than dial it.
+  if (words === null) return true;
+  const [w0, w1, w2, w3, w4, w5, w6, w7] = words;
+  const headIsZero = w0 === 0 && w1 === 0 && w2 === 0 && w3 === 0 && w4 === 0;
+
+  // IPv4-compatible (::/96): `::`, `::1` and every form that carries an IPv4
+  // in its low 32 bits. Deprecated, and no legitimate webhook target, so the
+  // whole range is blocked whatever the embedded address is.
+  if (headIsZero && w5 === 0) return true;
+
+  // IPv4-mapped (::ffff:0:0/96): the embedded IPv4 decides.
+  if (headIsZero && w5 === 0xffff) {
+    return isPrivateIPv4(`${(w6 >> 8) & 0xff}.${w6 & 0xff}.${(w7 >> 8) & 0xff}.${w7 & 0xff}`);
+  }
+
+  // 6to4 (2002::/16): the embedded IPv4 names the 6to4 site's router, which
+  // can be an internal address, and the range is deprecated anyway.
+  if (w0 === 0x2002) return true;
+
+  // Teredo (2001:0000::/32): tunnelling, the endpoint is usually internal.
+  // `2001:` alone is not Teredo: `2001:4860::/32` is Google DNS.
+  if (w0 === 0x2001 && w1 === 0) return true;
+
+  if ((w0 & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
+  if ((w0 & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+  return false;
 }
 
 function isBlockedIp(ip: string): boolean {
