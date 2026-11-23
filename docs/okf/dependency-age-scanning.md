@@ -3,7 +3,7 @@ type: invariant
 title: Dependency age scanning - a shared contract and a null-only stored unknown age
 description: five ecosystems share one scanner signature and DependencyInfo shape while npm is scanned inline instead of through a dedicated file; every scanner uses a -1 unknown-age sentinel in memory and lib/deps/scanner.ts converts it to null before the only Dependency write, so a stored unknown age is always null, which the schema comment and the DEPENDENCY_MAX_AGE check both state.
 tags: [dependencies, ecosystems, schema, policy]
-timestamp: 2026-11-20T10:02:32Z
+timestamp: 2026-11-23T08:40:19Z
 sources:
   - lib/deps/age-checker.ts
   - lib/deps/scanner.ts
@@ -31,4 +31,4 @@ Every scanner, the five dedicated files and the inline npm branch alike, uses `a
 
 ## The age check tests for null only
 
-`lib/policy/engine.ts:322#".filter((d) => d.ageInDays !== null && d.ageInDays >"`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays > maxAgeDays`. Because every persisted unknown age is `null`, the check needs no `-1` clause and an unknown age never triggers the policy. `tests/policy/engine.test.ts` covers this with `null` fixtures, including a case with a negative `maxAgeDays` (the write-time validator accepts any finite number), where a `!== -1`-only check would flag the unknown dependency because `null > -1` is true in JavaScript.
+`lib/policy/engine.ts:336#".filter((d) => d.ageInDays !== null && d.ageInDays >"`'s `DEPENDENCY_MAX_AGE` filter reads `d.ageInDays !== null && d.ageInDays > maxAgeDays`. Because every persisted unknown age is `null`, the check needs no `-1` clause and an unknown age never triggers the policy. `tests/policy/engine.test.ts` covers this with `null` fixtures, including a case with a negative `maxAgeDays` (the write-time validator accepts any finite number), where a `!== -1`-only check would flag the unknown dependency because `null > -1` is true in JavaScript.
