@@ -8,15 +8,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Direct mode: hooks are replaced so the component function can be called
 // outside a renderer and its element tree inspected (handlers, aria props).
-const direct = vi.hoisted(() => ({ on: false, state: {} as Record<string, unknown> }));
+// useState is keyed by call order (sortCol, sortDir, page), so equal initial
+// values cannot collide. The shim must be extended when the component gains a
+// hook.
+const direct = vi.hoisted(() => ({
+  on: false,
+  state: [] as unknown[],
+  setters: [] as Array<ReturnType<typeof vi.fn>>,
+  calls: 0,
+}));
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react');
   return {
     ...actual,
     useState: (init: unknown) => {
       if (!direct.on) return actual.useState(init);
-      const key = String(init);
-      return [key in direct.state ? direct.state[key] : init, vi.fn()];
+      const i = direct.calls++;
+      const setter = vi.fn();
+      direct.setters[i] = setter;
+      return [i in direct.state ? direct.state[i] : init, setter];
     },
     useMemo: (fn: () => unknown, deps: unknown[]) => (direct.on ? fn() : actual.useMemo(fn, deps)),
   };
@@ -47,7 +57,9 @@ const repos = [
 
 beforeEach(() => {
   direct.on = false;
-  direct.state = {};
+  direct.state = [];
+  direct.setters = [];
+  direct.calls = 0;
 });
 
 function render(props: { onSelectRepo?: (id: string) => void } = {}): string {
@@ -75,6 +87,8 @@ function findAll(node: unknown, type: string, out: ReactElement<Props>[] = []): 
 
 function tree(props: { onSelectRepo?: (id: string) => void } = {}): ReactElement {
   direct.on = true;
+  direct.calls = 0;
+  direct.setters = [];
   return RepoComparisonTable({ repos, ...props }) as ReactElement;
 }
 
@@ -100,6 +114,28 @@ describe('RepoComparisonTable keyboard access', () => {
     }
   });
 
+  it('sorts by the clicked header key and toggles direction on the active column', () => {
+    const keys = ['name', 'health', 'risk', 'cves', 'critical', 'licenses', 'outdated', 'scanned'];
+    const [SORT_COL, SORT_DIR, PAGE] = [0, 1, 2];
+    keys.forEach((key, idx) => {
+      const ths = findAll(tree(), 'th');
+      const button = findAll(ths[idx], 'button')[0];
+      (button.props.onClick as () => void)();
+      if (key === 'health') {
+        // Active column (default health, asc): direction flips, column stays.
+        expect(direct.setters[SORT_COL]).not.toHaveBeenCalled();
+        const updater = direct.setters[SORT_DIR].mock.calls[0][0] as (d: string) => string;
+        expect(updater('asc')).toBe('desc');
+        expect(updater('desc')).toBe('asc');
+      } else {
+        expect(direct.setters[SORT_COL]).toHaveBeenCalledTimes(1);
+        expect(direct.setters[SORT_COL]).toHaveBeenCalledWith(key);
+        expect(direct.setters[SORT_DIR]).toHaveBeenCalledWith(key === 'name' ? 'asc' : 'desc');
+      }
+      expect(direct.setters[PAGE]).toHaveBeenCalledWith(1);
+    });
+  });
+
   it('marks only the active column (health, ascending by default) with aria-sort', () => {
     const sorted = headers(render()).filter((th) => th.includes('aria-sort='));
     expect(sorted).toHaveLength(1);
@@ -108,7 +144,7 @@ describe('RepoComparisonTable keyboard access', () => {
   });
 
   it('announces descending on the active column and nothing on the others', () => {
-    direct.state = { asc: 'desc', health: 'risk' };
+    direct.state = ['risk', 'desc'];
     const ths = findAll(tree(), 'th');
     const withSort = ths.filter((th) => th.props['aria-sort'] !== undefined);
     expect(withSort).toHaveLength(1);
