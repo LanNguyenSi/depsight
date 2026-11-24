@@ -35,7 +35,7 @@ components/         Shared UI components
 lib/                Business logic (illustrative selection below)
   cve/              CVE scanner
   deps/             Dependency age scanners (npm, python, go, java, rust, php)
-  license/          License scanners (npm, python, go, java, rust, php)
+  license/          License scanners (npm, python, java, rust, php; Go is not covered: its modules show license UNKNOWN, see docs/features.md)
   sbom/             CycloneDX SBOM generator
   policy/           Policy engine
   overview/         Team health aggregation
