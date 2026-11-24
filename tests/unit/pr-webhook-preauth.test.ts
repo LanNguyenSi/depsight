@@ -324,12 +324,23 @@ describe('POST /api/webhooks/github pre-verification limits', () => {
       );
     });
 
-    it('falls back to one trusted hop, with one warning, for an unusable WEBHOOK_TRUSTED_PROXY_HOPS', async () => {
+    // Startup refuses an unusable value outright, so this path only runs when
+    // the startup check was bypassed; it then behaves like 0 (no hop trusted).
+    it('trusts no hop, with one warning, for an unusable WEBHOOK_TRUSTED_PROXY_HOPS', async () => {
       process.env.WEBHOOK_TRUSTED_PROXY_HOPS = 'lots';
       exhaustIp(GOOD_IP);
 
-      expect((await POST(request({ forwardedFor: `6.6.6.6, ${GOOD_IP}` }))).status).toBe(429);
-      await POST(request({ forwardedFor: GOOD_IP }));
+      // The exhausted address is not consulted: the header is ignored, like hops 0.
+      expect((await POST(request({ forwardedFor: `6.6.6.6, ${GOOD_IP}` }))).status).toBe(202);
+      // Everyone shares the unknown bucket instead.
+      for (let i = 0; i < IP_LIMIT - 1; i++) {
+        expect((await POST(request({ forwardedFor: `192.0.2.${i}`, signed: false }))).status).toBe(
+          401,
+        );
+      }
+      expect((await POST(request({ forwardedFor: '192.0.2.250', signed: false }))).status).toBe(
+        429,
+      );
       expect(console.warn).toHaveBeenCalledTimes(1);
       expect(vi.mocked(console.warn).mock.calls[0][0]).toContain('WEBHOOK_TRUSTED_PROXY_HOPS');
     });

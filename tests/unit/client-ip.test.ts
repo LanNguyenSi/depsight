@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   clientIpFromForwardedFor,
+  parseTrustedProxyHops,
   trustedProxyHops,
   DEFAULT_TRUSTED_PROXY_HOPS,
 } from '@/lib/client-ip';
@@ -52,6 +53,43 @@ describe('clientIpFromForwardedFor', () => {
   });
 });
 
+// parseTrustedProxyHops is the startup check (instrumentation.ts); the rule it
+// pins is also what trustedProxyHops applies per request. Each input is its
+// own case; the default wins only when the variable is absent or empty of
+// text, otherwise the value itself decides, and anything unusable throws.
+describe('parseTrustedProxyHops', () => {
+  it('returns the default when unset', () => {
+    expect(parseTrustedProxyHops(undefined)).toBe(DEFAULT_TRUSTED_PROXY_HOPS);
+  });
+
+  it('returns the default when blank', () => {
+    expect(parseTrustedProxyHops('   ')).toBe(DEFAULT_TRUSTED_PROXY_HOPS);
+  });
+
+  it('returns 0 as given (the header is not trusted at all)', () => {
+    expect(parseTrustedProxyHops('0')).toBe(0);
+  });
+
+  it('returns a padded value as the number it holds', () => {
+    expect(parseTrustedProxyHops(' 3 ')).toBe(3);
+  });
+
+  it('returns the upper bound as given', () => {
+    expect(parseTrustedProxyHops('8')).toBe(8);
+  });
+
+  // The message names the variable and the accepted range and quotes the value
+  // (not secret here, as in parseScanIntervalMinutes).
+  it.each(['9', '-1', '1.5', 'true', '0 # c'])(
+    'throws for %s, naming the variable and the accepted range',
+    (value) => {
+      const bad = () => parseTrustedProxyHops(value);
+      expect(bad).toThrow(/WEBHOOK_TRUSTED_PROXY_HOPS/);
+      expect(bad).toThrow(/between 0 and 8/);
+    },
+  );
+});
+
 describe('trustedProxyHops', () => {
   afterEach(() => {
     delete process.env.WEBHOOK_TRUSTED_PROXY_HOPS;
@@ -88,11 +126,15 @@ describe('trustedProxyHops', () => {
     expect(trustedProxyHops()).toBe(8);
   });
 
-  it('falls back to the default for anything else', () => {
+  // Defence in depth: startup refuses an unusable value, so reaching a request
+  // with one means the check was bypassed; the safe answer then trusts no hop.
+  it('trusts no hop for anything else, with one warning naming the variable', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    for (const bad of ['9', '-1', '1.5', 'two', '1e1']) {
+    for (const bad of ['9', '-1', '1.5', 'true', '0 # c']) {
       process.env.WEBHOOK_TRUSTED_PROXY_HOPS = bad;
-      expect(trustedProxyHops()).toBe(DEFAULT_TRUSTED_PROXY_HOPS);
+      expect(trustedProxyHops()).toBe(0);
     }
+    expect(console.warn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(console.warn).mock.calls[0][0]).toContain('WEBHOOK_TRUSTED_PROXY_HOPS');
   });
 });
