@@ -7,6 +7,11 @@ export async function register() {
       if (process.env.NEXT_PHASE !== 'phase-production-build') {
         const { assertAuthEnv } = await import('@/lib/auth-env');
         assertAuthEnv();
+        // Same rule as SCAN_INTERVAL_MINUTES: a hop count that is not a whole
+        // number from 0 to 8 must stop the server instead of falling back to
+        // trusting a hop at request time.
+        const { parseTrustedProxyHops } = await import('@/lib/client-ip');
+        parseTrustedProxyHops(process.env.WEBHOOK_TRUSTED_PROXY_HOPS);
       }
       const { startAutoScan } = await import('@/lib/cron/auto-scan');
       startAutoScan();

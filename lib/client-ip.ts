@@ -18,26 +18,41 @@ const MAX_TRUSTED_PROXY_HOPS = 8;
 let warnedInvalidHops = false;
 
 /**
- * Number of trusted proxies in front of the app (WEBHOOK_TRUSTED_PROXY_HOPS).
- * 0 means the header is not trusted at all and every caller shares one bucket.
- * Unset or blank means the default; any other value that is not a whole number
- * from 0 to 8 falls back to the default with a one-time warning rather than
- * silently trusting or ignoring the header.
+ * Parse WEBHOOK_TRUSTED_PROXY_HOPS. Unset or blank means the default. A whole
+ * number from 0 to 8 is returned as given (0 means the header is not trusted
+ * at all and every caller shares one bucket). Anything else throws, naming the
+ * variable and the accepted range, so a misconfiguration fails at startup
+ * (instrumentation.ts) instead of ending up trusting a hop.
  */
-export function trustedProxyHops(): number {
-  const raw = process.env.WEBHOOK_TRUSTED_PROXY_HOPS?.trim();
-  if (!raw) return DEFAULT_TRUSTED_PROXY_HOPS;
-  if (/^\d+$/.test(raw)) {
-    const n = Number(raw);
+export function parseTrustedProxyHops(raw: string | undefined): number {
+  const text = raw?.trim();
+  if (text === undefined || text === '') return DEFAULT_TRUSTED_PROXY_HOPS;
+  if (/^\d+$/.test(text)) {
+    const n = Number(text);
     if (n <= MAX_TRUSTED_PROXY_HOPS) return n;
   }
-  if (!warnedInvalidHops) {
-    warnedInvalidHops = true;
-    console.warn(
-      `WEBHOOK_TRUSTED_PROXY_HOPS must be a whole number from 0 to ${MAX_TRUSTED_PROXY_HOPS}; using ${DEFAULT_TRUSTED_PROXY_HOPS}`,
-    );
+  throw new Error(
+    `Invalid WEBHOOK_TRUSTED_PROXY_HOPS=${JSON.stringify(raw)}: expected a whole number of trusted proxy hops between 0 and ${MAX_TRUSTED_PROXY_HOPS}`,
+  );
+}
+
+/**
+ * Number of trusted proxies in front of the app (WEBHOOK_TRUSTED_PROXY_HOPS),
+ * read per request. Unset or blank means the default. An invalid value can only
+ * be running when the startup check was bypassed, so as defence in depth it
+ * trusts no hop at all (the header is ignored, like 0), with a one-time
+ * warning.
+ */
+export function trustedProxyHops(): number {
+  try {
+    return parseTrustedProxyHops(process.env.WEBHOOK_TRUSTED_PROXY_HOPS);
+  } catch (e) {
+    if (!warnedInvalidHops) {
+      warnedInvalidHops = true;
+      console.warn(`${(e as Error).message}; trusting no proxy hop`);
+    }
+    return 0;
   }
-  return DEFAULT_TRUSTED_PROXY_HOPS;
 }
 
 /** Longest textual IP address: a full IPv6 with an embedded IPv4 tail ("0000:...:255.255.255.255"). */

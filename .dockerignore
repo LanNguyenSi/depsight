@@ -1,8 +1,10 @@
 node_modules
 npm-debug.log
 .next
+# Every env file: .env itself and every .env.* variant (including .env.example:
+# the Dockerfile never reads it, and Next.js does not load it when it builds)
 .env
-.env.local
+.env.*
 .git
 .gitignore
 README.md

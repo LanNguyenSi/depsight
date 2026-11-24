@@ -59,6 +59,37 @@ describe('instrumentation register()', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  // WEBHOOK_TRUSTED_PROXY_HOPS follows the same fail-closed rule as
+  // SCAN_INTERVAL_MINUTES: an unusable value never lets the server run.
+  it('exits non-zero for an invalid WEBHOOK_TRUSTED_PROXY_HOPS', async () => {
+    vi.stubEnv('WEBHOOK_TRUSTED_PROXY_HOPS', 'lots');
+    const { register } = await import('@/instrumentation');
+    await register();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(startAutoScan).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Fatal configuration error'),
+      expect.stringContaining('WEBHOOK_TRUSTED_PROXY_HOPS'),
+    );
+  });
+
+  it('does not exit for a valid WEBHOOK_TRUSTED_PROXY_HOPS', async () => {
+    vi.stubEnv('WEBHOOK_TRUSTED_PROXY_HOPS', '0');
+    const { register } = await import('@/instrumentation');
+    await register();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(startAutoScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not check the hop count during the production build phase', async () => {
+    vi.stubEnv('WEBHOOK_TRUSTED_PROXY_HOPS', 'lots');
+    vi.stubEnv('NEXT_PHASE', 'phase-production-build');
+    const { register } = await import('@/instrumentation');
+    await register();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(startAutoScan).toHaveBeenCalledTimes(1);
+  });
+
   it('does nothing outside the node runtime', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'edge');
     const { register } = await import('@/instrumentation');
