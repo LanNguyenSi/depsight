@@ -6,8 +6,8 @@
 // password, a routed service on several networks must name the edge network for Traefik,
 // and the dev and production stacks must not share a project name or a database volume.
 // It also holds the operational invariants of the same files: every service rotates its
-// logs and has a memory limit, and the app has a healthcheck on /api/health that waits
-// for the database to be healthy.
+// logs and has a memory limit, the app and every database service have a CPU limit, and
+// the app has a healthcheck on /api/health that waits for the database to be healthy.
 //
 // Usage: node scripts/check-compose-isolation.mjs [dir]
 //   dir  directory holding docker-compose*.yml and .relay.yml (default: the repo root)
@@ -170,13 +170,26 @@ const memoryLimit = (service) => {
   return Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
 };
 
+// A resolved CPU limit: cpus or deploy.resources.limits.cpus, cores as a number or a
+// numeric string. Anything else counts as not set (this compose also drops a zero at
+// resolve, so a written `cpus: 0` arrives as no cpus; the > 0 test does not rely on it).
+const cpuLimit = (service) => {
+  const raw = service.cpus ?? service.deploy?.resources?.limits?.cpus;
+  const cores = Number(raw);
+  return Number.isFinite(cores) && cores > 0 ? cores : 0;
+};
+
 // `.ok` (fetch's 2xx flag), or both bounds of an explicit test: status >= 200 and < 300.
 const ACCEPTS_ONLY_2XX = /\.ok\b|status\s*>=\s*200\b[^;]*status\s*(<\s*300|<=\s*299)\b/;
 
-// Rotation and limits for every service (migrate included), and the app's healthcheck.
-// Without rotation the json-file driver grows one file per container for as long as it
-// runs; without a memory limit one service can take the host's memory from the database.
+// Rotation and a memory limit for every service (migrate included), a CPU limit for the
+// app and every database service (dbServices), and the app's healthcheck. Without
+// rotation the json-file driver grows one file per container for as long as it runs;
+// without a memory limit one service can take the host's memory from the database;
+// without a CPU limit a busy service can keep every core of the host off everything
+// else, the deploy and the backup crontab included (a one-shot like migrate needs none).
 function checkOperations(file, cfg) {
+  const databases = dbServices(cfg);
   for (const [name, service] of Object.entries(cfg.services)) {
     const logging = service.logging;
     if (logging?.driver !== 'json-file') {
@@ -188,6 +201,9 @@ function checkOperations(file, cfg) {
       fail(file, `${name} logging has no max-size and max-file, so its log is never rotated`);
     }
     if (memoryLimit(service) === 0) fail(file, `${name} has no memory limit (mem_limit)`);
+    if (name === 'app' || databases.has(name)) {
+      if (cpuLimit(service) === 0) fail(file, `${name} has no CPU limit (cpus)`);
+    }
   }
 
   const app = cfg.services.app;
@@ -300,7 +316,7 @@ function checkOperations(file, cfg) {
 //   (checkProd only) password from        yes   no   not an exposure rule; the dev file has
 //     ${POSTGRES_PASSWORD}                           fixed dev/dev credentials on purpose
 //   (checkOperations) db logging, memory  yes   no   operational limits of the production
-//     limit, healthcheck                             files, not about who reaches the db
+//     and CPU limits, healthcheck                    files, not about who reaches the db
 //   (top level) no compose.y(a)ml,        yes   yes  docker compose without -f (make prod)
 //     docker-compose.yaml or override                prefers or merges them, and this check
 //     file in the repo root                          reads only the three shipped files

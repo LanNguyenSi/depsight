@@ -53,6 +53,10 @@ services:
       retries: 5
       start_period: 40s
       start_interval: 2s
+    # CPU cap: one core, so a scan cycle cannot keep every core of a host busy that also
+    # builds images, runs deploys and backups. Values and caveats: docs/configuration.md,
+    # Health check, resource limits and log rotation.
+    cpus: 1.0
     # Memory cap for the running server and its scan cycles (the image build runs before
     # the container exists and is not under this limit). The heap is the binding limit:
     # NODE_OPTIONS sets it to 1024 MiB, so the cap leaves 512 MiB for buffers and native
@@ -94,6 +98,8 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    # CPU cap: one core, as for app; a busy plan must not hold every core of the host.
+    cpus: 1.0
     mem_limit: 512m
     logging: *default-logging
     # Only the private db network: not on traefik-public, no published port.
@@ -125,6 +131,7 @@ services:
       - >-
         prisma db execute --file prisma/pre-push/advisory-unique-key.sql --schema=prisma/schema.prisma
         && prisma db push --skip-generate --schema=prisma/schema.prisma
+    # One-shot: the guard's CPU rule holds app and the database services, not this one.
     mem_limit: 512m
     logging: *default-logging
     networks:
