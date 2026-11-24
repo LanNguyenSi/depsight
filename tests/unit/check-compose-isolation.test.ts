@@ -229,6 +229,79 @@ describeIfCompose('check-compose-isolation guard', () => {
     expect(result.status).toBe(1);
   };
 
+  // The app and every database service must carry a CPU limit (cpus or the deploy
+  // form); a one-shot like migrate needs none. The shipped files set cpus: 1.0 on app
+  // and db; `docker compose config` drops a written zero, so the zero fixture proves
+  // that a service resolving to no CPU limit never passes, however the zero was written.
+  describe('the CPU limits', () => {
+    // Every occurrence of `from` goes to `to`; an anchor that is not there throws.
+    const replaceEvery =
+      (from: string, to: string): Mutation =>
+      (text) => {
+        if (!text.includes(from)) throw new Error(`mutation anchor not found: ${from}`);
+        return text.split(from).join(to);
+      };
+
+    it.each(PROD_FILES)('ships cpus: 1.0 on app and db in %s', (file) => {
+      const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      expect(text.split('    cpus: 1.0\n').length - 1).toBe(2);
+    });
+
+    it.each(PROD_FILES)('fails when app and db lose cpus in %s', (file) => {
+      const result = runGuard(fixture(file, replaceEvery('    cpus: 1.0\n', '')));
+      expectFailure(result, file, ['app has no CPU limit (cpus)', 'db has no CPU limit (cpus)']);
+    });
+
+    it.each(PROD_FILES)('fails on cpus: 0 for app and db in %s', (file) => {
+      const result = runGuard(fixture(file, replaceEvery('    cpus: 1.0\n', '    cpus: 0\n')));
+      expectFailure(result, file, ['app has no CPU limit (cpus)', 'db has no CPU limit (cpus)']);
+    });
+
+    // The rule holds every database service, not only the one named db: a second
+    // postgres service without cpus fails the same way (on db-internal, internal and
+    // project-scoped, with logging and memory, so the CPU line is its only failure).
+    it('fails on a postgres service without cpus in the hosted file', () => {
+      const result = runGuard(
+        fixture(HOSTED, (text) =>
+          text.replace(
+            '\nvolumes:\n',
+            [
+              '',
+              '  pg-extra:',
+              '    image: postgres:16-alpine',
+              '    mem_limit: 512m',
+              '    logging: *default-logging',
+              '    networks:',
+              '      - db-internal',
+              '',
+              'volumes:',
+              '',
+            ].join('\n'),
+          ),
+        ),
+      );
+      expectFailure(result, HOSTED, ['pg-extra has no CPU limit (cpus)']);
+      expect(result.stderr).toContain('compose isolation check failed (1)');
+    });
+
+    // The fallbacks read deploy.resources.limits: here the app's CPU and memory limits
+    // live only there (compose refuses a deploy.resources.limits block next to the
+    // top-level mem_limit, so both move together; the deploy memory resolves to a
+    // numeric string, which the memory rule must read too).
+    it('accepts deploy.resources.limits.cpus for the app in the hosted file', () => {
+      const result = runGuard(
+        fixture(HOSTED, (text) =>
+          text.replace(
+            /    cpus: 1\.0\n    # Memory cap[\s\S]*?    mem_limit: 1536m\n/,
+            '    deploy:\n      resources:\n        limits:\n          cpus: 1\n          memory: 1536m\n',
+          ),
+        ),
+      );
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+    });
+  });
+
   describe('the database isolation', () => {
     it('fails on a db on the edge network, off the internal network, and with unsafe ports', () => {
       const result = runGuard(
