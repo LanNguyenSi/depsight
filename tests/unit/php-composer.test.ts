@@ -47,6 +47,8 @@ describe('composerConstraintFloor', () => {
     ['!=1.0 || ^2.0', ''],
     // a strict > excludes the version it names, so it gives no floor either
     ['>1.2', ''],
+    ['>v1.2', ''],
+    ['>=v1.2', '1.2'],
     ['> 1.2', ''],
     ['>1.2 <2.0', ''],
     ['>1.2-dev', ''],
