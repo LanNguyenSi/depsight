@@ -24,6 +24,13 @@ describe('composerConstraintFloor', () => {
     ['>=1.0 <2.0', '1.0'],
     ['>=1.0,<2.0', '1.0'],
     ['^1.0@dev', '1.0'],
+    // the stability flag is dropped from every term, not only the last one
+    ['>=1.0@dev <2.0', '1.0'],
+    ['1.0.*@beta', '1.0.0'],
+    ['^2.0@stable || ^3.0@dev', '2.0'],
+    ['2.5.0@dev as 2.0.0', '2.5.0'],
+    ['@dev', ''],
+    ['dev-main@dev', ''],
     ['2.5.0 as 2.0.0', '2.5.0'],
     ['*', ''],
     ['dev-main', ''],
@@ -38,13 +45,18 @@ describe('composerConstraintFloor', () => {
     ['!= 2.0', ''],
     ['<2.0 >=1.0', ''],
     ['!=1.0 || ^2.0', ''],
+    // a strict > excludes the version it names, so it gives no floor either
+    ['>1.2', ''],
+    ['> 1.2', ''],
+    ['>1.2 <2.0', ''],
+    ['>1.2-dev', ''],
+    ['>=1.2', '1.2'],
     // the first term decides, an upper bound later does not
     ['>=1.0 !=1.5', '1.0'],
-    // a -dev suffix after a lower-bound operator is stability, not a branch
+    // a -dev suffix after ^, ~ or >= is stability, not a branch
     ['^1.2-dev', '1.2'],
     ['~1.2-dev', '1.2'],
     ['>=1.2-dev', '1.2'],
-    ['>1.2-dev', '1.2'],
     ['^1.2.3-dev', '1.2.3'],
     ['^1.2-DEV', '1.2'],
     // a -dev branch alias is not a release
@@ -204,6 +216,15 @@ describe('which composer.lock files are read', () => {
     const deps = await collectPhpDepsResolved(octokit, 'o', 'r', manifestPaths, []);
     expect(lockCalls(calls)).toEqual([]);
     expect(deps).toEqual([{ name: 'acme/lib', version: '1.0' }]);
+  });
+
+  it('without a lock a > constraint gives no floor and is not queried, the sibling ^ constraint is', async () => {
+    const only = {
+      'composer.json': composerJson({ 'acme/excluded': '>1.2', 'acme/floored': '^2.0' }),
+    };
+    const { octokit } = fakeOctokit(only);
+    const deps = await collectPhpDepsResolved(octokit, 'o', 'r', ['composer.json'], []);
+    expect(deps).toEqual([{ name: 'acme/floored', version: '2.0' }]);
   });
 
   it('a null observed set (truncated or fallback walk) probes the sibling of every composer.json: N calls', async () => {
