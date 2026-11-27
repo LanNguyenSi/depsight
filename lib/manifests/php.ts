@@ -65,29 +65,32 @@ export async function collectPhpDeps(
 
 /**
  * Reduce a composer version constraint to the one version OSV is asked about:
- * an `@<stability>` suffix is dropped (an `as <alias>` falls away with the first term), then the first
+ * an `@<stability>` suffix is dropped from every term (an `as <alias>` falls
+ * away with the first term), then the first
  * alternative of an `||`/`|` list, the first term of an AND list (space or
  * comma, whitespace after the operator allowed), its operator stripped, and a
  * wildcard segment (`.*`, `.x`) read as `.0` (`6.4.*` gives `6.4.0`). A `-dev`
- * suffix is dropped after `^`, `~`, `>=` or `>` (`^1.2-dev` gives `1.2`).
+ * suffix is dropped after `^`, `~` or `>=` (`^1.2-dev` gives `1.2`).
  * Returns '' when no release version is left: `*`, a `dev-` branch, a `-dev`
  * branch alias (`1.0.x-dev`, `1.2-dev`), and a first term that gives no lower
- * bound (`<`, `<=`, `!=`). The caller drops those.
+ * bound (`<`, `<=`, `!=`, or a strict `>`, which excludes the version it
+ * names). The caller drops those.
  */
 export function composerConstraintFloor(constraint: string): string {
   const alternative = (constraint.split(/\s*\|\|?\s*/)[0] ?? '')
     .trim()
-    .replace(/@[A-Za-z]+$/, '')
+    .replace(/@[A-Za-z]+/g, '')
     .replace(/(>=|<=|!=|==|[<>=^~])\s+/g, '$1');
   const term = alternative.split(/[\s,]+/)[0] ?? '';
   if (/^[^0-9a-z]*dev-/i.test(term)) return '';
-  // An upper bound or an exclusion says nothing about the installed version.
-  if (/^(<|!=)/.test(term)) return '';
+  // An upper bound, an exclusion or a strict `>` says nothing about the
+  // installed version; a strict `>` excludes the version it names.
+  if (/^(<|!=|>(?!=))/.test(term)) return '';
   let release = term;
   if (/-dev$/i.test(term)) {
     // `^1.2-dev` allows dev stability from 1.2 on; a bare or `=` version and a
     // wildcard are a branch alias, not a release.
-    if (!/^(\^|~|>=|>)/.test(term)) return '';
+    if (!/^(\^|~|>=)/.test(term)) return '';
     release = term.replace(/-dev$/i, '');
     if (/\.(\*|x)(?=\.|$)/i.test(release)) return '';
   }
