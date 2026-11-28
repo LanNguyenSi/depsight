@@ -101,10 +101,27 @@ describe('GET /api/repos', () => {
     // Route returns a static message, not the underlying error
     expect(JSON.parse(text) as { error: string }).toEqual({ error: 'Failed to fetch repositories' });
     expect(text).not.toContain('secret internals');
-    // This route was hardened before lib/http/server-error.ts and keeps its own
-    // log call, so only "the detail is logged" is pinned here (no tag prefix).
+    // The route answers through serverError('repos', ...): the log is the tag
+    // prefix plus the message only, never the stack.
     expect(errorLog).toHaveBeenCalledTimes(1);
-    expect(errorLog.mock.calls[0].join(' ')).toContain('secret internals');
+    expect(errorLog.mock.calls[0][0]).toMatch(/^\[repos] /);
+    expect(errorLog.mock.calls[0][0]).toContain('secret internals');
+    expect(errorLog.mock.calls[0][0]).toBe('[repos] secret internals');
+    expect(errorLog.mock.calls[0].join(' ')).not.toContain('at ');
+    errorLog.mockRestore();
+  });
+
+  it('logs "[repos] Unknown error" for a non-Error throw and still answers the fixed text', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getUserReposMock.mockRejectedValue('a plain string');
+
+    const res = await GET(makeGetRequest());
+
+    expect(res.status).toBe(500);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('Failed to fetch repositories');
+    expect(errorLog).toHaveBeenCalledTimes(1);
+    expect(errorLog.mock.calls[0][0]).toBe('[repos] Unknown error');
     errorLog.mockRestore();
   });
 
