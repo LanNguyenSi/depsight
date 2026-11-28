@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestUser } from '@/lib/auth-api';
 import { getUserRepos } from '@/lib/github';
 import { rateLimitedResponse, reposRateLimiter } from '@/lib/rate-limit';
+import { serverError } from '@/lib/http/server-error';
 
 export async function GET(req: NextRequest) {
   const user = await resolveRequestUser();
@@ -25,7 +26,6 @@ export async function GET(req: NextRequest) {
     const repos = includeArchived ? allRepos : allRepos.filter((repo) => !repo.archived);
     return NextResponse.json({ repos });
   } catch (error) {
-    console.error('Failed to fetch repos:', error);
-    return NextResponse.json({ error: 'Failed to fetch repositories' }, { status: 500 });
+    return serverError('repos', 'Failed to fetch repositories', error);
   }
 }
