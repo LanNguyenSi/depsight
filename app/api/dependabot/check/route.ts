@@ -3,14 +3,24 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { createGitHubClient } from '@/lib/github';
 import { getSessionGitHubToken } from '@/lib/auth-api';
+import { dependabotCheckRateLimiter, rateLimitedResponse } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/dependabot/check — check which repos have dependabot disabled
+// Rate limited per user, keyed by user id, like the all-repos CI sync (see
+// lib/rate-limit.ts): this route calls GitHub once per tracked repo, so a
+// looping caller is capped and over the limit the answer is 429 with
+// Retry-After and no database or GitHub work is started.
 export async function GET() {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const limit = dependabotCheckRateLimiter.check(session.user.id);
+  if (!limit.allowed) {
+    return rateLimitedResponse(limit);
   }
 
   const repos = await prisma.repo.findMany({
