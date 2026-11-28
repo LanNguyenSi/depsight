@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-11-28T09:43:28Z, re-stamped mcp-vs-web-api.md after the Dependabot route limiters; check/route.ts citation re-pointed, MCP surface still has no Dependabot tool, docs/features.md change since the last stamp (PHP known limitation) touches no claim of this doc
 - 2026-11-27T08:13:27Z, docs/features.md: the PHP sentence of Known limitations now says the @stability flag is dropped from every term and that a strict > gives no version (like <, <= and !=). `mcp-vs-web-api.md` and `policy-rule-evaluation.md` name docs/features.md only for the MCP and policy sections and make no PHP claim; claims re-verified, no edit. Re-stamped both.
 - 2026-11-24T10:36:35Z, re-stamp of `rescan-and-staleness.md` after #295 (`docs/configuration.md`: the compose isolation check paragraph and the resource limits intro gain the CPU limit rule for the app and database services; `docker-compose.yml`, `docker-compose.traefik.yml`, `scripts/check-compose-isolation.mjs` carry the code side). The doc cites `docs/configuration.md` only for the `SCAN_INTERVAL_MINUTES` claim, which sits in the untouched env table and still matches `lib/cron/auto-scan.ts`; no claim or citation needed correction. Check: `npx -y okf-kit@0.22.0 check --require-anchors docs/okf`.
 - 2026-11-24T06:47:29Z, `docs/configuration.md` deploy-gate paragraph reworded (the gate's first attempt follows `up -d` and the `migrate` step). `rescan-and-staleness.md` re-verified: its `SCAN_INTERVAL_MINUTES` claim is in the untouched env table. Re-stamped.
