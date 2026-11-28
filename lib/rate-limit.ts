@@ -116,6 +116,12 @@ export const REPOS_LIMIT_PER_HOUR = 300;
 // POST /api/pr-scan runs one PR scan per call, the same work a verified PR
 // webhook delivery starts, so it gets the per-user budget of those deliveries.
 export const PR_SCAN_LIMIT_PER_HOUR = 120;
+// GET /api/dependabot/check calls GitHub once per tracked repo and POST
+// /api/dependabot/enable-all enables alerts once per given tracked repo: both
+// fan out over every tracked repository of the caller, like the all-repos CI
+// sync, so each gets the same ceiling, each with its own budget.
+export const DEPENDABOT_CHECK_LIMIT_PER_HOUR = 12;
+export const DEPENDABOT_ENABLE_ALL_LIMIT_PER_HOUR = 12;
 
 /** POST /api/scan, keyed by user id. */
 export const scanRateLimiter = createRateLimiter({ limit: SCAN_LIMIT_PER_HOUR, windowMs: HOUR_MS });
@@ -150,6 +156,16 @@ export const ciSyncRepoRateLimiter = createRateLimiter({
 /** POST /api/ci/sync without a repoId (30-day sync of every tracked repo), keyed by user id. */
 export const ciSyncAllRateLimiter = createRateLimiter({
   limit: CI_SYNC_ALL_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** GET /api/dependabot/check (one GitHub request per tracked repo), keyed by user id. */
+export const dependabotCheckRateLimiter = createRateLimiter({
+  limit: DEPENDABOT_CHECK_LIMIT_PER_HOUR,
+  windowMs: HOUR_MS,
+});
+/** POST /api/dependabot/enable-all (one GitHub write per given tracked repo), keyed by user id. */
+export const dependabotEnableAllRateLimiter = createRateLimiter({
+  limit: DEPENDABOT_ENABLE_ALL_LIMIT_PER_HOUR,
   windowMs: HOUR_MS,
 });
 
